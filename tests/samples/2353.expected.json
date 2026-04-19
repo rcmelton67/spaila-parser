@@ -1,0 +1,9 @@
+[
+  { "field": "quantity", "value": "1" },
+  { "field": "price", "value": "29.99" },
+  { "field": "order_number", "value": "2353" },
+  { "field": "order_date", "value": "April 10, 2026" },
+  { "field": "buyer_email", "value": "jenna_lowry@comcast.net" },
+  { "field": "buyer_name", "value": "Jenna Lowry" },
+  { "field": "shipping_address", "value": "Prestige Realty\n121 N Main\nCedar City, UT 84720" }
+]

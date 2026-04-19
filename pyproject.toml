@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spaila-parser"
+version = "0.1.0"
+description = "Structured field extraction from EML files"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["parser*"]
+
+[tool.pytest.ini_options]
+testpaths = ["parser/tests"]
