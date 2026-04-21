@@ -59,6 +59,13 @@ def init_db():
         ("order_folder_path", "TEXT"),
         ("source_eml_path",   "TEXT"),
         ("eml_path",          "TEXT"),
+        ("platform",          "TEXT"),   # "etsy" | "woo" | "shopify" | "unknown"
+        # gift_message intentionally NOT here — it lives in items (per-item)
+    ])
+    _ensure_columns(cur, "items", [
+        ("order_notes",       "TEXT"),
+        ("gift_message",      "TEXT"),   # per-item, not order-level
+        ("item_status",       "TEXT"),   # per-item active/completed — independent of order.status
     ])
 
     conn.commit()

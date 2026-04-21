@@ -99,13 +99,16 @@ async def create_order(payload: dict):
     conn = get_conn()
     cur = conn.cursor()
 
+    platform = (payload.get("meta", {}).get("platform") or "unknown").lower()
+
     cur.execute("""
         INSERT INTO orders (
             id, order_number, order_date, buyer_name,
             buyer_email, shipping_address, ship_by,
             status, created_at,
-            source_eml_path, eml_path, order_folder_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_eml_path, eml_path, order_folder_path,
+            platform
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
@@ -119,15 +122,21 @@ async def create_order(payload: dict):
         source_eml_path,
         None,               # eml_path — helper moves the file here
         order_folder_path,  # set immediately at creation
+        platform,
     ))
+
+    # gift_message is order-level from the parser payload but stored per-item
+    # so each item gets the same initial value (they can diverge after editing).
+    order_gift_message = order.get("gift_message") or None
 
     for item in items:
         cur.execute("""
             INSERT INTO items (
                 id, order_id, item_index, quantity, price,
                 custom_1, custom_2, custom_3,
-                custom_4, custom_5, custom_6
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                custom_4, custom_5, custom_6,
+                order_notes, gift_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             str(uuid.uuid4()),
             order_id,
@@ -140,6 +149,8 @@ async def create_order(payload: dict):
             item["custom_fields"].get("custom_4"),
             item["custom_fields"].get("custom_5"),
             item["custom_fields"].get("custom_6"),
+            item.get("order_notes") or None,
+            item.get("gift_message") or order_gift_message,
         ))
 
     conn.commit()
@@ -217,11 +228,16 @@ def list_orders():
             items.custom_4,
             items.custom_5,
             items.custom_6,
-            orders.order_folder_path
+            orders.order_folder_path,
+            items.gift_message,
+            items.order_notes,
+            items.item_index,
+            orders.platform,
+            items.item_status
         FROM items
         JOIN orders ON items.order_id = orders.id
         WHERE orders.status NOT IN ('deleted')
-        ORDER BY orders.created_at DESC
+        ORDER BY orders.created_at DESC, items.item_index ASC
     """)
 
     rows = cur.fetchall()
@@ -247,6 +263,11 @@ def list_orders():
             "custom_5": r[15],
             "custom_6": r[16],
             "order_folder_path": r[17],
+            "gift_message": r[18],
+            "order_notes": r[19],
+            "item_index": r[20],
+            "platform":    r[21] or "unknown",
+            "item_status": r[22] or None,
         }
         for r in rows
     ]
@@ -257,11 +278,12 @@ def update_full(payload: dict):
     conn = get_conn()
     cur = conn.cursor()
 
+    # Order-level fields — shared across all items of this order
     cur.execute("""
         UPDATE orders SET
             order_date = ?,
-            ship_by = ?,
-            status = ?
+            ship_by    = ?,
+            status     = ?
         WHERE id = ?
     """, (
         payload.get("order_date"),
@@ -270,16 +292,19 @@ def update_full(payload: dict):
         payload.get("order_id"),
     ))
 
+    # Item-level fields — isolated to the specific item being edited
     cur.execute("""
         UPDATE items SET
-            quantity = ?,
-            price = ?,
-            custom_1 = ?,
-            custom_2 = ?,
-            custom_3 = ?,
-            custom_4 = ?,
-            custom_5 = ?,
-            custom_6 = ?
+            quantity     = ?,
+            price        = ?,
+            custom_1     = ?,
+            custom_2     = ?,
+            custom_3     = ?,
+            custom_4     = ?,
+            custom_5     = ?,
+            custom_6     = ?,
+            order_notes  = ?,
+            gift_message = ?
         WHERE id = ?
     """, (
         payload.get("quantity"),
@@ -290,6 +315,8 @@ def update_full(payload: dict):
         payload.get("custom_4"),
         payload.get("custom_5"),
         payload.get("custom_6"),
+        payload.get("order_notes") or None,
+        payload.get("gift_message") or None,
         payload.get("id"),
     ))
 
@@ -426,3 +453,15 @@ def patch_order(order_id: str, payload: dict):
     conn.close()
 
     return {"status": "ok", "updated": updated}
+
+
+@router.patch("/items/{item_id}/status")
+def patch_item_status(item_id: str, payload: dict):
+    """Set item_status for a single item row (independent of order-level status)."""
+    status = payload.get("item_status")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE items SET item_status = ? WHERE id = ?", (status, item_id))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}

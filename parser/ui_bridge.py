@@ -42,6 +42,8 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
     )
     meta = dict(result.get("meta", {}))
     meta["price_candidate_count"] = price_candidate_count
+    # Expose detected platform so the frontend can persist it with the order.
+    meta["platform"] = result.get("learning_source", "unknown")
 
     return {
         "subject": result.get("subject", ""),

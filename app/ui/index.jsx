@@ -14,7 +14,7 @@ function ParserModal({ onClose, onCreated }) {
       display: "flex",
       alignItems: "stretch",
       justifyContent: "center",
-      padding: "16px",
+      padding: "6px 14px",
       overflow: "hidden",
     }}>
       <div style={{

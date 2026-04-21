@@ -1,34 +1,37 @@
 import React from "react";
 import { createPortal } from "react-dom";
+import { loadFieldConfig, buildLabelMap, loadParserFieldOrder } from "../orders/fieldConfig.js";
 
-const orderedFields = [
-  ["Buyer Name", "buyer_name"],
-  ["Shipping Address", "shipping_address", true],
-  ["Order Number", "order_number"],
-  ["Quantity", "quantity"],
-  ["Order Date", "order_date"],
-  ["Ship By", "ship_by"],
-  ["Buyer Email", "buyer_email"],
-];
+// Build a key → visibleInParser boolean map from config.
+function buildParserVisibilityMap(config) {
+  return Object.fromEntries(config.map((f) => [f.key, f.visibleInParser !== false]));
+}
 
-const settings = {
-  custom_1: "Line 1",
-  custom_2: "Line 2",
-  custom_3: "Line 3",
-  custom_4: "Line 4",
-  custom_5: "Line 5",
-  custom_6: "Line 6",
+// Metadata for order-level fields (multiline flag lives here only).
+const _ORDER_FIELD_META = {
+  buyer_name:       {},
+  shipping_address: { multiline: true },
+  order_number:     {},
+  quantity:         {},
+  order_date:       {},
+  ship_by:          {},
+  buyer_email:      {},
 };
+const _ORDER_FIELD_KEYS = Object.keys(_ORDER_FIELD_META).map((key) => ({
+  key,
+  ...(_ORDER_FIELD_META[key]),
+}));
 
-const itemFieldOrder = [
-  ["Price", "price"],
-  [settings.custom_1, "custom_1"],
-  [settings.custom_2, "custom_2"],
-  [settings.custom_3, "custom_3"],
-  [settings.custom_4, "custom_4"],
-  [settings.custom_5, "custom_5"],
-  [settings.custom_6, "custom_6"],
-  ["Order Notes", "order_notes"],
+// Metadata for per-item fields.
+const _ITEM_FIELD_KEYS = [
+  { key: "price" },
+  { key: "custom_1" },
+  { key: "custom_2" },
+  { key: "custom_3" },
+  { key: "custom_4" },
+  { key: "custom_5" },
+  { key: "custom_6" },
+  { key: "order_notes" },
 ];
 
 function textLength(node) {
@@ -728,6 +731,42 @@ function ItemFieldRow({
 }
 
 export default function App({ onCreated }) {
+  // Field label config — reloads whenever the user saves Settings.
+  const [fieldConfig, setFieldConfig] = React.useState(() => loadFieldConfig());
+  React.useEffect(() => {
+    function onConfigChange() { setFieldConfig(loadFieldConfig()); }
+    window.addEventListener("spaila:fieldconfig", onConfigChange);
+    return () => window.removeEventListener("spaila:fieldconfig", onConfigChange);
+  }, []);
+
+  // Parser field order — reloads when user saves Settings.
+  const [parserFieldOrder, setParserFieldOrder] = React.useState(() => loadParserFieldOrder());
+  React.useEffect(() => {
+    function onOrderChange() { setParserFieldOrder(loadParserFieldOrder()); }
+    window.addEventListener("spaila:parserfieldorder", onOrderChange);
+    return () => window.removeEventListener("spaila:parserfieldorder", onOrderChange);
+  }, []);
+
+  // Derive label and visibility arrays from live config so changes propagate everywhere.
+  const _labels = buildLabelMap(fieldConfig);
+  const _parserVisible = buildParserVisibilityMap(fieldConfig);
+
+  // Build _ORDER_FIELD_KEYS lookup for fast metadata access.
+  const _orderKeyMeta = Object.fromEntries(_ORDER_FIELD_KEYS.map((f) => [f.key, f]));
+  const _itemKeyMeta  = Object.fromEntries(_ITEM_FIELD_KEYS.map((f)  => [f.key, f]));
+
+  // Apply user-preferred order, falling back to default array order for any key not in parserFieldOrder.
+  const orderedFields = parserFieldOrder
+    .filter((key) => key in _orderKeyMeta && _parserVisible[key] !== false)
+    .map((key) => {
+      const { multiline } = _orderKeyMeta[key];
+      return [_labels[key] ?? key, key, !!multiline];
+    });
+
+  const itemFieldOrder = parserFieldOrder
+    .filter((key) => key in _itemKeyMeta && _parserVisible[key] !== false)
+    .map((key) => [_labels[key] ?? key, key]);
+
   const [state, setState] = React.useState({
     text: "",
     subject: "",
@@ -943,6 +982,7 @@ export default function App({ onCreated }) {
       })),
       meta: {
         source: "eml",
+        platform: meta.platform || "unknown",
         source_eml_path: state.filePath || null,
         created_at: new Date().toISOString(),
       },

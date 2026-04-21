@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld("parserApp", {
   saveAssignment: (payload) => ipcRenderer.invoke("parser:save-assignment", payload),
   saveRejection: (payload) => ipcRenderer.invoke("parser:save-rejection", payload),
   teach: (payload) => ipcRenderer.invoke("parser:teach", payload),
-  openFolder: (folderPath) => ipcRenderer.invoke("shell:open-folder", folderPath),
+  openFolder:  (folderPath) => ipcRenderer.invoke("shell:open-folder", folderPath),
+  pickFolder:  ()           => ipcRenderer.invoke("dialog:pick-folder"),
 });

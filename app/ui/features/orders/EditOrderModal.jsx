@@ -1,16 +1,10 @@
 import React from "react";
+import { loadFieldConfig, buildLabelMap, loadDateConfig } from "./fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
 
-// ── Configurable product-info field labels ──────────────────────────────────
-const PRODUCT_FIELDS = [
-  { key: "custom_1", label: "Custom 1", hint: "" },
-  { key: "custom_2", label: "Custom 2", hint: "" },
-  { key: "custom_3", label: "Custom 3", hint: "" },
-  { key: "custom_4", label: "Custom 4", hint: "" },
-  { key: "custom_5", label: "Custom 5", hint: "" },
-  { key: "custom_6", label: "Custom 6", hint: "" },
-];
+// Keys shown in "Product info" panel — order preserved
+const CUSTOM_KEYS = ["custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6"];
 
 // ── Shared primitives ───────────────────────────────────────────────────────
 const input = {
@@ -107,6 +101,29 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
   const [form, setForm] = React.useState({ ...order });
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
+
+  // ── Reactive field labels from Settings ──────────────────────────────────
+  const [labels, setLabels] = React.useState(() => buildLabelMap(loadFieldConfig()));
+  React.useEffect(() => {
+    function onCfg() { setLabels(buildLabelMap(loadFieldConfig())); }
+    window.addEventListener("spaila:fieldconfig", onCfg);
+    return () => window.removeEventListener("spaila:fieldconfig", onCfg);
+  }, []);
+  const L = (key, fallback) => labels[key] || fallback;
+
+  // ── Date format hint ─────────────────────────────────────────────────────
+  const [dateConfig, setDateConfig] = React.useState(() => loadDateConfig());
+  React.useEffect(() => {
+    function onDC() { setDateConfig(loadDateConfig()); }
+    window.addEventListener("spaila:dateconfig", onDC);
+    return () => window.removeEventListener("spaila:dateconfig", onDC);
+  }, []);
+  const dateFormatHint = (() => {
+    const fmt = dateConfig?.format ?? "short";
+    if (fmt === "iso")     return "Enter as YYYY-MM-DD";
+    if (fmt === "numeric") return "Enter as MM/DD/YYYY";
+    return "Enter as Month D, YYYY (e.g. Jan 5, 2025)";
+  })();
 
   const set = (key, val) => setForm((p) => ({ ...p, [key]: val }));
 
@@ -235,50 +252,51 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
 
               {/* ── Order Summary ── */}
               <Panel title="Order Summary">
-                <FieldRow label="Order Date:">
+                <FieldRow label={L("order_date", "Order Date") + ":"}>
                   <input style={input} value={form.order_date || ""} onChange={(e) => set("order_date", e.target.value)} />
-                  <div style={hint}>Manual override (YYYY-MM-DD)</div>
+                  <div style={hint}>{dateFormatHint}</div>
                 </FieldRow>
-                <FieldRow label="Ship By:">
+                <FieldRow label={L("ship_by", "Ship By") + ":"}>
                   <input style={input} value={form.ship_by || ""} onChange={(e) => set("ship_by", e.target.value)} />
-                  <div style={hint}>Manual override (YYYY-MM-DD)</div>
+                  <div style={hint}>{dateFormatHint}</div>
                 </FieldRow>
-                <FieldRow label="Quantity:">
+                <FieldRow label={L("quantity", "Quantity") + ":"}>
                   <input style={input} value={form.quantity || ""} onChange={(e) => set("quantity", e.target.value)} />
                 </FieldRow>
-                <FieldRow label="Price:">
+                <FieldRow label={L("price", "Price") + ":"}>
                   <input style={input} value={form.price || ""} onChange={(e) => set("price", e.target.value)} />
                 </FieldRow>
-                <div style={{ fontSize: "13px", color: "#555", marginTop: "4px" }}>
-                  Website order: <strong>No</strong>
-                </div>
               </Panel>
 
               {/* ── Notes & Messages ── */}
               <Panel title="Notes & Messages">
-                <label style={{ ...readLabel, fontWeight: 400, color: "#666", marginBottom: "4px" }}>Order notes</label>
+                <label style={{ ...readLabel, fontWeight: 400, color: "#666", marginBottom: "4px" }}>
+                  {L("order_notes", "Order Notes")}
+                </label>
                 <textarea
                   style={{ ...textarea, marginBottom: "12px" }}
-                  value={form.notes || ""}
-                  onChange={(e) => set("notes", e.target.value)}
+                  value={form.order_notes || form.notes || ""}
+                  onChange={(e) => set("order_notes", e.target.value)}
                 />
-                <label style={{ ...readLabel, fontWeight: 400, color: "#666", marginBottom: "4px" }}>Message</label>
+                <label style={{ ...readLabel, fontWeight: 400, color: "#666", marginBottom: "4px" }}>
+                  {L("gift_message", "Gift Message")}
+                </label>
                 <textarea
                   style={textarea}
-                  value={form.message || ""}
-                  onChange={(e) => set("message", e.target.value)}
+                  value={form.gift_message || form.message || ""}
+                  onChange={(e) => set("gift_message", e.target.value)}
                 />
               </Panel>
 
               {/* ── Customer Info ── */}
-              <Panel title="Customer info">
-                <label style={readLabel}>Name</label>
+              <Panel title="Customer Info">
+                <label style={readLabel}>{L("buyer_name", "Name")}</label>
                 <div style={{ ...readValue, marginBottom: "12px" }}>{order.buyer_name || "—"}</div>
 
-                <label style={readLabel}>Buyer Email</label>
+                <label style={readLabel}>{L("buyer_email", "Buyer Email")}</label>
                 <div style={{ ...readValue, color: "#2563eb", marginBottom: "12px" }}>{order.buyer_email || "—"}</div>
 
-                <label style={readLabel}>Address</label>
+                <label style={readLabel}>{L("shipping_address", "Address")}</label>
                 <textarea
                   readOnly
                   style={{ ...textarea, background: "#f0f0f0", color: "#333", resize: "none", minHeight: "72px" }}
@@ -287,15 +305,14 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
               </Panel>
 
               {/* ── Product Info ── */}
-              <Panel title="Product info">
-                {PRODUCT_FIELDS.map((f) => (
-                  <FieldRow key={f.key} label={f.label + ":"}>
+              <Panel title="Product Info">
+                {CUSTOM_KEYS.map((key) => (
+                  <FieldRow key={key} label={L(key, key) + ":"}>
                     <input
                       style={input}
-                      value={form[f.key] || ""}
-                      onChange={(e) => set(f.key, e.target.value)}
+                      value={form[key] || ""}
+                      onChange={(e) => set(key, e.target.value)}
                     />
-                    {f.hint && <div style={hint}>{f.hint}</div>}
                   </FieldRow>
                 ))}
               </Panel>

@@ -264,6 +264,15 @@ ipcMain.handle("shell:open-folder", async (_event, folderPath) => {
   return err ? { error: err } : { ok: true };
 });
 
+ipcMain.handle("dialog:pick-folder", async () => {
+  const result = await dialog.showOpenDialog({
+    title: "Select Archive Folder",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  return { path: result.filePaths[0] };
+});
+
 app.whenReady().then(() => {
   createWindow();
   startHelper();
