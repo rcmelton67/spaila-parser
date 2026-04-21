@@ -12,15 +12,15 @@ function ParserModal({ onClose, onCreated }) {
       background: "rgba(28, 26, 23, 0.55)",
       zIndex: 1000,
       display: "flex",
-      alignItems: "flex-start",
+      alignItems: "stretch",
       justifyContent: "center",
-      padding: "20px",
-      overflowY: "auto",
+      padding: "16px",
+      overflow: "hidden",
     }}>
       <div style={{
         width: "100%",
         maxWidth: "1280px",
-        minHeight: "calc(100vh - 40px)",
+        height: "100%",
         background: "#f5f2eb",
         borderRadius: "18px",
         overflow: "hidden",
@@ -29,9 +29,11 @@ function ParserModal({ onClose, onCreated }) {
         boxShadow: "0 24px 64px rgba(0,0,0,0.28)",
       }}>
         <div style={{
+          flexShrink: 0,
           display: "flex",
           justifyContent: "flex-end",
-          padding: "10px 14px 0",
+          padding: "8px 14px",
+          borderBottom: "1px solid rgba(47,38,28,0.08)",
         }}>
           <button
             onClick={onClose}
@@ -40,7 +42,7 @@ function ParserModal({ onClose, onCreated }) {
               borderRadius: "999px",
               background: "rgba(255,251,245,0.9)",
               color: "#4a3f35",
-              padding: "7px 16px",
+              padding: "5px 14px",
               fontSize: "13px",
               fontWeight: 600,
               cursor: "pointer",
@@ -49,7 +51,7 @@ function ParserModal({ onClose, onCreated }) {
             ✕ Close
           </button>
         </div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <ParserApp onCreated={onCreated} />
         </div>
       </div>

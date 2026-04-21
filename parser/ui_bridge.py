@@ -14,6 +14,7 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "field": decision.field,
             "value": decision.value,
             "decision": decision.decision,
+            "decision_source": decision.decision_source,
             "confidence": decision.confidence,
             "signals": decision.provenance.get("signals", []),
             "candidate_id": decision.candidate_id,
@@ -21,6 +22,7 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "snippet": decision.provenance.get("snippet", ""),
             "start": decision.start,
             "end": decision.end,
+            "streak_count": decision.provenance.get("streak_count", 0),
         }
         for decision in result["decisions"]
     ]

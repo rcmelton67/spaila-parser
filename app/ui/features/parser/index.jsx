@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 
 const orderedFields = [
   ["Buyer Name", "buyer_name"],
@@ -11,12 +12,12 @@ const orderedFields = [
 ];
 
 const settings = {
-  custom_1: "Field 1",
-  custom_2: "Field 2",
-  custom_3: "Field 3",
-  custom_4: "Field 4",
-  custom_5: "Field 5",
-  custom_6: "Field 6",
+  custom_1: "Line 1",
+  custom_2: "Line 2",
+  custom_3: "Line 3",
+  custom_4: "Line 4",
+  custom_5: "Line 5",
+  custom_6: "Line 6",
 };
 
 const itemFieldOrder = [
@@ -27,6 +28,7 @@ const itemFieldOrder = [
   [settings.custom_4, "custom_4"],
   [settings.custom_5, "custom_5"],
   [settings.custom_6, "custom_6"],
+  ["Order Notes", "order_notes"],
 ];
 
 function textLength(node) {
@@ -176,6 +178,17 @@ function itemFieldValue(value) {
   return value || "";
 }
 
+/** True when any meaningful field on an item has been filled. */
+function itemHasContent(item) {
+  const keys = ["price", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "order_notes"];
+  return keys.some((k) => {
+    const v = item[k];
+    if (!v) return false;
+    if (typeof v === "object") return !!v.value;
+    return v.trim() !== "";
+  });
+}
+
 function itemFieldDecision(meta, value) {
   if (value && typeof value === "object") {
     return "assigned";
@@ -212,6 +225,7 @@ function emptyItem() {
     custom_4: "",
     custom_5: "",
     custom_6: "",
+    order_notes: "",
   };
 }
 
@@ -224,6 +238,7 @@ function emptyItemMeta() {
     custom_4: null,
     custom_5: null,
     custom_6: null,
+    order_notes: null,
   };
 }
 
@@ -296,6 +311,194 @@ function buildItemState(decisions, previousItems = [], previousItemMeta = [], pr
   return { quantity, items, itemMeta };
 }
 
+/* ── Tooltip helpers ──────────────────────────────────────────────────── */
+
+const _SIGNAL_CONTEXT_MAP = [
+  ["inside_line_item_block",  "line item block"],
+  ["line_item_proximity",     "line item block"],
+  ["near_quantity",           "near quantity field"],
+  ["aligned_with_quantity",   "near quantity field"],
+  ["order_keyword_near",      "near order label"],
+  ["order_date_context",      "order details"],
+  ["header_date_base",        "email header"],
+  ["ship_by_keyword",         "ship-by line"],
+  ["quantity_label",          "quantity label"],
+  ["structured_quantity",     "quantity label"],
+  ["customer_context",        "customer section"],
+  ["shipping_label_context",  "shipping block"],
+  ["dollar_prefix",           "inline price"],
+  ["explicit_currency",       "inline price"],
+];
+
+function _inferContext(signals) {
+  for (const sig of (signals || [])) {
+    for (const [key, label] of _SIGNAL_CONTEXT_MAP) {
+      if (sig.includes(key)) return label;
+    }
+  }
+  return null;
+}
+
+function _hasSignal(signals, key) {
+  return (signals || []).some((s) => s.includes(key));
+}
+
+function buildTooltipLines(decision, fieldKey, priceCandidateCount) {
+  if (!decision || !decision.decision) return [];
+
+  const lines = [];
+  const { decision: status, decision_source, streak_count, signals } = decision;
+
+  // ── quantity ────────────────────────────────────────────────────────────
+  if (fieldKey === "quantity") {
+    if (status === "assigned" && decision_source === "confidence_promotion") {
+      lines.push("Learned from your correction");
+      lines.push("Now matched automatically");
+    } else if (status === "assigned") {
+      lines.push("You corrected this value");
+      lines.push("System will use this pattern moving forward");
+    } else if (status === "suggested") {
+      lines.push("Suggested based on pattern match");
+      lines.push("Click to confirm");
+    }
+    return lines;
+  }
+
+  // ── order_date ──────────────────────────────────────────────────────────
+  if (fieldKey === "order_date") {
+    if (status === "assigned") {
+      if (decision_source === "manual") {
+        lines.push("Manually confirmed");
+      } else {
+        // Always deterministically extracted — never confidence-promoted.
+        const fromHeader = _hasSignal(signals, "header_date_base")
+          || _hasSignal(signals, "email_header")
+          || _hasSignal(signals, "order_date_context");
+        lines.push(fromHeader ? "Extracted from email header" : "Auto-extracted from email");
+        lines.push("Matched order date pattern");
+      }
+    } else if (status === "suggested") {
+      const fromHeader = _hasSignal(signals, "header_date_base")
+        || _hasSignal(signals, "email_header")
+        || _hasSignal(signals, "order_date_context");
+      lines.push(fromHeader ? "Extracted from email header" : "Suggested based on pattern match");
+      lines.push("Click to confirm");
+    }
+    return lines;
+  }
+
+  // ── ship_by ─────────────────────────────────────────────────────────────
+  if (fieldKey === "ship_by") {
+    if (status === "assigned") {
+      if (decision_source === "manual") {
+        lines.push("Manually confirmed");
+      } else {
+        // Always deterministically extracted — never confidence-promoted.
+        const fromSubject = _hasSignal(signals, "ship_by_keyword")
+          || _hasSignal(signals, "subject_date")
+          || _hasSignal(signals, "header_date_base");
+        lines.push(fromSubject ? "Found in subject line" : "Auto-extracted from email");
+        lines.push("Matched 'Ship by' date");
+      }
+    } else if (status === "suggested") {
+      const fromSubject = _hasSignal(signals, "ship_by_keyword")
+        || _hasSignal(signals, "subject_date")
+        || _hasSignal(signals, "header_date_base");
+      lines.push(fromSubject ? "Found in subject line" : "Suggested based on pattern match");
+      lines.push("Click to confirm");
+    }
+    return lines;
+  }
+
+  // ── all other fields ─────────────────────────────────────────────────────
+  if (status === "assigned" && decision_source === "confidence_promotion") {
+    lines.push("Auto-filled from learned pattern");
+    if (streak_count > 0) {
+      lines.push(`Seen in ${streak_count} similar email${streak_count !== 1 ? "s" : ""}`);
+    }
+    const ctx = _inferContext(signals);
+    if (ctx) lines.push(`Matched: ${ctx}`);
+  } else if (status === "assigned") {
+    lines.push("Manually confirmed");
+  } else if (status === "suggested") {
+    lines.push("Suggested based on pattern match");
+    lines.push("Click to confirm");
+  }
+
+  if (fieldKey === "price" && (priceCandidateCount ?? 0) > 1) {
+    lines.push("Multiple possible matches found");
+    lines.push("Selected best candidate");
+    lines.push("You can choose another");
+  }
+
+  return lines;
+}
+
+function useTooltip(delayMs = 160) {
+  const [visible, setVisible] = React.useState(false);
+  const [anchorRect, setAnchorRect] = React.useState(null);
+  const timer = React.useRef(null);
+  const ref = React.useRef(null);
+
+  const show = React.useCallback(() => {
+    timer.current = setTimeout(() => {
+      if (ref.current) setAnchorRect(ref.current.getBoundingClientRect());
+      setVisible(true);
+    }, delayMs);
+  }, [delayMs]);
+
+  const hide = React.useCallback(() => {
+    clearTimeout(timer.current);
+    setVisible(false);
+  }, []);
+
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+
+  return { visible, anchorRect, show, hide, ref };
+}
+
+function FieldTooltip({ lines, anchorRect }) {
+  if (!lines || lines.length === 0 || !anchorRect) return null;
+
+  // Position: centered above the row, using fixed coords from getBoundingClientRect.
+  // Rendered into document.body via portal so no overflow container can clip it.
+  const left = anchorRect.left + anchorRect.width / 2;
+  const top  = anchorRect.top - 8;
+
+  return createPortal(
+    <div style={{
+      position: "fixed",
+      top,
+      left,
+      transform: "translate(-50%, -100%)",
+      background: "#1c1917",
+      color: "#e7e5e4",
+      borderRadius: "6px",
+      padding: "7px 11px",
+      fontSize: "11px",
+      lineHeight: 1.55,
+      whiteSpace: "nowrap",
+      zIndex: 99999,
+      pointerEvents: "none",
+      boxShadow: "0 4px 14px rgba(0,0,0,0.32)",
+    }}>
+      {lines.map((line, i) => <div key={i}>{line}</div>)}
+      <div style={{
+        position: "absolute",
+        top: "100%",
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: 0,
+        height: 0,
+        borderLeft: "5px solid transparent",
+        borderRight: "5px solid transparent",
+        borderTop: "5px solid #1c1917",
+      }} />
+    </div>,
+    document.body,
+  );
+}
+
 function FieldRow({
   label,
   fieldKey,
@@ -306,6 +509,9 @@ function FieldRow({
   onSelect,
   onTeach,
   multiline,
+  priceCandidateCount,
+  isKeyActive,
+  navKey,
 }) {
   const value = decision?.value ?? "";
   const canAccept = !!decision && !loading && !actionAlreadyApplied("save_assignment", decision);
@@ -317,12 +523,18 @@ function FieldRow({
       : "";
 
   const lineCount = value ? value.split("\n").length : 1;
+  const tooltip = useTooltip();
+  const tooltipLines = buildTooltipLines(decision, fieldKey, priceCandidateCount);
 
   console.log("UI_RENDER_DECISION", { field: fieldKey, decision: decision?.decision ?? null, inputState });
 
   return (
     <div
-      className={`field-row compact-row${selected ? " selected" : ""}${multiline ? " multiline-row" : ""}`}
+      ref={tooltip.ref}
+      data-nav-key={navKey ?? fieldKey}
+      className={`field-row compact-row${multiline ? " multiline-row" : ""}${selected || isKeyActive ? " active-field" : ""}`}
+      onMouseEnter={tooltipLines.length > 0 ? tooltip.show : undefined}
+      onMouseLeave={tooltipLines.length > 0 ? tooltip.hide : undefined}
       onClick={() => onSelect(decision, fieldKey)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -408,6 +620,7 @@ function FieldRow({
           ✕
         </button>
       </div>
+      {tooltip.visible && <FieldTooltip lines={tooltipLines} anchorRect={tooltip.anchorRect} />}
     </div>
   );
 }
@@ -423,6 +636,8 @@ function ItemFieldRow({
   onSelect,
   onAccept,
   onReject,
+  isKeyActive,
+  navKey,
 }) {
   const itemDecision = itemFieldDecision(meta, value);
   const inputState = itemDecision === "assigned"
@@ -433,9 +648,20 @@ function ItemFieldRow({
   const canAccept = !loading && (!!hasSelection || (fieldKey === "price" && meta?.source === "parser"));
   const canReject = !loading && !!itemFieldValue(value);
 
+  const itemTooltip = useTooltip();
+  const itemTooltipLines = buildTooltipLines(
+    meta && meta[fieldKey] ? meta[fieldKey] : null,
+    fieldKey,
+    meta?.priceCandidateCount,
+  );
+
   return (
     <div
-      className={`field-row compact-row${selected ? " selected" : ""}`}
+      ref={itemTooltip.ref}
+      data-nav-key={navKey ?? `item-${fieldKey}`}
+      className={`field-row compact-row${selected || isKeyActive ? " active-field" : ""}`}
+      onMouseEnter={itemTooltipLines.length > 0 ? itemTooltip.show : undefined}
+      onMouseLeave={itemTooltipLines.length > 0 ? itemTooltip.hide : undefined}
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -496,6 +722,7 @@ function ItemFieldRow({
           ✕
         </button>
       </div>
+      {itemTooltip.visible && <FieldTooltip lines={itemTooltipLines} anchorRect={itemTooltip.anchorRect} />}
     </div>
   );
 }
@@ -519,9 +746,22 @@ export default function App({ onCreated }) {
   const [selection, setSelection] = React.useState(null);
   const [activeItemIndex, setActiveItemIndex] = React.useState(0);
   const [itemMeta, setItemMeta] = React.useState([emptyItemMeta()]);
+  const [giftMessage, setGiftMessage] = React.useState(null);
+  const [giftMessageMeta, setGiftMessageMeta] = React.useState(null);
+  const [activeKeyField, setActiveKeyField] = React.useState(null);
   const actionLockRef = React.useRef("");
   const debounceRef = React.useRef(null);
   const textRef = React.useRef(null);
+  const importEmlRef = React.useRef(null);
+  const activeKeyFieldRef = React.useRef(null);
+  // Synchronous mirror of selection state. Written before React schedules a
+  // re-render so field click handlers always read the live value regardless of
+  // whether the async state update has propagated yet.
+  const lastSelectionRef = React.useRef(null);
+  // Tracks how many leading characters are trimmed from the displayed email so
+  // captureSelection can validate against the trimmed text and convert positions
+  // back to original coordinates before passing them to the backend.
+  const emailTrimOffsetRef = React.useRef(0);
 
   const visibleDecisions = state.decisions.filter(
     (decision) => !suppressedFields.includes(decision.field),
@@ -539,6 +779,137 @@ export default function App({ onCreated }) {
       .map((d) => [d.field, d.value]),
   );
 
+  const priceCandidateCount = meta?.price_candidate_count ?? 0;
+  // Combine state and ref so hasSelection is true the moment text is highlighted,
+  // even before the async state update propagates.
+  const hasSelection = !!(selection?.selected_text || lastSelectionRef.current?.selected_text);
+
+  // ── Keyboard navigation ────────────────────────────────────────────────────
+
+  // Flat ordered list of every navigable field key.
+  const navFields = React.useMemo(() => [
+    ...orderedFields.map(([, key]) => key),
+    "gift_message",
+    ...itemFieldOrder.map(([, key]) => `item:${activeItemIndex}:${key}`),
+  ], [activeItemIndex]);
+
+  // Keep refs in sync every render so the single keydown closure always
+  // reads the latest state without being re-registered.
+  React.useEffect(() => { activeKeyFieldRef.current = activeKeyField; }, [activeKeyField]);
+
+  const _kbRef = React.useRef(null);
+
+  // Register once, never re-register. All mutable state is read via _kbRef.
+  React.useEffect(() => {
+    function _scroll(key) {
+      requestAnimationFrame(() => {
+        document.querySelector(`[data-nav-key="${CSS.escape(key)}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
+
+    function _accept(key, kb) {
+      if (!key) return;
+      if (key.startsWith("item:")) {
+        const [, idxStr, field] = key.split(":");
+        const itemIndex = parseInt(idxStr, 10);
+        if (field === "price" && kb.itemMeta[itemIndex]?.price?.source === "parser" && kb.decisionMap.price) {
+          kb.teach("save_assignment", kb.decisionMap.price);
+        } else {
+          kb.assignSelectionToItemField(field, itemIndex);
+        }
+      } else if (key === "gift_message") {
+        kb.assignGiftMessage();
+      } else {
+        const dec = kb.decisionMap[key];
+        if (dec) kb.teach("save_assignment", dec);
+      }
+    }
+
+    function _reject(key, kb) {
+      if (!key) return;
+      if (key.startsWith("item:")) {
+        const [, idxStr, field] = key.split(":");
+        const itemIndex = parseInt(idxStr, 10);
+        if (field === "price" && kb.itemMeta[itemIndex]?.price?.source === "parser" && kb.decisionMap.price) {
+          kb.teach("save_rejection", kb.decisionMap.price);
+        } else {
+          kb.rejectItemField(field, itemIndex);
+        }
+      } else if (key === "gift_message") {
+        kb.rejectGiftMessage();
+      } else {
+        const dec = kb.decisionMap[key];
+        if (dec) kb.teach("save_rejection", dec);
+      }
+    }
+
+    function onKeyDown(e) {
+      const kb = _kbRef.current;
+      const { navFields, setActiveKeyField } = kb;
+
+      // Use e.target to detect typing — more reliable than document.activeElement.
+      const tag = e.target.tagName.toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || tag === "select";
+
+      const cur = activeKeyFieldRef.current;
+      const idx = cur ? navFields.indexOf(cur) : -1;
+
+      // ↑ ↓ — activate / move nav (always, unless typing).
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (isTyping) return;
+        e.preventDefault();
+        const next = e.key === "ArrowDown"
+          ? (idx < navFields.length - 1 ? idx + 1 : 0)
+          : (idx > 0 ? idx - 1 : navFields.length - 1);
+        setActiveKeyField(navFields[next]);
+        _scroll(navFields[next]);
+        return;
+      }
+
+      // Tab / Shift+Tab — always navigate fields (unless typing in an input).
+      // When nothing is active yet, Tab starts at the first field; Shift+Tab at the last.
+      if (e.key === "Tab" && !isTyping) {
+        e.preventDefault();
+        const next = !e.shiftKey
+          ? (idx < navFields.length - 1 ? idx + 1 : 0)
+          : (idx > 0 ? idx - 1 : navFields.length - 1);
+        setActiveKeyField(navFields[next]);
+        _scroll(navFields[next]);
+        return;
+      }
+
+      // All remaining shortcuts need a selected field and no typing context.
+      if (!cur || isTyping) return;
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        _accept(cur, kb);
+      } else if (e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        _reject(cur, kb);
+      } else if (e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        _accept(cur, kb);
+        const next = idx < navFields.length - 1 ? idx + 1 : 0;
+        setActiveKeyField(navFields[next]);
+        _scroll(navFields[next]);
+      } else if (e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        document.querySelector(
+          `[data-nav-key="${CSS.escape(cur)}"] input, [data-nav-key="${CSS.escape(cur)}"] textarea`
+        )?.focus();
+      } else if (e.key === "Escape") {
+        setActiveKeyField(null);
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []); // ← empty deps: register once, read live values via _kbRef
+
+  // ── End keyboard navigation ────────────────────────────────────────────────
+
   const requiredFields = ["order_number", "buyer_name"];
   const canCreateOrder = requiredFields.every((f) => {
     const val = assignedFields[f];
@@ -554,11 +925,13 @@ export default function App({ onCreated }) {
         buyer_email: assignedFields.buyer_email || "",
         shipping_address: assignedFields.shipping_address || "",
         ship_by: assignedFields.ship_by || "",
+        gift_message: giftMessage?.value || "",
       },
       items: state.items.map((item, index) => ({
         item_index: index + 1,
         quantity: 1,
         price: (typeof item.price === "object" ? item.price?.value : item.price) || "",
+        order_notes: (typeof item.order_notes === "object" ? item.order_notes?.value : item.order_notes) || "",
         custom_fields: {
           custom_1: (typeof item.custom_1 === "object" ? item.custom_1?.value : item.custom_1) || "",
           custom_2: (typeof item.custom_2 === "object" ? item.custom_2?.value : item.custom_2) || "",
@@ -602,8 +975,17 @@ export default function App({ onCreated }) {
   }, [decisionMap, highlights, visibleDecisions]);
 
   const applyResult = React.useCallback((result) => {
-    setFlags(result.flags || {});
+    const nextFlags = result.flags || {};
+    setFlags(nextFlags);
     setMeta(result.meta || {});
+
+    // Auto-scroll to Gift Message field when gift/personalization is detected.
+    if (nextFlags.is_gift || nextFlags.has_personalization) {
+      requestAnimationFrame(() => {
+        document.querySelector('[data-nav-key="gift_message"]')
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
     setSegments(result.segments || []);
     setState((current) => {
       let nextItemState;
@@ -638,11 +1020,15 @@ export default function App({ onCreated }) {
     });
     setSelectedField((current) => {
       if (!current) {
-        return result.decisions?.find((decision) => !suppressedFields.includes(decision.field))?.field || null;
+        // On initial import prefer buyer_name as a logical starting point.
+        // Fall back to null (clean state) if buyer_name is not in this result.
+        const hasBuyerName = result.decisions?.some(
+          (d) => d.field === "buyer_name" && !suppressedFields.includes(d.field),
+        );
+        return hasBuyerName ? "buyer_name" : null;
       }
-      return result.decisions?.some((decision) => decision.field === current && !suppressedFields.includes(decision.field))
-        ? current
-        : current;
+      // Keep the current selection across re-parses (accept / reject flows).
+      return current;
     });
     actionLockRef.current = "";
   }, [itemMeta, suppressedFields]);
@@ -665,47 +1051,67 @@ export default function App({ onCreated }) {
     if (browserSelection) {
       browserSelection.removeAllRanges();
     }
+    lastSelectionRef.current = null;
     setSelection(null);
   }, []);
 
   const captureSelection = React.useCallback(() => {
     const container = textRef.current;
     const browserSelection = window.getSelection();
+
+    // If the browser has no selection (e.g. user already clicked a field and
+    // the browser cleared it), do NOT wipe the stored selection — the pending
+    // field-click handler still needs it.
     if (!container || !browserSelection || browserSelection.rangeCount === 0) {
-      setSelection(null);
       return;
     }
 
     const range = browserSelection.getRangeAt(0);
     if (range.collapsed || !container.contains(range.commonAncestorContainer)) {
+      lastSelectionRef.current = null;
       setSelection(null);
       return;
     }
 
-    const start = computeSelectionOffset(container, range.startContainer, range.startOffset);
+    // Positions are relative to the DISPLAYED text (which may be trimStart()-ed).
+    const displayStart = computeSelectionOffset(container, range.startContainer, range.startOffset);
     const selectedText = range.toString();
-    const end = computeSelectionOffset(container, range.endContainer, range.endOffset);
+    const displayEnd = computeSelectionOffset(container, range.endContainer, range.endOffset);
 
-    if (state.text.slice(start, end) !== selectedText) {
+    // Validate against the displayed text (not the raw original) because the
+    // <pre> renders the trimmed version. Using state.text here was the bug —
+    // it caused an offset mismatch that silently cleared every selection.
+    const trimOffset = emailTrimOffsetRef.current;
+    const displayText = trimOffset > 0 ? state.text.trimStart() : state.text;
+    if (displayText.slice(displayStart, displayEnd) !== selectedText) {
+      lastSelectionRef.current = null;
       setSelection(null);
       return;
     }
+
+    // Convert back to original (backend) coordinates by adding the trim offset.
+    const start = displayStart + trimOffset;
+    const end   = displayEnd   + trimOffset;
 
     const segment = segments.find((seg) => start >= seg.start && end <= seg.end);
 
-    setSelection({
+    const captured = {
       start,
       end,
       selected_text: selectedText,
       segment_id: segment?.id || "",
-    });
+    };
+    lastSelectionRef.current = captured; // synchronous — always read by click handlers
+    setSelection(captured);             // async — drives the UI indicator
   }, [segments, state.text]);
 
   const assignSelectionToField = React.useCallback(async (field) => {
-    if (!state.filePath || !selection?.selected_text) {
+    // Use the ref first (synchronous, survives browser selection clearing on click).
+    const sel = lastSelectionRef.current || selection;
+    if (!state.filePath || !sel?.selected_text) {
       return;
     }
-    const actionKey = `manual:${field}:${selection.start}:${selection.end}:${selection.selected_text}`;
+    const actionKey = `manual:${field}:${sel.start}:${sel.end}:${sel.selected_text}`;
     if (actionLockRef.current === actionKey) {
       return;
     }
@@ -720,11 +1126,11 @@ export default function App({ onCreated }) {
         orderNumber: currentOrderNumber,
         decision: {
           field,
-          value: selection.selected_text,
-          segment_id: selection.segment_id,
-          start: selection.start,
-          end: selection.end,
-          selected_text: selection.selected_text,
+          value: sel.selected_text,
+          segment_id: sel.segment_id,
+          start: sel.start,
+          end: sel.end,
+          selected_text: sel.selected_text,
           suppressed_fields: nextSuppressed,
         },
       });
@@ -742,9 +1148,9 @@ export default function App({ onCreated }) {
         }
         : {
           field,
-          value: selection.selected_text,
-          start: selection.start,
-          end: selection.end,
+          value: sel.selected_text,
+          start: sel.start,
+          end: sel.end,
           decision: null,
         });
       setSuppressedFields(nextSuppressed);
@@ -762,7 +1168,8 @@ export default function App({ onCreated }) {
   }, [applyResult, clearSelection, currentOrderNumber, resolveCurrentParserPath, selection, suppressedFields]);
 
   const assignSelectionToItemField = React.useCallback((field, itemIndex) => {
-    if (!selection?.selected_text) {
+    const sel = lastSelectionRef.current || selection;
+    if (!sel?.selected_text) {
       return;
     }
 
@@ -775,9 +1182,9 @@ export default function App({ onCreated }) {
         return {
           ...item,
           [field]: {
-            value: selection.selected_text,
-            start: selection.start,
-            end: selection.end,
+            value: sel.selected_text,
+            start: sel.start,
+            end: sel.end,
           },
         };
       }),
@@ -791,9 +1198,9 @@ export default function App({ onCreated }) {
         [field]: {
           source: "manual",
           decision: "assigned",
-          start: selection.start,
-          end: selection.end,
-          value: selection.selected_text,
+          start: sel.start,
+          end: sel.end,
+          value: sel.selected_text,
         },
       };
     }));
@@ -801,9 +1208,9 @@ export default function App({ onCreated }) {
     console.log("HIGHLIGHTS:", highlights);
     console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", {
       field,
-      value: selection.selected_text,
-      start: selection.start,
-      end: selection.end,
+      value: sel.selected_text,
+      start: sel.start,
+      end: sel.end,
       decision: "assigned",
     });
     setSelectedField(`item:${itemIndex}:${field}`);
@@ -844,14 +1251,32 @@ export default function App({ onCreated }) {
       return;
     }
     setSelectedField(field);
-    if (selection?.selected_text) {
+    // Check ref first — state may not have propagated yet when the click fires.
+    const sel = lastSelectionRef.current || selection;
+    if (sel?.selected_text) {
       assignSelectionToField(field);
     }
   }, [assignSelectionToField, selection]);
 
+  const assignGiftMessage = React.useCallback(() => {
+    const sel = lastSelectionRef.current || selection;
+    if (!sel?.selected_text) return;
+    setGiftMessage({ value: sel.selected_text, start: sel.start, end: sel.end });
+    setGiftMessageMeta({ decision: "assigned", source: "manual", value: sel.selected_text });
+    setSelectedField("gift_message");
+    clearSelection();
+  }, [clearSelection, selection]);
+
+  const rejectGiftMessage = React.useCallback(() => {
+    setGiftMessage(null);
+    setGiftMessageMeta(null);
+    setSelectedField(null);
+  }, []);
+
   const handleItemFieldClick = React.useCallback((field, itemIndex) => {
     setSelectedField(`item:${itemIndex}:${field}`);
-    if (selection?.selected_text) {
+    const sel = lastSelectionRef.current || selection;
+    if (sel?.selected_text) {
       assignSelectionToItemField(field, itemIndex);
     }
   }, [assignSelectionToItemField, selection]);
@@ -866,6 +1291,9 @@ export default function App({ onCreated }) {
       }
       setSuppressedFields([]);
       setActiveItemIndex(0);
+      setGiftMessage(null);
+      setGiftMessageMeta(null);
+      setActiveKeyField(null);
       clearSelection();
       applyResult(result);
     } catch (error) {
@@ -876,6 +1304,14 @@ export default function App({ onCreated }) {
       }));
     }
   };
+
+  // Keep ref up to date so the mount effect always calls the latest version.
+  importEmlRef.current = importEml;
+
+  // Automatically open the file picker when the modal first opens.
+  React.useEffect(() => {
+    importEmlRef.current();
+  }, []);
 
   const teach = async (action, decision) => {
     if (!state.filePath || !decision) {
@@ -966,30 +1402,53 @@ export default function App({ onCreated }) {
   const activeItem = state.items[activeItemIndex] || emptyItem();
   const activeItemMeta = itemMeta[activeItemIndex] || emptyItemMeta();
 
+  // Updated on every render so the single keydown closure always sees fresh values.
+  // Must be after all function definitions to avoid temporal dead zone errors.
+  _kbRef.current = {
+    navFields,
+    activeKeyField,
+    setActiveKeyField,
+    decisionMap,
+    itemMeta,
+    teach,
+    assignSelectionToItemField,
+    rejectItemField,
+    assignGiftMessage,
+    rejectGiftMessage,
+  };
+
+  // Compute trim offset once per render so both the JSX and captureSelection
+  // use exactly the same value. The ref keeps captureSelection in sync without
+  // needing it in that callback's dependency array.
+  const _rawEmail = state.text || "";
+  const _emailTrimOffset = _rawEmail.length - _rawEmail.trimStart().length;
+  const _displayEmail = _emailTrimOffset > 0 ? _rawEmail.trimStart() : _rawEmail;
+  emailTrimOffsetRef.current = _emailTrimOffset;
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <button className="import-button" onClick={importEml} disabled={state.loading}>
           {state.loading ? "Loading..." : "Import EML"}
         </button>
-        <div className="file-path">{state.filePath || "No file loaded"}</div>
+        <div className="topbar-subject">
+          <span className="subject-label">Subject:</span>{" "}
+          <span>{state.subject || "(no subject)"}</span>
+        </div>
+        {state.filePath ? (
+          <div className="topbar-file-info" title={state.filePath}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </div>
+        ) : null}
       </header>
 
       {state.error ? <div className="error-banner">{state.error}</div> : null}
 
-      <div className="subject-line">
-        <span className="subject-label">Subject:</span>{" "}
-        <span>{state.subject || "(no subject)"}</span>
-      </div>
-
-      {(flags.is_gift || flags.has_personalization) ? (
-        <div className="banner-stack">
-          {flags.is_gift ? <div className="banner gift">GIFT ORDER</div> : null}
-          {flags.has_personalization ? (
-            <div className="banner personalization">PERSONALIZATION REQUIRED</div>
-          ) : null}
-        </div>
-      ) : null}
 
       <main className="split-view">
         <section className="panel text-panel">
@@ -1000,10 +1459,17 @@ export default function App({ onCreated }) {
             onMouseUp={captureSelection}
             onKeyUp={captureSelection}
           >
-            {renderHighlightedText(
-              state.text || "(import an .eml file to view content)",
-              highlights,
-            )}
+            {_displayEmail
+              ? renderHighlightedText(
+                  _displayEmail,
+                  _emailTrimOffset > 0
+                    ? highlights
+                        .map((h) => ({ ...h, start: h.start - _emailTrimOffset, end: h.end - _emailTrimOffset }))
+                        .filter((h) => h.end > 0 && h.start < _displayEmail.length)
+                    : highlights,
+                )
+              : "(import an .eml file to view content)"
+            }
           </pre>
         </section>
 
@@ -1023,12 +1489,15 @@ export default function App({ onCreated }) {
                 label={label}
                 fieldKey={key}
                 decision={decisionMap[key]}
-                hasSelection={!!selection?.selected_text}
+                hasSelection={hasSelection}
                 loading={state.loading}
                 selected={selectedField === key}
                 onSelect={handleFieldClick}
                 onTeach={teach}
                 multiline={!!multiline}
+                priceCandidateCount={priceCandidateCount}
+                isKeyActive={activeKeyField === key}
+                navKey={key}
               />
             ))}
 
@@ -1040,63 +1509,113 @@ export default function App({ onCreated }) {
                 label={label}
                 fieldKey={key}
                 decision={decisionMap[key]}
-                hasSelection={!!selection?.selected_text}
+                hasSelection={hasSelection}
                 loading={state.loading}
                 selected={selectedField === key}
                 onSelect={handleFieldClick}
                 onTeach={teach}
                 multiline={!!multiline}
+                priceCandidateCount={priceCandidateCount}
+                isKeyActive={activeKeyField === key}
+                navKey={key}
               />
             ))}
+
+            <ItemFieldRow
+              label={
+                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  Gift Message
+                  {(flags.is_gift || flags.has_personalization) && (
+                    <span
+                      className="field-flag-badge"
+                      title={
+                        flags.is_gift && flags.has_personalization
+                          ? "Gift order — personalization needed"
+                          : flags.is_gift
+                            ? "Gift order detected"
+                            : "Personalization needed"
+                      }
+                    >
+                      {flags.is_gift ? "🎁" : "✏️"}
+                    </span>
+                  )}
+                </span>
+              }
+              fieldKey="gift_message"
+              value={giftMessage}
+              meta={giftMessageMeta}
+              hasSelection={hasSelection}
+              loading={state.loading}
+              selected={selectedField === "gift_message"}
+              onSelect={() => {
+                setSelectedField("gift_message");
+                if (selection?.selected_text) assignGiftMessage();
+              }}
+              onAccept={assignGiftMessage}
+              onReject={rejectGiftMessage}
+              isKeyActive={activeKeyField === "gift_message"}
+              navKey="gift_message"
+            />
 
             <div className="section-divider" />
             <div className="section-header">Items</div>
 
             {state.quantity > 1 ? (
-              <div className="item-picker-row">
-                <label className="compact-label" htmlFor="item-picker">Item</label>
-                <select
-                  id="item-picker"
-                  className="item-picker"
-                  value={activeItemIndex}
-                  onChange={(event) => setActiveItemIndex(Number(event.target.value))}
-                >
-                  {state.items.map((_, index) => (
-                    <option key={`item-${index + 1}`} value={index}>
-                      {`Item ${index + 1}`}
-                    </option>
+              <>
+                <div className="item-tabs">
+                  {state.items.map((item, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      className={`item-tab${index === activeItemIndex ? " active" : ""}`}
+                      onClick={() => setActiveItemIndex(index)}
+                    >
+                      {index + 1}
+                      {itemHasContent(item) && (
+                        <span className="item-tab-check">✓</span>
+                      )}
+                    </button>
                   ))}
-                </select>
-              </div>
+                  <span className="item-count-badge">{state.quantity} Items</span>
+                </div>
+                <div className="item-context">
+                  Editing Item {activeItemIndex + 1} of {state.quantity}
+                </div>
+              </>
             ) : null}
 
-            {itemFieldOrder.map(([label, fieldKey]) => (
-              <ItemFieldRow
-                key={fieldKey}
-                label={label}
-                fieldKey={fieldKey}
-                value={activeItem[fieldKey] ?? ""}
-                meta={activeItemMeta[fieldKey]}
-                hasSelection={!!selection?.selected_text}
-                loading={state.loading}
-                selected={selectedField === `item:${activeItemIndex}:${fieldKey}`}
-                onSelect={() => handleItemFieldClick(fieldKey, activeItemIndex)}
-                onAccept={() => {
-                  if (fieldKey === "price" && activeItemMeta.price?.source === "parser" && decisionMap.price) {
-                    teach("save_assignment", decisionMap.price);
-                    return;
-                  }
-                  assignSelectionToItemField(fieldKey, activeItemIndex);
-                }}
-                onReject={() => {
-                  if (fieldKey === "price" && activeItemMeta.price?.source === "parser" && decisionMap.price) {
-                    teach("save_rejection", decisionMap.price);
-                    return;
-                  }
-                  rejectItemField(fieldKey, activeItemIndex);
-                }}
-              />
-            ))}
+            {itemFieldOrder.map(([label, fieldKey]) => {
+              const itemNavKey = `item:${activeItemIndex}:${fieldKey}`;
+              return (
+                <ItemFieldRow
+                  key={fieldKey}
+                  label={label}
+                  fieldKey={fieldKey}
+                  value={activeItem[fieldKey] ?? ""}
+                  meta={activeItemMeta[fieldKey]}
+                  hasSelection={hasSelection}
+                  loading={state.loading}
+                  selected={selectedField === itemNavKey}
+                  onSelect={() => handleItemFieldClick(fieldKey, activeItemIndex)}
+                  onAccept={() => {
+                    if (fieldKey === "price" && activeItemMeta.price?.source === "parser" && decisionMap.price) {
+                      teach("save_assignment", decisionMap.price);
+                      return;
+                    }
+                    assignSelectionToItemField(fieldKey, activeItemIndex);
+                  }}
+                  onReject={() => {
+                    if (fieldKey === "price" && activeItemMeta.price?.source === "parser" && decisionMap.price) {
+                      teach("save_rejection", decisionMap.price);
+                      return;
+                    }
+                    rejectItemField(fieldKey, activeItemIndex);
+                  }}
+                  isKeyActive={activeKeyField === itemNavKey}
+                  navKey={itemNavKey}
+                />
+              );
+            })}
 
             <button
               type="button"

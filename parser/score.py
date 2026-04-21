@@ -25,6 +25,17 @@ _PRODUCT_ROW_HINTS = ("price", "item total", "product", "item", "line item")
 _SENTENCE_PRICE_RE = re.compile(r"\b(?:sale of|you sold|sold)\s+\d+\s+items?\b", re.IGNORECASE)
 _CURRENCY_VALUE_RE = re.compile(r"\$\s*\d+(?:[.,]\d+)?")  # explicit $XX or $XX.XX
 
+# Woo price location signals
+# Positive: words that appear near the *correct* line-item price
+_PRICE_POSITIVE_WORDS: tuple = ("item", "price", "each", "per", "line item", "product", "sku")
+# Positive: words that indicate the candidate is INSIDE a line-item block
+_LINE_ITEM_BLOCK_WORDS: tuple = ("qty", "quantity", "product", "sku", "listing", "each", "per unit")
+# Negative: aggregate / summary context words that indicate the WRONG total row
+_PRICE_TOTAL_CONTEXT_WORDS: tuple = (
+    "order total", "grand total", "order subtotal",
+    "cart total", "checkout total",
+)
+
 
 def score_quantity(candidates: List[Candidate], segments: List[Segment]) -> List[Candidate]:
     seg_map: Dict[str, Segment] = {s.id: s for s in segments}
@@ -235,6 +246,23 @@ def score_price(
             score += 2.0
             signals.append("aligned_with_quantity(+2.0)")
 
+        # --- NEW: line-item proximity boost (+4) ---
+        # Boost when the candidate or its ±3 segment window contains
+        # positive line-item label words (item / price / each / product …).
+        if cand_idx is not None:
+            window_segs = segments[max(0, cand_idx - 3): cand_idx + 4]
+            window_text_lower = " ".join(s.text.lower() for s in window_segs)
+            if any(w in window_text_lower for w in _PRICE_POSITIVE_WORDS):
+                score += 4.0
+                signals.append("line_item_proximity(+4.0)")
+
+            # --- NEW: inside line-item block boost (+3) ---
+            # Extra boost when the same window also contains qty/sku/product
+            # signals, confirming this is a product-row price, not a summary.
+            if any(w in window_text_lower for w in _LINE_ITEM_BLOCK_WORDS):
+                score += 3.0
+                signals.append("inside_line_item_block(+3.0)")
+
         # --- NEGATIVE SIGNALS ---
 
         if any(word in text_lower for word in _SUMMARY_WORDS):
@@ -264,6 +292,23 @@ def score_price(
             if len(nearby_prices) > 2:
                 score -= 2.0
                 penalties.append("crowded_price_region(−2.0)")
+
+        # --- NEW: aggregate-total context penalty (−5) ---
+        # Penalise candidates whose ±3 segment window contains explicit
+        # "order total" / "grand total" phrases that mark a summary row.
+        if cand_idx is not None:
+            nearby_total_text = " ".join(
+                s.text.lower()
+                for s in segments[max(0, cand_idx - 3): cand_idx + 4]
+            )
+            if any(phrase in nearby_total_text for phrase in _PRICE_TOTAL_CONTEXT_WORDS):
+                score -= 5.0
+                penalties.append("near_order_total(−5.0)")
+        # Also penalise when the SEGMENT ITSELF mentions these exact phrases
+        # (catches totals that the broader window scan might miss).
+        if any(phrase in text_lower for phrase in _PRICE_TOTAL_CONTEXT_WORDS):
+            score -= 5.0
+            penalties.append("segment_is_total(−5.0)")
 
         cand.signals = signals
         cand.penalties = penalties

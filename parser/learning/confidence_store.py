@@ -17,8 +17,16 @@ CONFIDENCE_STORE_PATH = os.path.join(_HERE, "confidence_store.json")
 
 CONFIDENCE_PROMOTION_THRESHOLD = 4
 
-# Fields excluded from auto-promotion.  Add "quantity" here if needed.
-_NO_AUTOPROMOTE: frozenset = frozenset({"price"})
+# Fields excluded from auto-promotion.
+# - price: too risky (item vs. total confusion)
+# - order_date / ship_by / order_number: deterministically extracted from
+#   email headers/subject — they are NOT learned from user behaviour.
+_NO_AUTOPROMOTE: frozenset = frozenset({
+    "price",
+    "order_date",
+    "ship_by",
+    "order_number",
+})
 
 
 # ---------------------------------------------------------------------------

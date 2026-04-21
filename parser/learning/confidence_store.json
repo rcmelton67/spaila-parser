@@ -1,64 +1,73 @@
 {
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:quantity:number_regex|quantity|qty_label": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:quantity:number_regex|quantity|qty_label:etsy": {
     "field": "quantity",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|quantity|qty_label",
+    "source": "etsy",
     "last_value": "1",
     "streak_count": 1
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:price:number_regex|price|pricing": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:price:number_regex|price|pricing": {
     "field": "price",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|price|pricing",
-    "last_value": "82.00",
-    "streak_count": 1
+    "source": "",
+    "last_value": "29.99",
+    "streak_count": 14
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:order_number:number_regex|none|body": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|none|body": {
     "field": "order_number",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|none|body",
-    "last_value": "4027683350",
-    "streak_count": 1
+    "source": "",
+    "last_value": "4036089707",
+    "streak_count": 19
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:order_date:date_header|none|header": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|none|header": {
     "field": "order_date",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "date_header|none|header",
+    "source": "",
     "last_value": "April 13, 2026",
     "streak_count": 1
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:buyer_email:email_regex|none|body": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|none|body": {
     "field": "buyer_email",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|none|body",
+    "source": "",
     "last_value": "ropercoach@gmail.com",
     "streak_count": 1
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:ship_by:ship_by_subject_regex|ship_by|order": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:ship_by:ship_by_subject_regex|ship_by|order": {
     "field": "ship_by",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "ship_by_subject_regex|ship_by|order",
+    "source": "",
     "last_value": "Apr 27",
     "streak_count": 1
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:buyer_name:address_label_name|none|body": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_label_name|none|body": {
     "field": "buyer_name",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_label_name|none|body",
-    "last_value": "Linda Rotramel",
-    "streak_count": 1
+    "source": "",
+    "last_value": "Shannon Smith",
+    "streak_count": 25
   },
-  "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc:shipping_address:address_label_block|none|body": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_label_block|none|body": {
     "field": "shipping_address",
-    "template_id": "88c9135a0520a37beb62c9d872a2c3cf9cc12eea7dd548c11344cb5f526669fc",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_label_block|none|body",
-    "last_value": "2700d Canterbury Cir Apt D\nAPT D\nPORT CLINTON, OH\n43452-1781\nUnited States",
-    "streak_count": 1
+    "source": "",
+    "last_value": "25377 State Hwy 39\nPURCELL, OK\n73080\nUnited States",
+    "streak_count": 20
   },
-  "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c:quantity:number_regex|none|order_summary": {
+  "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "number_regex|none|order_summary",
+    "source": "woo",
     "last_value": "1",
     "streak_count": 1
   },
@@ -66,6 +75,7 @@
     "field": "price",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "74.00",
     "streak_count": 1
   },
@@ -73,6 +83,7 @@
     "field": "order_number",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "2346",
     "streak_count": 1
   },
@@ -80,6 +91,7 @@
     "field": "order_date",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "date_regex|none|body",
+    "source": "",
     "last_value": "April 3, 2026",
     "streak_count": 1
   },
@@ -87,6 +99,7 @@
     "field": "buyer_email",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "email_regex|none|body",
+    "source": "",
     "last_value": "sherrystuart@aol.com",
     "streak_count": 1
   },
@@ -94,6 +107,7 @@
     "field": "buyer_name",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "address_label_name|none|body",
+    "source": "",
     "last_value": "Michelle Cook",
     "streak_count": 1
   },
@@ -101,69 +115,23 @@
     "field": "shipping_address",
     "template_id": "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c",
     "extraction_signature": "address_label_block|none|body",
+    "source": "",
     "last_value": "615 Joseph Circle\nGolden, CO 80403",
     "streak_count": 1
   },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:quantity:number_regex|quantity|qty_label": {
-    "field": "quantity",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "number_regex|quantity|qty_label",
-    "last_value": "1",
-    "streak_count": 1
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:price:number_regex|price|pricing": {
-    "field": "price",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "number_regex|price|pricing",
-    "last_value": "159.99",
-    "streak_count": 2
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:order_number:number_regex|none|body": {
-    "field": "order_number",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "number_regex|none|body",
-    "last_value": "4031935535",
-    "streak_count": 2
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:order_date:date_header|none|header": {
-    "field": "order_date",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "date_header|none|header",
-    "last_value": "April 13, 2026",
-    "streak_count": 1
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:buyer_email:email_regex|email|body": {
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|email|body": {
     "field": "buyer_email",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|email|body",
-    "last_value": "psatkins@yahoo.com",
-    "streak_count": 2
+    "source": "",
+    "last_value": "Sksmith81@icloud.com",
+    "streak_count": 24
   },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:ship_by:ship_by_subject_regex|ship_by|order": {
-    "field": "ship_by",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "ship_by_subject_regex|ship_by|order",
-    "last_value": "Apr 20",
-    "streak_count": 1
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:buyer_name:address_label_name|none|body": {
-    "field": "buyer_name",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "address_label_name|none|body",
-    "last_value": "Lucas Atkins",
-    "streak_count": 2
-  },
-  "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf:shipping_address:address_label_block|none|body": {
-    "field": "shipping_address",
-    "template_id": "a694f71090233605a2250c13c88ae89e3fd203e1fc3e864fab1a848170fd6dbf",
-    "extraction_signature": "address_label_block|none|body",
-    "last_value": "23431 Ne 28th Pl\nSAMMAMISH, WA\n98074\nUnited States",
-    "streak_count": 2
-  },
-  "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c:quantity:number_regex|none|order_summary": {
+  "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "number_regex|none|order_summary",
+    "source": "woo",
     "last_value": "1",
     "streak_count": 1
   },
@@ -171,6 +139,7 @@
     "field": "price",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "29.99",
     "streak_count": 1
   },
@@ -178,6 +147,7 @@
     "field": "order_number",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "2353",
     "streak_count": 1
   },
@@ -185,6 +155,7 @@
     "field": "order_date",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "date_regex|none|body",
+    "source": "",
     "last_value": "April 10, 2026",
     "streak_count": 1
   },
@@ -192,6 +163,7 @@
     "field": "buyer_email",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "email_regex|none|body",
+    "source": "",
     "last_value": "jenna_lowry@comcast.net",
     "streak_count": 1
   },
@@ -199,6 +171,7 @@
     "field": "buyer_name",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "address_label_name|none|body",
+    "source": "",
     "last_value": "Billing address",
     "streak_count": 1
   },
@@ -206,13 +179,15 @@
     "field": "shipping_address",
     "template_id": "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c",
     "extraction_signature": "address_label_block|none|body",
+    "source": "",
     "last_value": "Prestige Realty\n121 N Main\nCedar City, UT 84720",
     "streak_count": 1
   },
-  "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7:quantity:number_regex|none|order_summary": {
+  "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "number_regex|none|order_summary",
+    "source": "woo",
     "last_value": "1",
     "streak_count": 1
   },
@@ -220,6 +195,7 @@
     "field": "price",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "64.00",
     "streak_count": 1
   },
@@ -227,6 +203,7 @@
     "field": "order_number",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "2354",
     "streak_count": 1
   },
@@ -234,6 +211,7 @@
     "field": "order_date",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "date_regex|none|body",
+    "source": "",
     "last_value": "April 11, 2026",
     "streak_count": 1
   },
@@ -241,6 +219,7 @@
     "field": "buyer_email",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "email_regex|none|body",
+    "source": "",
     "last_value": "mikeandrea1028@gmail.com",
     "streak_count": 1
   },
@@ -248,6 +227,7 @@
     "field": "buyer_name",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "address_label_name|none|body",
+    "source": "",
     "last_value": "Michael Littman",
     "streak_count": 1
   },
@@ -255,69 +235,15 @@
     "field": "shipping_address",
     "template_id": "b71ace7b9a6dc974b06ec27ed24db908e87b72310b657da8f86d72f7b01c8ee7",
     "extraction_signature": "address_label_block|none|body",
+    "source": "",
     "last_value": "3109 Bayberry Way\nMargate, FL 33063",
     "streak_count": 1
   },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:quantity:number_regex|quantity|qty_label": {
-    "field": "quantity",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "number_regex|quantity|qty_label",
-    "last_value": "1",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:price:number_regex|price|pricing": {
-    "field": "price",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "number_regex|price|pricing",
-    "last_value": "59.99",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:order_number:number_regex|none|body": {
-    "field": "order_number",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "number_regex|none|body",
-    "last_value": "4032124425",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:order_date:date_header|none|header": {
-    "field": "order_date",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "date_header|none|header",
-    "last_value": "April 14, 2026",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:buyer_email:email_regex|email|body": {
-    "field": "buyer_email",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "email_regex|email|body",
-    "last_value": "suricojustine@gmail.com",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:ship_by:ship_by_subject_regex|ship_by|order": {
-    "field": "ship_by",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "ship_by_subject_regex|ship_by|order",
-    "last_value": "Apr 21",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:buyer_name:address_label_name|none|body": {
-    "field": "buyer_name",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "address_label_name|none|body",
-    "last_value": "Schmalz Family",
-    "streak_count": 1
-  },
-  "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d:shipping_address:address_label_block|none|body": {
-    "field": "shipping_address",
-    "template_id": "e784148ffa9f21509dcdb3f23a20468175ac3f721365fa327c2c23e31eab077d",
-    "extraction_signature": "address_label_block|none|body",
-    "last_value": "38 Woodhollow Rd\nGREAT RIVER, NY\n11739-3000\nUnited States",
-    "streak_count": 1
-  },
-  "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a:quantity:number_regex|none|order_summary": {
+  "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "number_regex|none|order_summary",
+    "source": "woo",
     "last_value": "1",
     "streak_count": 1
   },
@@ -325,6 +251,7 @@
     "field": "price",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "78.00",
     "streak_count": 1
   },
@@ -332,6 +259,7 @@
     "field": "order_number",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "number_regex|none|body",
+    "source": "",
     "last_value": "2356",
     "streak_count": 1
   },
@@ -339,6 +267,7 @@
     "field": "order_date",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "date_regex|none|body",
+    "source": "",
     "last_value": "April 11, 2026",
     "streak_count": 1
   },
@@ -346,6 +275,7 @@
     "field": "buyer_email",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "email_regex|none|body",
+    "source": "",
     "last_value": "kddavis924@gmail.com",
     "streak_count": 1
   },
@@ -353,6 +283,7 @@
     "field": "buyer_name",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "address_label_name|none|body",
+    "source": "",
     "last_value": "Kim Davis",
     "streak_count": 1
   },
@@ -360,6 +291,7 @@
     "field": "shipping_address",
     "template_id": "20319b0c8190f8699cf17ae4cb8d56214a482bed4ba63aa82be3594be961b10a",
     "extraction_signature": "address_label_block|none|body",
+    "source": "",
     "last_value": "8660 Five Forks Rd\nPamplin, VA 23958",
     "streak_count": 1
   }

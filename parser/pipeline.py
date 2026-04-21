@@ -656,6 +656,23 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
         price_candidates = _apply_signature_scoring(price_candidates, template_family_id, "price", segment_map)
     price_decision = None if _field_is_rejected(template_family_id, "price") else decide_price(price_candidates)
 
+    # --- PRICE SELECTION TRACE ---
+    _price_trace = sorted(
+        [
+            {
+                "value": c.value,
+                "score": round(c.score, 2),
+                "signals": getattr(c, "signals", []),
+                "penalties": getattr(c, "penalties", []),
+            }
+            for c in price_candidates
+        ],
+        key=lambda x: x["score"],
+        reverse=True,
+    )[:6]
+    # order_number may not be decided yet; use a placeholder resolved below.
+    _price_order_ref = getattr(price_decision, "value", None)
+
     # --- ORDER NUMBER ---
     order_candidates = score_order_number(candidates, segments)
     order_candidates, assignment_locked["order_number"] = _apply_assignment_policy(
@@ -666,8 +683,17 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
         order_candidates = _apply_signature_scoring(order_candidates, template_family_id, "order_number", segment_map)
     order_decision = None if _field_is_rejected(template_family_id, "order_number") else decide_order_number(order_candidates)
 
-    # Log template family mapping for debugging cross-email learning.
+    # Emit price selection trace now that order_number is known.
     _order_num_for_log = order_decision.value if order_decision else "unknown"
+    print(
+        f"PRICE_SELECTION_TRACE {{"
+        f" order_number: {_order_num_for_log!r},"
+        f" selected_value: {getattr(price_decision, 'value', None)!r},"
+        f" candidate_scores: {_price_trace} }}",
+        file=sys.stderr, flush=True,
+    )
+
+    # Log template family mapping for debugging cross-email learning.
     _family_normalized_preview = normalize_for_family(clean_text)
     print(
         f"TEMPLATE_FAMILY_DEBUG {{"
@@ -906,6 +932,7 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
             if _row.field in _already_promoted:
                 _row.decision = "assigned"
                 _row.decision_source = "confidence_promotion"
+                _row.provenance["streak_count"] = _row.provenance.get("streak_count", 0)
                 print(
                     f"[CONF_DEBUG] re-applied promotion field={_row.field!r} (streak already met)",
                     file=sys.stderr, flush=True,
@@ -945,6 +972,7 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
             if _promoted:
                 _row.decision = "assigned"
                 _row.decision_source = "confidence_promotion"
+                _row.provenance["streak_count"] = _streak
 
     meta: Dict[str, Any] = {}
     lines = clean_text.splitlines()

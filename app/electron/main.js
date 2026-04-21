@@ -49,6 +49,7 @@ function createWindow() {
     height: 760,
     minWidth: 900,
     minHeight: 600,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -56,6 +57,8 @@ function createWindow() {
     },
   });
 
+  window.maximize();
+  window.show();
   window.loadFile(path.join(__dirname, "..", "ui", "index.html"));
 }
 

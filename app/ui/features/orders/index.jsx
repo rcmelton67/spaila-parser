@@ -1,6 +1,7 @@
 import React from "react";
 import EditOrderModal from "./EditOrderModal.jsx";
 import SettingsModal from "./SettingsModal.jsx";
+import { loadFieldConfig } from "./fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
 
@@ -32,16 +33,6 @@ const primaryButton = {
   fontWeight: 600,
 };
 
-const COLUMNS = [
-  { key: "order_number", label: "Order #",  defaultWidth: 140 },
-  { key: "buyer_name",   label: "Buyer",    defaultWidth: 220 },
-  { key: "price",        label: "Price",    defaultWidth: 100 },
-  { key: "quantity",     label: "Qty",      defaultWidth: 80  },
-  { key: "custom_1",     label: "Custom 1", defaultWidth: 180 },
-  { key: "custom_2",     label: "Custom 2", defaultWidth: 180 },
-  { key: "custom_3",     label: "Custom 3", defaultWidth: 180 },
-];
-
 export default function OrdersPage({ onImport, refreshKey }) {
   const [rows, setRows] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -50,6 +41,19 @@ export default function OrdersPage({ onImport, refreshKey }) {
   const [search, setSearch] = React.useState("");
   const [editingOrder, setEditingOrder] = React.useState(null);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [fieldConfig, setFieldConfig] = React.useState(() => loadFieldConfig());
+
+  // Re-read field config whenever Settings saves changes
+  React.useEffect(() => {
+    function onConfigChange() { setFieldConfig(loadFieldConfig()); }
+    window.addEventListener("spaila:fieldconfig", onConfigChange);
+    return () => window.removeEventListener("spaila:fieldconfig", onConfigChange);
+  }, []);
+
+  // Only the visible columns drive the table
+  const COLUMNS = fieldConfig
+    .filter((f) => f.visible)
+    .map((f) => ({ key: f.key, label: f.label, defaultWidth: f.defaultWidth }));
   const [contextMenu, setContextMenu] = React.useState({ visible: false, x: 0, y: 0, row: null });
   const [confirmDelete, setConfirmDelete] = React.useState({ open: false, rows: [] });
   const [selectedIds, setSelectedIds] = React.useState(new Set());
@@ -136,7 +140,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
     };
   }, [contextMenu.visible]);
   const [colWidths, setColWidths] = React.useState(
-    Object.fromEntries(COLUMNS.map((c) => [c.key, c.defaultWidth])),
+    () => Object.fromEntries(loadFieldConfig().map((f) => [f.key, f.defaultWidth])),
   );
 
   function startResize(e, key) {
@@ -205,10 +209,32 @@ export default function OrdersPage({ onImport, refreshKey }) {
         flexShrink: 0,
       }}>
 
-        {/* Left: tabs */}
+        {/* Left: import + tabs */}
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "18px",
+              color: "#666",
+              padding: "4px 6px",
+              lineHeight: 1,
+              opacity: 0.75,
+              transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.75")}
+          >
+            ⚙
+          </button>
+          <button onClick={onImport} style={primaryButton}>
+            + Import Order
+          </button>
           <button style={tab === "active" ? tabStyleActive : tabStyle} onClick={() => setTab("active")}>
-            Orders ({rows.length})
+            Active ({rows.length})
           </button>
           <button style={tab === "completed" ? tabStyleActive : tabStyle} onClick={() => setTab("completed")}>
             Completed
@@ -231,28 +257,6 @@ export default function OrdersPage({ onImport, refreshKey }) {
           />
           <button onClick={loadOrders} style={{ ...tabStyle, padding: "6px 12px" }}>
             Refresh
-          </button>
-          <button onClick={onImport} style={primaryButton}>
-            + Import Order
-          </button>
-          <button
-            onClick={() => setShowSettings(true)}
-            title="Settings"
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              fontSize: "18px",
-              color: "#666",
-              padding: "4px 6px",
-              lineHeight: 1,
-              opacity: 0.75,
-              transition: "opacity 0.15s",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.75")}
-          >
-            ⚙
           </button>
         </div>
 
