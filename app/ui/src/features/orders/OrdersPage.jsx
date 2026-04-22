@@ -251,6 +251,15 @@ export default function OrdersPage({ onImport, refreshKey }) {
   function clearExclusions() { setActiveSearchExclusions([]); }
   const [editingOrder, setEditingOrder] = React.useState(null);
   const [showSettings, setShowSettings] = React.useState(false);
+
+  // Dirty flag — false on startup, true only after something changes this session
+  const [sessionDirty, setSessionDirty] = React.useState(false);
+  const mountedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; }
+    // refreshKey increments when a new order is imported
+    setSessionDirty(true);
+  }, [refreshKey]);
   const [emailToast, setEmailToast] = React.useState(null); // { warnings: string[] }
   const [emailTemplates, setEmailTemplates] = React.useState(() => loadEmailTemplates());
   React.useEffect(() => {
@@ -312,6 +321,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
     });
     if (result?.ok) {
       setSaveToast({ ok: true, message: `Saved to ${folder}` });
+      setSessionDirty(false); // dim again until next change
     } else {
       setSaveToast({ ok: false, message: `Backup failed: ${result?.error ?? "unknown error"}` });
     }
@@ -378,6 +388,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
   function handleSetStatus(orderId, statusKey) {
     setOrderStatus(orderId, statusKey);
     setOrderStatuses(loadOrderStatuses());
+    setSessionDirty(true);
   }
 
   // Column order — single source of truth for both table and Settings
@@ -555,6 +566,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
       )
     );
     loadOrders();
+    setSessionDirty(true);
   }
 
   async function handleMoveToActive() {
@@ -571,6 +583,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
       )
     );
     loadOrders();
+    setSessionDirty(true);
   }
 
   function handleDelete() {
@@ -588,6 +601,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
       rows.map((r) => fetch(`${API}/orders/${r.order_id}`, { method: "DELETE" }))
     );
     loadOrders();
+    setSessionDirty(true);
   }
 
   React.useEffect(() => {
@@ -823,7 +837,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* Save button — bright when rows exist, dim when nothing to save */}
           {(() => {
-            const canSave = rows.length > 0;
+            const canSave = sessionDirty && rows.length > 0;
             return (
               <button
                 onClick={canSave ? handleSaveToFolder : undefined}
@@ -1320,7 +1334,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
         <EditOrderModal
           order={editingOrder}
           onClose={() => setEditingOrder(null)}
-          onSaved={() => { setEditingOrder(null); loadOrders(); }}
+          onSaved={() => { setEditingOrder(null); loadOrders(); setSessionDirty(true); }}
         />
       )}
 
