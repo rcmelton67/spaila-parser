@@ -13,7 +13,7 @@
     "extraction_signature": "number_regex|price|pricing",
     "source": "",
     "last_value": "59.99",
-    "streak_count": 21
+    "streak_count": 22
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|none|body": {
     "field": "order_number",
@@ -21,7 +21,7 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "4034639260",
-    "streak_count": 25
+    "streak_count": 26
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|none|header": {
     "field": "order_date",
@@ -53,7 +53,7 @@
     "extraction_signature": "address_label_name|none|body",
     "source": "",
     "last_value": "Margaret S Simandl",
-    "streak_count": 37
+    "streak_count": 38
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_label_block|none|body": {
     "field": "shipping_address",
@@ -61,7 +61,7 @@
     "extraction_signature": "address_label_block|none|body",
     "source": "",
     "last_value": "7254 Wilderness Shore Ln PO 225\nBAILEYS HARBOR, WI\n54202\nUnited States",
-    "streak_count": 27
+    "streak_count": 28
   },
   "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
@@ -125,7 +125,7 @@
     "extraction_signature": "email_regex|email|body",
     "source": "",
     "last_value": "peggyunique@gmail.com",
-    "streak_count": 36
+    "streak_count": 37
   },
   "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
