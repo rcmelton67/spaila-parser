@@ -1083,7 +1083,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         padding: "5px 0 5px 8px",
                         border: "1px solid #e8e8e8",
                         boxSizing: "border-box",
-                        verticalAlign: "top",
+                        verticalAlign: "middle",
                       }}>
                         <input
                           type="checkbox"
@@ -1113,7 +1113,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                               background: "transparent",
                               overflow: "hidden",
                               boxSizing: "border-box",
-                              verticalAlign: "top",
+                              verticalAlign: "middle",
                               textAlign: "left",
                             }}>
                               <select
