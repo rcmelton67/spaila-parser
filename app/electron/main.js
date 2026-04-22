@@ -209,6 +209,14 @@ ipcMain.handle("parser:import-eml", async () => {
   };
 });
 
+ipcMain.handle("parser:parse-file", async (_event, { filePath }) => {
+  if (!filePath) throw new Error("No file path provided.");
+  const parsed = await runBridge({ action: "parse", path: filePath });
+  if (parsed.error) throw new Error(parsed.error);
+  return { filePath, ...parsed };
+});
+
+
 ipcMain.handle("parser:teach", async (_event, payload) => {
   const parsed = await runBridge({
     action: payload.action,

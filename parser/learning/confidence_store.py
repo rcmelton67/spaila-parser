@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from typing import Dict, Tuple
 
 # Absolute path anchored to this file's location — never relative to CWD.
@@ -58,10 +59,22 @@ def _save(store: Dict) -> None:
             json.dump(store, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, CONFIDENCE_STORE_PATH)
+        # Retry os.replace — Windows can hold a brief file lock between rapid
+        # writes, causing PermissionError (WinError 5) on the atomic rename.
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, CONFIDENCE_STORE_PATH)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)  # 50 ms — enough for Windows to release the lock
     finally:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     print(
         f"[CONF_STORE_SAVE] entries={len(store)} path={CONFIDENCE_STORE_PATH}",
         file=sys.stderr, flush=True,

@@ -730,7 +730,7 @@ function ItemFieldRow({
   );
 }
 
-export default function App({ onCreated }) {
+export default function App({ onCreated, onBack }) {
   // Field label config — reloads whenever the user saves Settings.
   const [fieldConfig, setFieldConfig] = React.useState(() => loadFieldConfig());
   React.useEffect(() => {
@@ -1348,10 +1348,11 @@ export default function App({ onCreated }) {
   // Keep ref up to date so the mount effect always calls the latest version.
   importEmlRef.current = importEml;
 
-  // Automatically open the file picker when the modal first opens.
+  // Automatically open the file picker when the page first loads.
   React.useEffect(() => {
     importEmlRef.current();
   }, []);
+
 
   const teach = async (action, decision) => {
     if (!state.filePath || !decision) {
@@ -1468,13 +1469,20 @@ export default function App({ onCreated }) {
   return (
     <div className="app-shell">
       <header className="topbar">
+        {onBack && (
+          <button className="back-button" onClick={onBack}>
+            ← Orders
+          </button>
+        )}
         <button className="import-button" onClick={importEml} disabled={state.loading}>
-          {state.loading ? "Loading..." : "Import EML"}
+          {state.loading ? "Loading…" : state.filePath ? "Change File" : "Import EML"}
         </button>
-        <div className="topbar-subject">
-          <span className="subject-label">Subject:</span>{" "}
-          <span>{state.subject || "(no subject)"}</span>
-        </div>
+        {state.filePath && (
+          <div className="topbar-subject">
+            <span className="subject-label">Subject:</span>{" "}
+            <span>{state.subject || "(no subject)"}</span>
+          </div>
+        )}
         {state.filePath ? (
           <div className="topbar-file-info" title={state.filePath}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -1489,8 +1497,16 @@ export default function App({ onCreated }) {
 
       {state.error ? <div className="error-banner">{state.error}</div> : null}
 
+      {/* ── Empty state — shown when no file is loaded ── */}
+      {!state.filePath && !state.loading && (
+        <div className="eml-empty-state" onClick={importEml}>
+          <div className="eml-empty-icon">📧</div>
+          <div className="eml-empty-title">Click to import email</div>
+          <div className="eml-empty-hint">Supports .eml files</div>
+        </div>
+      )}
 
-      <main className="split-view">
+      <main className={`split-view${!state.filePath ? " split-view-hidden" : ""}`}>
         <section className="panel text-panel">
           <div className="panel-title">Email Content</div>
           <pre

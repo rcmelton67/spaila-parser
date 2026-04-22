@@ -29,12 +29,40 @@ body {
   overflow: hidden;
   padding: 10px 18px 14px;
   gap: 8px;
+  background: #f5f2eb;
+}
+
+/* Full-page parser — sits below the orders command bar */
+.parser-page {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: #f5f2eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.back-button {
+  border: 1px solid rgba(31, 79, 70, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: #1f4f46;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.back-button:hover {
+  background: rgba(31, 79, 70, 0.08);
 }
 
 .import-button {
@@ -47,6 +75,43 @@ body {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.eml-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  border-radius: 16px;
+  margin: 4px 0 6px;
+  user-select: none;
+}
+.eml-empty-state:hover .eml-empty-title {
+  color: #1f4f46;
+}
+.eml-empty-icon {
+  font-size: 52px;
+  line-height: 1;
+  opacity: 0.5;
+}
+.eml-empty-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #2d2a25;
+  transition: color 0.12s;
+}
+.eml-empty-hint {
+  font-size: 12px;
+  color: #b0a898;
+}
+
+/* Hide the split panels when no file is loaded (empty state takes flex space) */
+.split-view-hidden {
+  display: none !important;
 }
 
 .import-button:disabled {

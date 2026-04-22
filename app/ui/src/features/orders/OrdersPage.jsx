@@ -637,31 +637,41 @@ export default function OrdersPage({ onImport, refreshKey }) {
     window.addEventListener("mouseup", onUp);
   }
 
-  function loadOrders() {
+  async function loadOrders({ retries = 5, delayMs = 600 } = {}) {
     setLoading(true);
     setError("");
-    fetch(`${API}/orders/list`)
-      .then((res) => res.json())
-      .then((data) => {
-        // Compute item count per order so OrderInfoCell can show "N items"
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const res  = await fetch(`${API}/orders/list`);
+        const data = await res.json();
+
+        // Compute item count per order so OrderInfoCell can show "N items".
         const countByOrder = {};
         for (const r of data) {
           countByOrder[r.order_id] = (countByOrder[r.order_id] || 0) + 1;
         }
-        // Attach order_context (order-level fields) to every item row so
-        // computed columns like order_info can access them regardless of split.
+        // Attach _item_count to every row so order_info can access it.
         const enriched = data.map((r) => ({
           ...r,
           _item_count: countByOrder[r.order_id] || 1,
         }));
+
         setRows(enriched);
         setSelectedIds(new Set());
         setLoading(false);
-      })
-      .catch((err) => {
-        setError("Failed to load orders: " + err.message);
-        setLoading(false);
-      });
+        return; // success — stop retrying
+      } catch (err) {
+        if (attempt < retries) {
+          // Backend not ready yet — wait and retry silently.
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        } else {
+          // All attempts exhausted — surface the error with a Retry button.
+          setError(`Could not reach backend after ${retries} attempts. (${err.message})`);
+          setLoading(false);
+        }
+      }
+    }
   }
 
   React.useEffect(() => { loadOrders(); }, [refreshKey]);
@@ -1044,11 +1054,17 @@ export default function OrdersPage({ onImport, refreshKey }) {
       {/* Body */}
       <div style={{ flex: 1, overflow: "auto", padding: "16px", overflowX: "auto" }}>
         {error ? (
-          <div style={{ padding: "12px 16px", background: "#fee2e2", borderRadius: "6px", color: "#991b1b", fontSize: "13px" }}>
-            {error}
+          <div style={{ padding: "16px 18px", background: "#fee2e2", borderRadius: "8px", color: "#991b1b", fontSize: "13px", display: "flex", alignItems: "center", gap: "12px" }}>
+            <span style={{ flex: 1 }}>{error}</span>
+            <button
+              onClick={() => loadOrders()}
+              style={{ flexShrink: 0, border: "1px solid #f87171", borderRadius: "6px", background: "#fff", color: "#991b1b", padding: "5px 12px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+            >
+              ↺ Retry
+            </button>
           </div>
         ) : loading ? (
-          <div style={{ color: "#888", padding: "12px", fontSize: "13px" }}>Loading…</div>
+          <div style={{ color: "#888", padding: "12px", fontSize: "13px" }}>Loading orders…</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "60px 20px" }}>
             <div style={{ color: "#888", fontSize: "14px", marginBottom: "14px" }}>

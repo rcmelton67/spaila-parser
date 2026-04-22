@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("parserApp", {
-  importEml: () => ipcRenderer.invoke("parser:import-eml"),
+  importEml:  ()        => ipcRenderer.invoke("parser:import-eml"),
+  parseFile:  (payload) => ipcRenderer.invoke("parser:parse-file", payload),
   resolvePath: (payload) => ipcRenderer.invoke("parser:resolve-path", payload),
   saveAssignment: (payload) => ipcRenderer.invoke("parser:save-assignment", payload),
   saveRejection: (payload) => ipcRenderer.invoke("parser:save-rejection", payload),
