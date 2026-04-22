@@ -891,7 +891,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
           {/* Divider */}
           <div style={{ width: 1, height: 28, background: "#d1d5db", margin: "0 4px", flexShrink: 0 }} />
 
-          <button onClick={onImport} style={primaryButton}>+ Import Order</button>
+          <button onClick={onImport} style={tabStyle}>+ Import Order</button>
           <button style={tab === "active"    ? tabStyleActive : tabStyle} onClick={() => setTab("active")}>
             Active ({rows.filter((r) => !(r.item_status ? r.item_status === "completed" : r.status === "completed" || r.status === "done")).length})
             {tabCounts && (
