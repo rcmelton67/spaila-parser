@@ -1,7 +1,7 @@
 import { build } from "esbuild";
 
 await build({
-  entryPoints: ["app/ui/index.jsx"],
+  entryPoints: ["app/ui/src/index.jsx"],
   bundle: true,
   outfile: "app/ui/dist/renderer.js",
   format: "iife",

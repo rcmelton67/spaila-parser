@@ -36,6 +36,8 @@ import {
   loadEmailTemplates,
   selectEmailTemplate,
   renderEmailTemplate,
+  loadShopConfig,
+  loadDocumentsConfig,
 } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
@@ -113,38 +115,26 @@ function OrderInfoCell({ row }) {
     badges.push({ key: "wrap", label: "Wrapped", bg: "#faf5ff", color: "#6b21a8" });
   }
 
-  const notes = ctx.order_notes || "";
-
-  if (!badges.length && !notes) {
+  if (!badges.length) {
     return <span style={{ color: "#bbb" }}>—</span>;
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
-      {badges.length > 0 && (
-        <div style={{ display: "flex", gap: "3px", flexWrap: "wrap" }}>
-          {badges.map((b) => (
-            <span key={b.key} style={{
-              padding: "1px 6px", borderRadius: "999px",
-              fontSize: "10px", fontWeight: 600,
-              background: b.bg, color: b.color,
-              whiteSpace: "nowrap", lineHeight: "16px",
-            }}>{b.label}</span>
-          ))}
-        </div>
-      )}
-      {notes && (
-        <span title={notes} style={{
-          fontSize: "10px", color: "#9ca3af", lineHeight: "14px",
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        }}>{notes}</span>
-      )}
+    <div style={{ display: "flex", gap: "3px", flexWrap: "wrap" }}>
+      {badges.map((b) => (
+        <span key={b.key} style={{
+          padding: "1px 6px", borderRadius: "999px",
+          fontSize: "10px", fontWeight: 600,
+          background: b.bg, color: b.color,
+          whiteSpace: "nowrap", lineHeight: "16px",
+        }}>{b.label}</span>
+      ))}
     </div>
   );
 }
 
 /* ── Draggable column header ────────────────────────────────────────────── */
-function SortableHeader({ col, width, onStartResize, isSearchable, isExcluded, onToggleExclusion, searchActive }) {
+function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isExcluded, onToggleExclusion, searchActive }) {
   const {
     attributes,
     listeners,
@@ -159,17 +149,20 @@ function SortableHeader({ col, width, onStartResize, isSearchable, isExcluded, o
       ref={setNodeRef}
       style={{
         width,
-        padding: "9px 10px",
+        minWidth: width,
+        maxWidth: width,
+        padding: "5px 7px",
         textAlign: "left",
         fontWeight: 600,
-        fontSize: "12px",
+        fontSize: `${fontSize}px`,
         color: isDragging ? "#2563eb" : "#555",
         letterSpacing: "0.04em",
         textTransform: "uppercase",
         border: "1px solid #ccc",
         position: "relative",
         userSelect: "none",
-        whiteSpace: "nowrap",
+        whiteSpace: "normal",
+        wordBreak: "break-word",
         overflow: "hidden",
         background: isDragging ? "#dbeafe" : undefined,
         opacity: isDragging ? 0.85 : isExcluded ? 0.45 : 1,
@@ -186,9 +179,8 @@ function SortableHeader({ col, width, onStartResize, isSearchable, isExcluded, o
         style={{
           cursor: isDragging ? "grabbing" : "grab",
           display: "block",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          whiteSpace: "normal",
+          wordBreak: "break-word",
           paddingRight: (isSearchable && searchActive) ? "20px" : "8px",
         }}
         title={`Drag to reorder — ${col.label}`}
@@ -267,6 +259,81 @@ export default function OrdersPage({ onImport, refreshKey }) {
     return () => window.removeEventListener("spaila:emailtemplates", onTpl);
   }, []);
 
+  const [shopConfig, setShopConfig] = React.useState(() => loadShopConfig());
+  React.useEffect(() => {
+    function onShop() {
+      const cfg = loadShopConfig();
+      setShopConfig(cfg);
+      const name = cfg.shopName?.trim() || "Parser Viewer";
+      document.title = name;
+      window.parserApp?.setTitle?.(name);
+    }
+    window.addEventListener("spaila:shopconfig", onShop);
+    return () => window.removeEventListener("spaila:shopconfig", onShop);
+  }, []);
+
+  // Sync title on mount
+  React.useEffect(() => {
+    const name = shopConfig.shopName?.trim() || "Parser Viewer";
+    document.title = name;
+    window.parserApp?.setTitle?.(name);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Documents config (letterhead path + text position)
+  const [documentsConfig, setDocumentsConfig] = React.useState(() => loadDocumentsConfig());
+  React.useEffect(() => {
+    function onDocs() { setDocumentsConfig(loadDocumentsConfig()); }
+    window.addEventListener("spaila:documentsconfig", onDocs);
+    return () => window.removeEventListener("spaila:documentsconfig", onDocs);
+  }, []);
+
+  const [giftLetterToast, setGiftLetterToast] = React.useState(null); // { error?: string }
+  const [saveToast, setSaveToast] = React.useState(null); // { ok, message }
+
+  async function handleSaveToFolder() {
+    const folder = shopConfig.saveFolder;
+    if (!folder) {
+      setSaveToast({ ok: false, message: "No save folder set. Go to Settings → General to choose one." });
+      setTimeout(() => setSaveToast(null), 5000);
+      return;
+    }
+    // Collect ALL localStorage entries so they're included in the backup
+    const localStorageData = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        localStorageData[key] = localStorage.getItem(key);
+      }
+    } catch (_) {}
+
+    const result = await window.parserApp?.backupSave?.({
+      folderPath: folder,
+      localStorageData,
+    });
+    if (result?.ok) {
+      setSaveToast({ ok: true, message: `Saved to ${folder}` });
+    } else {
+      setSaveToast({ ok: false, message: `Backup failed: ${result?.error ?? "unknown error"}` });
+    }
+    setTimeout(() => setSaveToast(null), 5000);
+  }
+
+  async function handleGenerateGiftLetter(row) {
+    const result = await window.parserApp?.generateGiftLetter?.({
+      letterheadPath: documentsConfig.letterheadPath,
+      giftMessage:    row.gift_message,
+      textX:          documentsConfig.giftTextX,
+      textY:          documentsConfig.giftTextY,
+      textMaxWidth:   documentsConfig.giftTextMaxWidth,
+      textFontSize:   documentsConfig.giftTextFontSize,
+      textColor:      documentsConfig.giftTextColor,
+    });
+    if (result && !result.ok) {
+      setGiftLetterToast({ error: `PDF error: ${result.error}` });
+      setTimeout(() => setGiftLetterToast(null), 6000);
+    }
+  }
+
   // Field labels + visibility + palette config
   const [fieldConfig, setFieldConfig] = React.useState(() => loadFieldConfig());
   React.useEffect(() => {
@@ -340,17 +407,17 @@ export default function OrdersPage({ onImport, refreshKey }) {
           if (key === "status") return {
             key: "status",
             label: statusConfig.columnLabel || "Status",
-            defaultWidth: 130,
+            defaultWidth: 100,
           };
           if (key === "order_info") return {
             key: "order_info",
             label: "Order Info",
-            defaultWidth: 220,
+            defaultWidth: 160,
           };
           return {
             key,
             label: fieldMap[key]?.label ?? key,
-            defaultWidth: fieldMap[key]?.defaultWidth ?? 150,
+            defaultWidth: fieldMap[key]?.defaultWidth ?? 120,
           };
         }),
     [columnOrder, fieldMap, statusConfig]
@@ -374,9 +441,28 @@ export default function OrdersPage({ onImport, refreshKey }) {
   const [confirmDelete, setConfirmDelete] = React.useState({ open: false, rows: [] });
   const [selectedIds, setSelectedIds] = React.useState(new Set());
 
-  const [colWidths, setColWidths] = React.useState(
-    () => Object.fromEntries(loadFieldConfig().map((f) => [f.key, f.defaultWidth ?? 150]))
-  );
+  const FONT_SIZE_KEY = "spaila_table_font_size";
+  const [tableFontSize, setTableFontSize] = React.useState(() => {
+    try { return parseInt(localStorage.getItem(FONT_SIZE_KEY), 10) || 12; } catch { return 12; }
+  });
+  function changeTableFontSize(delta) {
+    setTableFontSize((prev) => {
+      const next = Math.min(20, Math.max(9, prev + delta));
+      try { localStorage.setItem(FONT_SIZE_KEY, String(next)); } catch (_) {}
+      return next;
+    });
+  }
+
+  const COL_WIDTHS_KEY = "spaila_col_widths";
+  const [colWidths, setColWidths] = React.useState(() => {
+    const defaults = Object.fromEntries(loadFieldConfig().map((f) => [f.key, f.defaultWidth ?? 120]));
+    try {
+      const saved = JSON.parse(localStorage.getItem(COL_WIDTHS_KEY) || "{}");
+      return { ...defaults, ...saved };
+    } catch {
+      return defaults;
+    }
+  });
 
   function toggleRow(id) {
     setSelectedIds((prev) => {
@@ -519,14 +605,19 @@ export default function OrdersPage({ onImport, refreshKey }) {
   function startResize(e, key) {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = colWidths[key] ?? 150;
+    const startWidth = colWidths[key] ?? 120;
     function onMove(ev) {
-      const newWidth = Math.max(60, startWidth + (ev.clientX - startX));
+      const newWidth = Math.max(40, startWidth + (ev.clientX - startX));
       setColWidths((prev) => ({ ...prev, [key]: newWidth }));
     }
     function onUp() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      // Persist after drag ends
+      setColWidths((prev) => {
+        try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(prev)); } catch (_) {}
+        return prev;
+      });
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -685,6 +776,44 @@ export default function OrdersPage({ onImport, refreshKey }) {
         </div>
       )}
 
+      {/* Gift letter toast */}
+      {giftLetterToast && (
+        <div style={{
+          position: "fixed", top: 16, right: 16, zIndex: 99999,
+          background: giftLetterToast.error ? "#7f1d1d" : "#14532d",
+          color: "#fff", borderRadius: 8,
+          padding: "12px 16px", maxWidth: 360,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          fontSize: 12, lineHeight: 1.6,
+          display: "flex", alignItems: "flex-start", gap: 10,
+        }}>
+          <span style={{ flex: 1 }}>
+            {giftLetterToast.error
+              ? `⚠ ${giftLetterToast.error}`
+              : "✓ Gift letter generated"}
+          </span>
+          <button onClick={() => setGiftLetterToast(null)}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, padding: 0, flexShrink: 0 }}>✕</button>
+        </div>
+      )}
+
+      {/* Save toast */}
+      {saveToast && (
+        <div style={{
+          position: "fixed", top: 56, right: 16, zIndex: 99999,
+          background: saveToast.ok ? "#14532d" : "#7f1d1d",
+          color: "#fff", borderRadius: 8,
+          padding: "12px 16px", maxWidth: 360,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          fontSize: 12, lineHeight: 1.6,
+          display: "flex", alignItems: "flex-start", gap: 10,
+        }}>
+          <span style={{ flex: 1 }}>{saveToast.ok ? "✓" : "⚠"} {saveToast.message}</span>
+          <button onClick={() => setSaveToast(null)}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
+        </div>
+      )}
+
       {/* Command bar */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -692,17 +821,72 @@ export default function OrdersPage({ onImport, refreshKey }) {
         background: "#f7f7f7", flexShrink: 0,
       }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Settings button */}
           <button
             onClick={() => setShowSettings(true)}
             title="Settings"
             style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "18px", color: "#666", padding: "4px 6px",
-              lineHeight: 1, opacity: 0.75, transition: "opacity 0.15s",
+              width: 36, height: 36,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "#fff",
+              border: "1px solid #e2e8f0",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "18px", color: "#64748b",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+              transition: "box-shadow 0.15s, border-color 0.15s, color 0.15s",
+              flexShrink: 0,
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.75")}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.14)";
+              e.currentTarget.style.borderColor = "#cbd5e1";
+              e.currentTarget.style.color = "#1e293b";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
+              e.currentTarget.style.borderColor = "#e2e8f0";
+              e.currentTarget.style.color = "#64748b";
+            }}
           >⚙</button>
+
+          {/* Save button — bright when rows exist, dim when nothing to save */}
+          {(() => {
+            const canSave = rows.length > 0;
+            return (
+              <button
+                onClick={canSave ? handleSaveToFolder : undefined}
+                title={
+                  !canSave ? "Nothing to save yet"
+                  : shopConfig.saveFolder ? `Save to ${shopConfig.saveFolder}`
+                  : "Save (set folder in Settings → General)"
+                }
+                style={{
+                  width: 36, height: 36,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: canSave ? "#2563eb" : "#e2e8f0",
+                  border: `1px solid ${canSave ? "#1d4ed8" : "#cbd5e1"}`,
+                  borderRadius: "10px",
+                  cursor: canSave ? "pointer" : "default",
+                  fontSize: "18px",
+                  color: canSave ? "#fff" : "#94a3b8",
+                  boxShadow: canSave ? "0 1px 3px rgba(37,99,235,0.4)" : "none",
+                  transition: "all 0.2s",
+                  flexShrink: 0,
+                  opacity: canSave ? 1 : 0.55,
+                }}
+                onMouseEnter={(e) => {
+                  if (!canSave) return;
+                  e.currentTarget.style.background = "#1d4ed8";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(37,99,235,0.5)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!canSave) return;
+                  e.currentTarget.style.background = "#2563eb";
+                  e.currentTarget.style.boxShadow = "0 1px 3px rgba(37,99,235,0.4)";
+                }}
+              >💾</button>
+            );
+          })()}
           <button onClick={onImport} style={primaryButton}>+ Import Order</button>
           <button style={tab === "active"    ? tabStyleActive : tabStyle} onClick={() => setTab("active")}>
             Active ({rows.filter((r) => !(r.item_status ? r.item_status === "completed" : r.status === "completed" || r.status === "done")).length})
@@ -728,7 +912,39 @@ export default function OrdersPage({ onImport, refreshKey }) {
             placeholder="Search orders…"
             style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: "4px", fontSize: "13px", width: "180px" }}
           />
-          <button onClick={loadOrders} style={{ ...tabStyle, padding: "6px 12px" }}>Refresh</button>
+          {/* Font size control */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "2px",
+            border: "1px solid #ccc", borderRadius: "4px",
+            overflow: "hidden",
+          }}>
+            <button
+              onClick={() => changeTableFontSize(-1)}
+              title="Decrease font size"
+              disabled={tableFontSize <= 9}
+              style={{
+                padding: "4px 7px", border: "none", background: "none",
+                cursor: tableFontSize <= 9 ? "default" : "pointer",
+                fontSize: "11px", color: tableFontSize <= 9 ? "#bbb" : "#555",
+                lineHeight: 1,
+              }}
+            >A−</button>
+            <span style={{
+              fontSize: "11px", color: "#666", minWidth: "24px",
+              textAlign: "center", userSelect: "none",
+            }}>{tableFontSize}</span>
+            <button
+              onClick={() => changeTableFontSize(1)}
+              title="Increase font size"
+              disabled={tableFontSize >= 20}
+              style={{
+                padding: "4px 7px", border: "none", background: "none",
+                cursor: tableFontSize >= 20 ? "default" : "pointer",
+                fontSize: "13px", color: tableFontSize >= 20 ? "#bbb" : "#555",
+                lineHeight: 1,
+              }}
+            >A+</button>
+          </div>
         </div>
       </div>
 
@@ -766,7 +982,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
       )}
 
       {/* Body */}
-      <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: "16px", overflowX: "auto" }}>
         {error ? (
           <div style={{ padding: "12px 16px", background: "#fee2e2", borderRadius: "6px", color: "#991b1b", fontSize: "13px" }}>
             {error}
@@ -790,20 +1006,30 @@ export default function OrdersPage({ onImport, refreshKey }) {
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <table style={{ borderCollapse: "collapse", fontSize: "14px", tableLayout: "fixed", border: "1px solid #ddd" }}>
+            <table style={{
+              borderCollapse: "collapse",
+              fontSize: `${tableFontSize}px`,
+              tableLayout: "fixed",
+              border: "1px solid #ddd",
+              width: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
+              minWidth: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
+            }}>
               <colgroup>
-                <col style={{ width: 36 }} />
-                {visibleColumns.map((c) => (
-                  <col key={c.key} style={{ width: colWidths[c.key] ?? c.defaultWidth }} />
-                ))}
+                <col style={{ width: 30, minWidth: 30, maxWidth: 30 }} />
+                {visibleColumns.map((c) => {
+                  const w = colWidths[c.key] ?? c.defaultWidth;
+                  return <col key={c.key} style={{ width: w, minWidth: w, maxWidth: w }} />;
+                })}
               </colgroup>
 
               <SortableContext items={columnOrder} strategy={horizontalListSortingStrategy}>
                 <thead style={{ background: "#e5e5e5" }}>
                   <tr>
                     <th style={{
-                      width: 36, padding: "9px 0 9px 10px",
+                      width: 30, minWidth: 30, maxWidth: 30,
+                      padding: "5px 0 5px 8px",
                       border: "1px solid #ccc", userSelect: "none",
+                      boxSizing: "border-box",
                     }}>
                       <input
                         type="checkbox"
@@ -818,6 +1044,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         key={c.key}
                         col={c}
                         width={colWidths[c.key] ?? c.defaultWidth}
+                        fontSize={tableFontSize}
                         onStartResize={startResize}
                         isSearchable={!!(viewConfig.searchableFields?.[c.key])}
                         isExcluded={activeSearchExclusions.includes(c.key)}
@@ -832,6 +1059,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
               <tbody>
                 {filtered.map((r, i) => {
                   const isSelected = selectedIds.has(r.id);
+                  const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall
                   // Price-list lookup: find matching rule for this row's price
                   const priceRule = matchPriceRule(r.price, priceList);
 
@@ -845,9 +1073,14 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         background: isSelected ? "#eff6ff" : i % 2 === 0 ? "#fff" : "#fafafa",
                       }}
                     >
-                      <td
-                        style={{ width: 36, padding: "8px 0 8px 10px", border: "1px solid #e8e8e8" }}
-                      >
+                      <td style={{
+                        width: 30, minWidth: 30, maxWidth: 30,
+                        height: rowH,
+                        padding: "5px 0 5px 8px",
+                        border: "1px solid #e8e8e8",
+                        boxSizing: "border-box",
+                        verticalAlign: "top",
+                      }}>
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -862,32 +1095,47 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         if (c.key === "status") {
                           const currentKey   = orderStatuses[String(r.id)] ?? "";
                           const currentState = statusConfig.states.find((s) => s.key === currentKey);
-                          const bg  = currentState?.color;
-                          const tc  = currentState ? contrastColor(bg) : "#9ca3af";
-                          const borderClr = bg
-                            ? (tc === "#ffffff" ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)")
-                            : "#e5e7eb";
+                          const pillBg  = currentState?.color || null;
+                          const pillTc  = pillBg ? contrastColor(pillBg) : "#6b7280";
+                          const pillBorder = pillBg
+                            ? (pillTc === "#ffffff" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.12)")
+                            : "#d1d5db";
                           return (
                             <td key="status" style={{
-                              width: w, padding: "5px 8px",
+                              width: w, minWidth: w, maxWidth: w,
+                              height: rowH,
+                              padding: "4px 6px",
                               border: "1px solid #e8e8e8",
-                              background: !isSelected && bg ? bg : undefined,
+                              background: "transparent",
+                              overflow: "hidden",
+                              boxSizing: "border-box",
+                              verticalAlign: "top",
+                              textAlign: "left",
                             }}>
                               <select
                                 value={currentKey}
                                 onChange={(e) => handleSetStatus(r.id, e.target.value || null)}
                                 onClick={(e) => e.stopPropagation()}
                                 style={{
-                                  width: "100%", padding: "3px 6px",
-                                  border: `1px solid ${borderClr}`,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "3px 10px",
+                                  border: `1px solid ${pillBorder}`,
                                   borderRadius: "999px",
-                                  fontSize: "11px", fontWeight: 600,
-                                  background: currentState ? bg : "#f9fafb",
-                                  color: tc, cursor: "pointer",
-                                  outline: "none", appearance: "none", textAlign: "center",
+                                  fontSize: `${Math.max(10, tableFontSize - 1)}px`,
+                                  fontWeight: 600,
+                                  background: pillBg || "transparent",
+                                  color: pillBg ? pillTc : "#9ca3af",
+                                  cursor: "pointer",
+                                  outline: "none",
+                                  appearance: "none",
+                                  whiteSpace: "nowrap",
+                                  transition: "all 0.15s ease",
+                                  maxWidth: "100%",
                                 }}
                               >
-                                <option value="">— Set status —</option>
+                                <option value="">Status</option>
                                 {statusConfig.states.map((s) => (
                                   <option key={s.key} value={s.key}>{s.label}</option>
                                 ))}
@@ -900,10 +1148,13 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         if (c.key === "order_info") {
                           return (
                             <td key="order_info" style={{
-                              width: w, padding: "5px 10px",
+                              width: w, minWidth: w, maxWidth: w,
+                              height: rowH,
+                              padding: "3px 6px",
                               border: "1px solid #e8e8e8",
-                              verticalAlign: "middle",
-                              maxWidth: w,
+                              verticalAlign: "top",
+                              overflow: "hidden",
+                              boxSizing: "border-box",
                             }}>
                               <OrderInfoCell row={r} />
                             </td>
@@ -932,37 +1183,80 @@ export default function OrdersPage({ onImport, refreshKey }) {
                           ? contrastColor(cellBg)
                           : (displayValue ? "#1a1a1a" : "#bbb");
 
-                        const isBuyerName = c.key === "buyer_name";
+                        const isBuyerName  = c.key === "buyer_name";
+                        const isGiftMsg    = c.key === "gift_message";
+                        const hasGiftMsg   = isGiftMsg && !!r.gift_message;
+                        const needsIcon    = isBuyerName || hasGiftMsg;
                         return (
                           <td key={c.key} style={{
                             width: w,
-                            padding: isBuyerName ? "8px 10px 8px 26px" : "8px 10px",
+                            minWidth: w,
+                            maxWidth: w,
+                            height: rowH,
+                            padding: "5px 7px",
                             border: "1px solid #e8e8e8",
                             background: cellBg, color: cellTextColor,
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            verticalAlign: "top",
                             fontStyle: !r[c.key] && c.key === PRICE_TYPE_FIELD_KEY && priceRule?.typeValue
                               ? "italic" : undefined,
-                            position: isBuyerName ? "relative" : undefined,
+                            position: needsIcon ? "relative" : undefined,
+                            boxSizing: "border-box",
                           }}>
-                            {isBuyerName && (
-                              <button
-                                title="Compose email"
-                                onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
-                                className="email-btn"
-                                style={{
-                                  position: "absolute", bottom: 4, left: 6,
+                            {/* Gift letter icon — only when gift_message has text */}
+                            {hasGiftMsg && (() => {
+                              const onDark = cellBg && contrastColor(cellBg) === "#ffffff";
+                              const iconColor = onDark
+                                ? "#ffffff"
+                                : (documentsConfig.letterheadPath ? "#7c3aed" : "#94a3b8");
+                              return (
+                                <button
+                                  title={documentsConfig.letterheadPath
+                                    ? "Generate gift letter PDF"
+                                    : "Generate gift message PDF (no letterhead — plain page)"}
+                                  onClick={(e) => { e.stopPropagation(); handleGenerateGiftLetter(r); }}
+                                  style={{
+                                  position: "absolute", top: 3, left: 3,
                                   width: 16, height: 16,
                                   background: "none", border: "none", cursor: "pointer",
                                   padding: 0, lineHeight: 1,
-                                  fontSize: 13, color: "#9ca3af",
-                                  opacity: 0.7,
-                                  transition: "opacity 0.15s",
+                                  fontSize: 14,
+                                  color: iconColor,
+                                  opacity: 0.85,
+                                  transition: "opacity 0.15s, transform 0.1s",
                                   display: "flex", alignItems: "center", justifyContent: "center",
                                 }}
-                                onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-                                onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
+                                onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.15)"; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.transform = "scale(1)"; }}
+                              >🖨</button>
+                              );
+                            })()}
+                            {isBuyerName && (() => {
+                              const onDark = cellBg && contrastColor(cellBg) === "#ffffff";
+                              const iconColor = onDark ? "#ffffff" : "#64748b";
+                              return (
+                                <button
+                                  title="Compose email"
+                                  onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
+                                  className="email-btn"
+                                  style={{
+                                  position: "absolute", top: 3, left: 3,
+                                  width: 16, height: 16,
+                                  background: "none", border: "none", cursor: "pointer",
+                                  padding: 0, lineHeight: 1,
+                                  fontSize: 14,
+                                  color: iconColor,
+                                  opacity: 0.85,
+                                  transition: "opacity 0.15s, transform 0.1s",
+                                  display: "flex", alignItems: "center", justifyContent: "center",
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.15)"; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.transform = "scale(1)"; }}
                               >✉</button>
-                            )}
+                              );
+                            })()}
                             {displayValue ?? ""}
                           </td>
                         );

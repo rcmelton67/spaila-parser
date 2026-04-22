@@ -14,6 +14,8 @@ import {
   loadArchiveConfig, saveArchiveConfig, DEFAULT_ARCHIVE_CONFIG,
   loadEmailTemplates, saveEmailTemplates, DEFAULT_EMAIL_TEMPLATES, EMAIL_VARIABLE_KEYS,
   evalEmailCondition,
+  loadShopConfig, saveShopConfig, DEFAULT_SHOP_CONFIG,
+  loadDocumentsConfig, saveDocumentsConfig, DEFAULT_DOCUMENTS_CONFIG,
 } from "../shared/utils/fieldConfig.js";
 
 function swapItems(arr, i, j) {
@@ -23,14 +25,16 @@ function swapItems(arr, i, j) {
 }
 
 const TABS = [
-  { id: "orders",  label: "Orders"  },
-  { id: "parser",  label: "Parser"  },
-  { id: "pricing", label: "Pricing" },
-  { id: "status",  label: "Status"  },
-  { id: "view",    label: "Search/Sort" },
-  { id: "dates",   label: "Dates"       },
-  { id: "archive", label: "Archive"     },
-  { id: "emails",  label: "Emails"      },
+  { id: "general",   label: "General"     },
+  { id: "orders",    label: "Orders"      },
+  { id: "parser",    label: "Parser"      },
+  { id: "pricing",   label: "Pricing"     },
+  { id: "status",    label: "Status"      },
+  { id: "view",      label: "Search/Sort" },
+  { id: "dates",     label: "Dates"       },
+  { id: "archive",   label: "Archive"     },
+  { id: "emails",    label: "Emails"      },
+  { id: "documents", label: "Documents"   },
 ];
 
 /* ── icons ─────────────────────────────────────────────────────────────── */
@@ -1769,9 +1773,226 @@ function ArchiveTab({ config, setConfig }) {
   );
 }
 
+/* ── Documents tab ──────────────────────────────────────────────────────── */
+function DocumentsTab({ config, setConfig }) {
+  async function pickFile(field, nameField, title, filters) {
+    const result = await window.parserApp?.pickFile?.({ title, filters });
+    if (!result || result.canceled) return;
+    setConfig((prev) => ({ ...prev, [field]: result.path, [nameField]: result.name }));
+  }
+
+  function clearFile(field, nameField) {
+    setConfig((prev) => ({ ...prev, [field]: "", [nameField]: "" }));
+  }
+
+  const uploadFilters = [
+    { name: "PDF Files", extensions: ["pdf"] },
+  ];
+
+  const sectionStyle = {
+    background: "#f9fafb",
+    border: "1px solid #e5e7eb",
+    borderRadius: "10px",
+    padding: "20px 24px",
+    marginBottom: "20px",
+  };
+
+  const labelStyle = {
+    display: "block",
+    fontSize: "13px",
+    fontWeight: 700,
+    color: "#111",
+    marginBottom: "4px",
+  };
+
+  const descStyle = {
+    fontSize: "12px",
+    color: "#6b7280",
+    marginBottom: "14px",
+    lineHeight: 1.5,
+  };
+
+  const fileRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+  };
+
+  const fileNameStyle = {
+    flex: 1,
+    fontSize: "13px",
+    color: "#374151",
+    background: "#fff",
+    border: "1px solid #d1d5db",
+    borderRadius: "6px",
+    padding: "7px 11px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+  };
+
+  const uploadBtn = {
+    flexShrink: 0,
+    padding: "7px 14px",
+    background: "#2563eb",
+    color: "#fff",
+    border: "none",
+    borderRadius: "6px",
+    fontSize: "12px",
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+
+  const clearBtn = {
+    flexShrink: 0,
+    padding: "7px 10px",
+    background: "none",
+    color: "#9ca3af",
+    border: "1px solid #e5e7eb",
+    borderRadius: "6px",
+    fontSize: "12px",
+    cursor: "pointer",
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
+        Documents
+      </div>
+
+      {/* Letterhead */}
+      <div style={sectionStyle}>
+        <span style={labelStyle}>Gift Messages</span>
+        <p style={descStyle}>
+          Upload your shop letterhead. When an order includes a gift message, the gift
+          message will be printed on this letterhead.
+        </p>
+        <div style={fileRowStyle}>
+          <span style={{
+            ...fileNameStyle,
+            color: config.letterheadName ? "#374151" : "#9ca3af",
+            fontStyle: config.letterheadName ? "normal" : "italic",
+          }}>
+            {config.letterheadName || "No file selected"}
+          </span>
+          <button
+            style={uploadBtn}
+            onClick={() => pickFile("letterheadPath", "letterheadName", "Select Gift Message Letterhead", uploadFilters)}
+          >
+            Browse…
+          </button>
+          {config.letterheadName && (
+            <button style={clearBtn} title="Remove" onClick={() => clearFile("letterheadPath", "letterheadName")}>✕</button>
+          )}
+        </div>
+        {config.letterheadPath && (
+          <div style={{ marginTop: "8px", fontSize: "11px", color: "#9ca3af", wordBreak: "break-all" }}>
+            {config.letterheadPath}
+          </div>
+        )}
+      </div>
+
+      {/* Thank-you letter */}
+      <div style={sectionStyle}>
+        <span style={labelStyle}>Thank You Letter</span>
+        <p style={descStyle}>
+          Upload your standard thank you letter template. This will be used when printing
+          packing inserts for orders.
+        </p>
+        <div style={fileRowStyle}>
+          <span style={{
+            ...fileNameStyle,
+            color: config.thankYouName ? "#374151" : "#9ca3af",
+            fontStyle: config.thankYouName ? "normal" : "italic",
+          }}>
+            {config.thankYouName || "No file selected"}
+          </span>
+          <button
+            style={uploadBtn}
+            onClick={() => pickFile("thankYouPath", "thankYouName", "Select Thank You Letter", uploadFilters)}
+          >
+            Browse…
+          </button>
+          {config.thankYouName && (
+            <button style={clearBtn} title="Remove" onClick={() => clearFile("thankYouPath", "thankYouName")}>✕</button>
+          )}
+        </div>
+        {config.thankYouPath && (
+          <div style={{ marginTop: "8px", fontSize: "11px", color: "#9ca3af", wordBreak: "break-all" }}>
+            {config.thankYouPath}
+          </div>
+        )}
+      </div>
+
+      {/* Gift message text position */}
+      <div style={sectionStyle}>
+        <span style={labelStyle}>Gift Message Text Position</span>
+        <p style={descStyle}>
+          Controls where the gift message is drawn on the letterhead PDF.
+          Coordinates are in points (1 inch = 72 pt) measured from the bottom-left corner of the page.
+        </p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 20px" }}>
+          {[
+            { key: "giftTextX",        label: "X (left offset, pt)",    min: 0,   max: 800 },
+            { key: "giftTextY",        label: "Y (from bottom, pt)",    min: 0,   max: 1200 },
+            { key: "giftTextMaxWidth", label: "Max width (pt)",         min: 50,  max: 800 },
+            { key: "giftTextFontSize", label: "Font size (pt)",         min: 6,   max: 72 },
+          ].map(({ key, label, min, max }) => (
+            <label key={key} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                {label}
+              </span>
+              <input
+                type="number"
+                min={min}
+                max={max}
+                value={config[key] ?? ""}
+                onChange={(e) => setConfig((p) => ({ ...p, [key]: Number(e.target.value) }))}
+                style={{
+                  padding: "7px 10px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "6px",
+                  fontSize: "13px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
+                onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
+              />
+            </label>
+          ))}
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+            <span style={{ fontSize: "11px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Text color
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <input
+                type="color"
+                value={config.giftTextColor ?? "#000000"}
+                onChange={(e) => setConfig((p) => ({ ...p, giftTextColor: e.target.value }))}
+                style={{ width: 38, height: 34, padding: "2px", border: "1px solid #d1d5db", borderRadius: "6px", cursor: "pointer" }}
+              />
+              <span style={{ fontSize: "12px", color: "#6b7280", fontFamily: "monospace" }}>
+                {config.giftTextColor ?? "#000000"}
+              </span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.6 }}>
+        Only PDF files are supported. Files are referenced by path — moving or renaming them will require re-selecting.
+      </div>
+    </div>
+  );
+}
+
 /* ── main component ─────────────────────────────────────────────────────── */
 export default function SettingsModal({ open, onClose, columnOrder: externalColumnOrder, onColumnOrderChange }) {
-  const [activeTab, setActiveTab] = React.useState("orders");
+  const [activeTab, setActiveTab] = React.useState("general");
   const [fields, setFields] = React.useState([]);
   const [localOrder, setLocalOrder] = React.useState([]);
   const [localParserOrder, setLocalParserOrder] = React.useState([]);
@@ -1781,6 +2002,8 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
   const [localDateConfig, setLocalDateConfig] = React.useState(() => loadDateConfig());
   const [localArchiveConfig, setLocalArchiveConfig] = React.useState(() => loadArchiveConfig());
   const [localEmailTemplates, setLocalEmailTemplates] = React.useState(() => loadEmailTemplates());
+  const [localShopConfig, setLocalShopConfig] = React.useState(() => loadShopConfig());
+  const [localDocumentsConfig, setLocalDocumentsConfig] = React.useState(() => loadDocumentsConfig());
 
   React.useEffect(() => {
     if (open) {
@@ -1793,6 +2016,8 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
       setLocalDateConfig(loadDateConfig());
       setLocalArchiveConfig(loadArchiveConfig());
       setLocalEmailTemplates(loadEmailTemplates());
+      setLocalShopConfig(loadShopConfig());
+      setLocalDocumentsConfig(loadDocumentsConfig());
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1804,6 +2029,8 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
   }, [open, onClose]);
 
   function handleSave() {
+    saveShopConfig(localShopConfig);
+    saveDocumentsConfig(localDocumentsConfig);
     saveFieldConfig(fields);
     saveColumnOrder(localOrder);
     if (onColumnOrderChange) onColumnOrderChange(localOrder);
@@ -1893,9 +2120,16 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
           borderBottom: "1px solid #e5e7eb",
           flexShrink: 0,
         }}>
-          <span style={{ fontWeight: 700, fontSize: "17px", flex: 1, color: "#111" }}>
-            Settings
-          </span>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontWeight: 700, fontSize: "17px", color: "#111" }}>
+              Settings
+            </span>
+            {localShopConfig.shopName?.trim() && (
+              <span style={{ marginLeft: 10, fontSize: "13px", color: "#6b7280", fontWeight: 400 }}>
+                — {localShopConfig.shopName.trim()}
+              </span>
+            )}
+          </div>
           <button onClick={onClose} style={{
             background: "none", border: "none", fontSize: "20px",
             cursor: "pointer", color: "#666", lineHeight: 1, padding: "2px 6px",
@@ -1936,6 +2170,147 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
 
           {/* Content */}
           <div style={{ flex: 1, overflowY: "auto", padding: "22px 26px 80px" }}>
+
+            {activeTab === "general" && (
+              <div>
+                <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
+                  Shop Identity
+                </div>
+
+                <div style={{ marginBottom: "24px" }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
+                    Shop name
+                  </label>
+                  <input
+                    type="text"
+                    value={localShopConfig.shopName ?? ""}
+                    onChange={(e) => setLocalShopConfig((p) => ({ ...p, shopName: e.target.value }))}
+                    placeholder="Your shop name here"
+                    style={{
+                      width: "100%", maxWidth: "360px",
+                      padding: "9px 12px",
+                      border: "1px solid #d1d5db",
+                      borderRadius: "6px",
+                      fontSize: "14px",
+                      color: "#111",
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
+                    onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
+                  />
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af" }}>
+                    Displayed in the app header and window title.
+                  </div>
+                </div>
+
+                {/* Save location */}
+                <div style={{ marginTop: "28px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
+                    Save Location
+                  </div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
+                    Save folder
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", maxWidth: "480px" }}>
+                    <div style={{
+                      flex: 1, padding: "8px 11px",
+                      border: "1px solid #d1d5db", borderRadius: "6px",
+                      fontSize: "13px", color: localShopConfig.saveFolder ? "#111" : "#9ca3af",
+                      fontStyle: localShopConfig.saveFolder ? "normal" : "italic",
+                      background: "#f9fafb", overflow: "hidden",
+                      textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }}>
+                      {localShopConfig.saveFolder || "No folder selected"}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const result = await window.parserApp?.pickFolder?.();
+                        if (result && !result.canceled) {
+                          setLocalShopConfig((p) => ({ ...p, saveFolder: result.path }));
+                        }
+                      }}
+                      style={{
+                        flexShrink: 0, padding: "8px 14px",
+                        background: "#2563eb", color: "#fff",
+                        border: "none", borderRadius: "6px",
+                        fontSize: "12px", fontWeight: 600, cursor: "pointer",
+                      }}
+                    >Browse…</button>
+                    {localShopConfig.saveFolder && (
+                      <button
+                        onClick={() => setLocalShopConfig((p) => ({ ...p, saveFolder: "" }))}
+                        style={{
+                          flexShrink: 0, padding: "8px 10px",
+                          background: "none", color: "#9ca3af",
+                          border: "1px solid #e5e7eb", borderRadius: "6px",
+                          fontSize: "12px", cursor: "pointer",
+                        }}
+                        title="Clear"
+                      >✕</button>
+                    )}
+                  </div>
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af" }}>
+                    Files saved via the save button will be written to this folder.
+                  </div>
+                </div>
+
+                {/* Restore from backup */}
+                <div style={{ marginTop: "28px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "6px" }}>
+                    Restore from Backup
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "14px", lineHeight: 1.6 }}>
+                    Select a <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>.spailabackup</code> file
+                    to fully restore all orders and settings. The app will reload automatically.
+                    <span style={{ color: "#ef4444", fontWeight: 600 }}> This will overwrite your current data.</span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const picked = await window.parserApp?.pickFile?.({
+                        title: "Select Backup File",
+                        filters: [{ name: "Spaila Backup", extensions: ["spailabackup"] }],
+                      });
+                      if (!picked || picked.canceled) return;
+
+                      const result = await window.parserApp?.backupRestore?.({ filePath: picked.path });
+                      if (!result?.ok) {
+                        alert(`Restore failed: ${result?.error ?? "unknown error"}`);
+                        return;
+                      }
+
+                      // Restore localStorage settings
+                      try {
+                        for (const [key, value] of Object.entries(result.settings || {})) {
+                          localStorage.setItem(key, value);
+                        }
+                      } catch (_) {}
+
+                      alert(`Restore complete! Backup from ${result.createdAt ? new Date(result.createdAt).toLocaleString() : "unknown date"}.\n\nThe app will now reload.`);
+                      window.location.reload();
+                    }}
+                    style={{
+                      padding: "9px 18px",
+                      background: "#dc2626",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "7px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#b91c1c")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "#dc2626")}
+                  >
+                    ↩ Restore from Backup…
+                  </button>
+                </div>
+              </div>
+            )}
 
             {activeTab === "orders" && (
               <>
@@ -2016,6 +2391,13 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
                 templates={localEmailTemplates}
                 setTemplates={setLocalEmailTemplates}
                 labelMap={Object.fromEntries(fields.map((f) => [f.key, f.label]))}
+              />
+            )}
+
+            {activeTab === "documents" && (
+              <DocumentsTab
+                config={localDocumentsConfig}
+                setConfig={setLocalDocumentsConfig}
               />
             )}
 

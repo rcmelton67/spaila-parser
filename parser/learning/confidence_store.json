@@ -12,16 +12,16 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|price|pricing",
     "source": "",
-    "last_value": "29.99",
-    "streak_count": 14
+    "last_value": "59.99",
+    "streak_count": 21
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|none|body": {
     "field": "order_number",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|none|body",
     "source": "",
-    "last_value": "4036089707",
-    "streak_count": 19
+    "last_value": "4034639260",
+    "streak_count": 25
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|none|header": {
     "field": "order_date",
@@ -52,16 +52,16 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_label_name|none|body",
     "source": "",
-    "last_value": "Shannon Smith",
-    "streak_count": 25
+    "last_value": "Margaret S Simandl",
+    "streak_count": 37
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_label_block|none|body": {
     "field": "shipping_address",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_label_block|none|body",
     "source": "",
-    "last_value": "25377 State Hwy 39\nPURCELL, OK\n73080\nUnited States",
-    "streak_count": 20
+    "last_value": "7254 Wilderness Shore Ln PO 225\nBAILEYS HARBOR, WI\n54202\nUnited States",
+    "streak_count": 27
   },
   "887a38e8117bce47e1047143040b8f00971703774c2c44b1e8bec0b00ded3e6c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
@@ -124,8 +124,8 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|email|body",
     "source": "",
-    "last_value": "Sksmith81@icloud.com",
-    "streak_count": 24
+    "last_value": "peggyunique@gmail.com",
+    "streak_count": 36
   },
   "dab876421cfdcbc3a6815b691cf8c8b5bc77192f9591e3b8b38d46308f7d544c:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
@@ -293,6 +293,62 @@
     "extraction_signature": "address_label_block|none|body",
     "source": "",
     "last_value": "8660 Five Forks Rd\nPamplin, VA 23958",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:quantity:number_regex|none|order_summary:woo": {
+    "field": "quantity",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "number_regex|none|order_summary",
+    "source": "woo",
+    "last_value": "1",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "104.00",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "2364",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:order_date:date_regex|none|body": {
+    "field": "order_date",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "date_regex|none|body",
+    "source": "",
+    "last_value": "April 19, 2026",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "michaelmenne@gmail.com",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:buyer_name:address_label_name|none|body": {
+    "field": "buyer_name",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "address_label_name|none|body",
+    "source": "",
+    "last_value": "Mike Menne",
+    "streak_count": 1
+  },
+  "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c:shipping_address:address_label_block|none|body": {
+    "field": "shipping_address",
+    "template_id": "5838e802b7d53487f04f3bd87175fe05e5fc08a8829d9281afc924b39372c50c",
+    "extraction_signature": "address_label_block|none|body",
+    "source": "",
+    "last_value": "11505 Hillcrest Court N.\nSaint Paul, MN 55110",
     "streak_count": 1
   }
 }

@@ -934,6 +934,10 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
                 _row.decision_source = "confidence_promotion"
                 _row.provenance["streak_count"] = _row.provenance.get("streak_count", 0)
                 print(
+                    f"CONF_PROMOTION_OVERRIDE {{ field: {_row.field!r}, forced: true }}",
+                    file=sys.stderr, flush=True,
+                )
+                print(
                     f"[CONF_DEBUG] re-applied promotion field={_row.field!r} (streak already met)",
                     file=sys.stderr, flush=True,
                 )
@@ -973,6 +977,10 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
                 _row.decision = "assigned"
                 _row.decision_source = "confidence_promotion"
                 _row.provenance["streak_count"] = _streak
+                print(
+                    f"CONF_PROMOTION_OVERRIDE {{ field: {_row.field!r}, forced: true }}",
+                    file=sys.stderr, flush=True,
+                )
 
     meta: Dict[str, Any] = {}
     lines = clean_text.splitlines()

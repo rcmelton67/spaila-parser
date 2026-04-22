@@ -17,17 +17,6 @@ CONFIDENCE_STORE_PATH = os.path.join(_HERE, "confidence_store.json")
 
 CONFIDENCE_PROMOTION_THRESHOLD = 4
 
-# Fields excluded from auto-promotion.
-# - price: too risky (item vs. total confusion)
-# - order_date / ship_by / order_number: deterministically extracted from
-#   email headers/subject — they are NOT learned from user behaviour.
-_NO_AUTOPROMOTE: frozenset = frozenset({
-    "price",
-    "order_date",
-    "ship_by",
-    "order_number",
-})
-
 
 # ---------------------------------------------------------------------------
 # Persistence helpers
@@ -96,7 +85,7 @@ def update_streak(
     save_rejection flows (those pass update_confidence=False to parse_eml).
 
     Returns (streak_count, promoted) where promoted is True when
-    streak_count >= CONFIDENCE_PROMOTION_THRESHOLD (4) and field is not excluded.
+    streak_count >= CONFIDENCE_PROMOTION_THRESHOLD (4).
     """
     store = _load()
     legacy_key = f"{template_id}:{field}:{extraction_signature}"
@@ -127,7 +116,7 @@ def update_streak(
 
     streak = record["streak_count"]
     eligible = (streak >= CONFIDENCE_PROMOTION_THRESHOLD)
-    promoted  = eligible and (field not in _NO_AUTOPROMOTE)
+    promoted  = eligible
 
     print(
         f"CONF_PROMOTION_CHECK {{"
@@ -155,7 +144,7 @@ def get_currently_promoted_fields(template_id: str, source_scopes: Dict[str, str
         if not key.startswith(prefix):
             continue
         field = record.get("field", "")
-        if not field or field in _NO_AUTOPROMOTE:
+        if not field:
             continue
         if field == "quantity":
             expected_source = (source_scopes or {}).get("quantity", "")

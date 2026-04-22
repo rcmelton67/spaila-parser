@@ -13,20 +13,20 @@
  */
 export const FIELD_DEFS = [
   // key                      label                    fixed   orders   parser   palette   hlEnabled  hlColor
-  { key: "order_number",   defaultLabel: "Order #",          fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
-  { key: "buyer_name",     defaultLabel: "Buyer Name",       fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 220 },
-  { key: "price",          defaultLabel: "Price",            fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 100 },
-  { key: "quantity",       defaultLabel: "Qty",              fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 80  },
-  { key: "custom_1",       defaultLabel: "Line 1",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "custom_2",       defaultLabel: "Line 2",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "custom_3",       defaultLabel: "Line 3",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "custom_4",       defaultLabel: "Line 4",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "custom_5",       defaultLabel: "Line 5",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "custom_6",       defaultLabel: "Line 6",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
-  { key: "shipping_address", defaultLabel: "Shipping Address", fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 200 },
-  { key: "order_date",     defaultLabel: "Order Date",       fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 120 },
-  { key: "ship_by",        defaultLabel: "Ship By",          fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 120 },
-  { key: "buyer_email",    defaultLabel: "Buyer Email",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 180 },
+  { key: "order_number",   defaultLabel: "Order #",          fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 100 },
+  { key: "buyer_name",     defaultLabel: "Buyer Name",       fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
+  { key: "price",          defaultLabel: "Price",            fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 75  },
+  { key: "quantity",       defaultLabel: "Qty",              fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 50  },
+  { key: "custom_1",       defaultLabel: "Line 1",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "custom_2",       defaultLabel: "Line 2",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "custom_3",       defaultLabel: "Line 3",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "custom_4",       defaultLabel: "Line 4",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "custom_5",       defaultLabel: "Line 5",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "custom_6",       defaultLabel: "Line 6",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
+  { key: "shipping_address", defaultLabel: "Shipping Address", fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
+  { key: "order_date",     defaultLabel: "Order Date",       fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
+  { key: "ship_by",        defaultLabel: "Ship By",          fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
+  { key: "buyer_email",    defaultLabel: "Buyer Email",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 150 },
   { key: "gift_message",   defaultLabel: "Gift Message",     fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: true,  defaultHighlightColor: "#fca5a5"             },
   { key: "order_notes",    defaultLabel: "Order Notes",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null               },
 ];
@@ -410,6 +410,62 @@ export function loadArchiveConfig() {
 export function saveArchiveConfig(config) {
   localStorage.setItem(ARCHIVE_CONFIG_KEY, JSON.stringify(config));
   window.dispatchEvent(new CustomEvent("spaila:archiveconfig"));
+}
+
+// ── Documents config ───────────────────────────────────────────────────────
+
+const DOCUMENTS_CONFIG_KEY = "spaila_documents_config";
+
+export const DEFAULT_DOCUMENTS_CONFIG = {
+  letterheadPath: "",   // absolute path to letterhead PDF
+  letterheadName: "",   // original filename for display
+  thankYouPath:   "",   // absolute path to thank-you letter
+  thankYouName:   "",   // original filename for display
+  // Gift message text overlay position on the letterhead
+  giftTextX:        72,    // points from left edge (~1 inch)
+  giftTextY:        500,   // points from bottom edge
+  giftTextMaxWidth: 450,   // max width before wrapping
+  giftTextFontSize: 12,    // font size in points
+  giftTextColor:    "#000000", // hex color
+};
+
+export function loadDocumentsConfig() {
+  try {
+    const raw = localStorage.getItem(DOCUMENTS_CONFIG_KEY);
+    if (!raw) return { ...DEFAULT_DOCUMENTS_CONFIG };
+    return { ...DEFAULT_DOCUMENTS_CONFIG, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_DOCUMENTS_CONFIG };
+  }
+}
+
+export function saveDocumentsConfig(config) {
+  localStorage.setItem(DOCUMENTS_CONFIG_KEY, JSON.stringify(config));
+  window.dispatchEvent(new CustomEvent("spaila:documentsconfig"));
+}
+
+// ── Shop / identity config ─────────────────────────────────────────────────
+
+const SHOP_CONFIG_KEY = "spaila_shop_config";
+
+export const DEFAULT_SHOP_CONFIG = {
+  shopName:   "",
+  saveFolder: "",   // absolute path chosen by user for manual saves/exports
+};
+
+export function loadShopConfig() {
+  try {
+    const raw = localStorage.getItem(SHOP_CONFIG_KEY);
+    if (!raw) return { ...DEFAULT_SHOP_CONFIG };
+    return { ...DEFAULT_SHOP_CONFIG, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_SHOP_CONFIG };
+  }
+}
+
+export function saveShopConfig(config) {
+  localStorage.setItem(SHOP_CONFIG_KEY, JSON.stringify(config));
+  window.dispatchEvent(new CustomEvent("spaila:shopconfig"));
 }
 
 // ── Email templates ────────────────────────────────────────────────────────
