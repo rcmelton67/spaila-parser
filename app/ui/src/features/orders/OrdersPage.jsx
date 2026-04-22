@@ -888,44 +888,48 @@ export default function OrdersPage({ onImport, refreshKey }) {
             }}
           >⚙</button>
 
-          {/* Gift-letter print button — separated by extra margin */}
+          {/* Gift-letter print button — always active; uses selection if set, else all rows with gift messages */}
           {documentsConfig.showGiftLetterHeaderBtn !== false && (() => {
-            const eligibleRows = rows.filter((r) =>
-              selectedIds.has(r.id) && r.gift_message
-            );
-            const canPrint = eligibleRows.length > 0;
+            const selectedWithGift = filtered.filter((r) => selectedIds.has(r.id) && r.gift_message);
+            const allWithGift      = filtered.filter((r) => r.gift_message);
+            const targets          = selectedWithGift.length > 0 ? selectedWithGift : allWithGift;
+            const hasAny           = targets.length > 0;
+
+            const labelCount = targets.length > 1 ? ` (${targets.length})` : "";
+            const titleText  = hasAny
+              ? (selectedWithGift.length > 0
+                  ? `Print gift letter${labelCount} for selected`
+                  : `Print gift letter${labelCount} — all with gift messages`)
+              : "No orders with gift messages";
+
             return (
               <button
-                onClick={canPrint ? () => eligibleRows.forEach((r) => handleGenerateGiftLetter(r)) : undefined}
-                title={
-                  canPrint
-                    ? `Print gift letter${eligibleRows.length > 1 ? `s (${eligibleRows.length})` : ""}`
-                    : "Select order(s) with a gift message to print"
-                }
+                onClick={hasAny ? () => targets.forEach((r) => handleGenerateGiftLetter(r)) : undefined}
+                title={titleText}
                 style={{
                   marginLeft: 12,
                   width: 36, height: 36,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  background: canPrint ? "#fff" : "#f1f5f9",
-                  border: `1px solid ${canPrint ? "#6d28d9" : "#e2e8f0"}`,
+                  background: "#fff",
+                  border: `1px solid ${hasAny ? "#6d28d9" : "#e2e8f0"}`,
                   borderRadius: "10px",
-                  cursor: canPrint ? "pointer" : "default",
+                  cursor: hasAny ? "pointer" : "default",
                   fontSize: "20px",
-                  color: canPrint ? "#6d28d9" : "#94a3b8",
-                  boxShadow: canPrint ? "0 1px 4px rgba(109,40,217,0.2)" : "none",
+                  color: hasAny ? "#6d28d9" : "#94a3b8",
+                  boxShadow: hasAny ? "0 1px 4px rgba(109,40,217,0.25)" : "none",
                   transition: "all 0.15s",
                   flexShrink: 0,
-                  opacity: canPrint ? 1 : 0.45,
+                  opacity: hasAny ? 1 : 0.35,
                 }}
                 onMouseEnter={(e) => {
-                  if (!canPrint) return;
+                  if (!hasAny) return;
                   e.currentTarget.style.background = "#f5f3ff";
-                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(109,40,217,0.3)";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(109,40,217,0.35)";
                 }}
                 onMouseLeave={(e) => {
-                  if (!canPrint) return;
+                  if (!hasAny) return;
                   e.currentTarget.style.background = "#fff";
-                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(109,40,217,0.2)";
+                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(109,40,217,0.25)";
                 }}
               >📄</button>
             );
