@@ -6,6 +6,7 @@ const { spawn, execFile } = require("child_process");
 
 // ── Helper process (sync_folders.py) ────────────────────────────────────────
 const ROOT = path.join(__dirname, "..", "..");
+const APP_ICON = path.join(ROOT, "spaila-logo.blue.ico");
 let helperProcess = null;
 let helperRestarting = false;
 
@@ -51,6 +52,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -608,6 +610,12 @@ ipcMain.handle("email:compose", async (_event, { to, subject, body, attachmentPa
 });
 
 app.whenReady().then(() => {
+  // Set app icon for taskbar, dock, and native dialogs on all platforms
+  if (process.platform === "win32") {
+    app.setAppUserModelId(app.getName());
+  }
+  try { app.dock?.setIcon(APP_ICON); } catch (_) {} // macOS dock (no-op on Windows)
+
   createWindow();
   startHelper();
 
