@@ -1214,7 +1214,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                               const onDark = cellBg && contrastColor(cellBg) === "#ffffff";
                               const iconColor = onDark
                                 ? "#ffffff"
-                                : (documentsConfig.letterheadPath ? "#7c3aed" : "#94a3b8");
+                                : (documentsConfig.letterheadPath ? "#6d28d9" : "#64748b");
                               return (
                                 <button
                                   title={documentsConfig.letterheadPath
@@ -1222,43 +1222,43 @@ export default function OrdersPage({ onImport, refreshKey }) {
                                     : "Generate gift message PDF (no letterhead — plain page)"}
                                   onClick={(e) => { e.stopPropagation(); handleGenerateGiftLetter(r); }}
                                   style={{
-                                  position: "absolute", bottom: 3, right: 3,
-                                  width: 16, height: 16,
-                                  background: "none", border: "none", cursor: "pointer",
-                                  padding: 0, lineHeight: 1,
-                                  fontSize: 14,
-                                  color: iconColor,
-                                  opacity: 0.85,
-                                  transition: "opacity 0.15s, transform 0.1s",
-                                  display: "flex", alignItems: "center", justifyContent: "center",
-                                }}
-                                onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.15)"; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.transform = "scale(1)"; }}
-                              >🖨</button>
+                                    position: "absolute", bottom: 2, right: 3,
+                                    width: 20, height: 20,
+                                    background: "none", border: "none", cursor: "pointer",
+                                    padding: 0, lineHeight: 1,
+                                    fontSize: 17,
+                                    color: iconColor,
+                                    opacity: 0.9,
+                                    transition: "opacity 0.15s, transform 0.1s",
+                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
+                                >🖨</button>
                               );
                             })()}
                             {isBuyerName && (() => {
                               const onDark = cellBg && contrastColor(cellBg) === "#ffffff";
-                              const iconColor = onDark ? "#ffffff" : "#64748b";
+                              const iconColor = onDark ? "#ffffff" : "#1e40af";
                               return (
                                 <button
                                   title="Compose email"
                                   onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
                                   className="email-btn"
                                   style={{
-                                  position: "absolute", bottom: 3, right: 3,
-                                  width: 16, height: 16,
-                                  background: "none", border: "none", cursor: "pointer",
-                                  padding: 0, lineHeight: 1,
-                                  fontSize: 14,
-                                  color: iconColor,
-                                  opacity: 0.85,
-                                  transition: "opacity 0.15s, transform 0.1s",
-                                  display: "flex", alignItems: "center", justifyContent: "center",
-                                }}
-                                onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.15)"; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.transform = "scale(1)"; }}
-                              >✉</button>
+                                    position: "absolute", bottom: 2, right: 3,
+                                    width: 20, height: 20,
+                                    background: "none", border: "none", cursor: "pointer",
+                                    padding: 0, lineHeight: 1,
+                                    fontSize: 17,
+                                    color: iconColor,
+                                    opacity: 0.9,
+                                    transition: "opacity 0.15s, transform 0.1s",
+                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
+                                >✉</button>
                               );
                             })()}
                             {displayValue ?? ""}
