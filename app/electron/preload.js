@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld("parserApp", {
   saveJson:            (payload) => ipcRenderer.invoke("file:save-json", payload),
   backupSave:          (payload) => ipcRenderer.invoke("backup:save", payload),
   backupRestore:       (payload) => ipcRenderer.invoke("backup:restore", payload),
+  openFile:            (payload) => ipcRenderer.invoke("documents:open-file", payload),
 });

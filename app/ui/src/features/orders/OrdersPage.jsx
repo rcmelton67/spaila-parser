@@ -888,48 +888,43 @@ export default function OrdersPage({ onImport, refreshKey }) {
             }}
           >⚙</button>
 
-          {/* Gift-letter print button — always active; uses selection if set, else all rows with gift messages */}
-          {documentsConfig.showGiftLetterHeaderBtn !== false && (() => {
-            const selectedWithGift = filtered.filter((r) => selectedIds.has(r.id) && r.gift_message);
-            const allWithGift      = filtered.filter((r) => r.gift_message);
-            const targets          = selectedWithGift.length > 0 ? selectedWithGift : allWithGift;
-            const hasAny           = targets.length > 0;
-
-            const labelCount = targets.length > 1 ? ` (${targets.length})` : "";
-            const titleText  = hasAny
-              ? (selectedWithGift.length > 0
-                  ? `Print gift letter${labelCount} for selected`
-                  : `Print gift letter${labelCount} — all with gift messages`)
-              : "No orders with gift messages";
-
+          {/* Thank-you letter button — opens the configured PDF ready to print */}
+          {documentsConfig.showThankYouHeaderBtn !== false && (() => {
+            const hasDoc = !!documentsConfig.thankYouPath;
+            const titleText = hasDoc
+              ? "Open thank you letter (ready to print)"
+              : "No thank you letter configured — go to Settings → Documents";
             return (
               <button
-                onClick={hasAny ? () => targets.forEach((r) => handleGenerateGiftLetter(r)) : undefined}
+                onClick={hasDoc ? async () => {
+                  const result = await window.parserApp?.openFile?.({ filePath: documentsConfig.thankYouPath });
+                  if (result && !result.ok) alert(`Could not open file: ${result.error}`);
+                } : undefined}
                 title={titleText}
                 style={{
                   marginLeft: 12,
                   width: 36, height: 36,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   background: "#fff",
-                  border: `1px solid ${hasAny ? "#6d28d9" : "#e2e8f0"}`,
+                  border: `1px solid ${hasDoc ? "#0369a1" : "#e2e8f0"}`,
                   borderRadius: "10px",
-                  cursor: hasAny ? "pointer" : "default",
+                  cursor: hasDoc ? "pointer" : "default",
                   fontSize: "20px",
-                  color: hasAny ? "#6d28d9" : "#94a3b8",
-                  boxShadow: hasAny ? "0 1px 4px rgba(109,40,217,0.25)" : "none",
+                  color: hasDoc ? "#0369a1" : "#94a3b8",
+                  boxShadow: hasDoc ? "0 1px 4px rgba(3,105,161,0.2)" : "none",
                   transition: "all 0.15s",
                   flexShrink: 0,
-                  opacity: hasAny ? 1 : 0.35,
+                  opacity: hasDoc ? 1 : 0.35,
                 }}
                 onMouseEnter={(e) => {
-                  if (!hasAny) return;
-                  e.currentTarget.style.background = "#f5f3ff";
-                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(109,40,217,0.35)";
+                  if (!hasDoc) return;
+                  e.currentTarget.style.background = "#f0f9ff";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(3,105,161,0.3)";
                 }}
                 onMouseLeave={(e) => {
-                  if (!hasAny) return;
+                  if (!hasDoc) return;
                   e.currentTarget.style.background = "#fff";
-                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(109,40,217,0.25)";
+                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(3,105,161,0.2)";
                 }}
               >📄</button>
             );

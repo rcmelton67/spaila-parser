@@ -1949,32 +1949,6 @@ function DocumentsTab({ config, setConfig }) {
           </span>
         </div>
 
-        {/* Show header print button toggle */}
-        <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
-          <label style={{ position: "relative", display: "inline-block", width: 36, height: 20, flexShrink: 0 }}>
-            <input
-              type="checkbox"
-              checked={config.showGiftLetterHeaderBtn !== false}
-              onChange={(e) => setConfig((prev) => ({ ...prev, showGiftLetterHeaderBtn: e.target.checked }))}
-              style={{ opacity: 0, width: 0, height: 0, position: "absolute" }}
-            />
-            <span style={{
-              position: "absolute", inset: 0, borderRadius: 999, cursor: "pointer",
-              background: config.showGiftLetterHeaderBtn !== false ? "#2563eb" : "#d1d5db",
-              transition: "background 0.2s",
-            }}>
-              <span style={{
-                position: "absolute", top: 3,
-                left: config.showGiftLetterHeaderBtn !== false ? 19 : 3,
-                width: 14, height: 14, borderRadius: "50%", background: "#fff",
-                transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-              }} />
-            </span>
-          </label>
-          <span style={{ fontSize: "13px", color: "#374151" }}>
-            Show 📄 print button in toolbar
-          </span>
-        </div>
       </div>
 
       {/* Thank-you letter */}
@@ -2007,6 +1981,33 @@ function DocumentsTab({ config, setConfig }) {
             {config.thankYouPath}
           </div>
         )}
+
+        {/* Show toolbar button toggle */}
+        <div style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
+          <label style={{ position: "relative", display: "inline-block", width: 36, height: 20, flexShrink: 0 }}>
+            <input
+              type="checkbox"
+              checked={config.showThankYouHeaderBtn !== false}
+              onChange={(e) => setConfig((prev) => ({ ...prev, showThankYouHeaderBtn: e.target.checked }))}
+              style={{ opacity: 0, width: 0, height: 0, position: "absolute" }}
+            />
+            <span style={{
+              position: "absolute", inset: 0, borderRadius: 999, cursor: "pointer",
+              background: config.showThankYouHeaderBtn !== false ? "#2563eb" : "#d1d5db",
+              transition: "background 0.2s",
+            }}>
+              <span style={{
+                position: "absolute", top: 3,
+                left: config.showThankYouHeaderBtn !== false ? 19 : 3,
+                width: 14, height: 14, borderRadius: "50%", background: "#fff",
+                transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+              }} />
+            </span>
+          </label>
+          <span style={{ fontSize: "13px", color: "#374151" }}>
+            Show 📄 thank you letter button in toolbar
+          </span>
+        </div>
       </div>
 
       {/* Gift message text position */}

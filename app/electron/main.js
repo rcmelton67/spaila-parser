@@ -417,6 +417,19 @@ ipcMain.handle("backup:restore", async (_event, { filePath }) => {
   }
 });
 
+ipcMain.handle("documents:open-file", async (_event, { filePath }) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { ok: false, error: "File not found." };
+    }
+    const err = await shell.openPath(filePath);
+    if (err) return { ok: false, error: err };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) => {
   try {
     const dest = path.join(folderPath, filename);
