@@ -1,4 +1,5 @@
 import React from "react";
+import ReactDOM from "react-dom";
 import { loadFieldConfig, buildLabelMap, loadDateConfig } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
@@ -148,7 +149,7 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
     setForm({ ...order });
   }
 
-  return (
+  return ReactDOM.createPortal(
     <div
       style={{
         position: "fixed",
@@ -162,6 +163,8 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
         overflowY: "auto",
       }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
     >
       <div style={{
         width: "100%",
@@ -253,7 +256,7 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
               {/* ── Order Summary ── */}
               <Panel title="Order Summary">
                 <FieldRow label={L("order_date", "Order Date") + ":"}>
-                  <input style={input} value={form.order_date || ""} onChange={(e) => set("order_date", e.target.value)} />
+                  <input autoFocus style={input} value={form.order_date || ""} onChange={(e) => set("order_date", e.target.value)} />
                   <div style={hint}>{dateFormatHint}</div>
                 </FieldRow>
                 <FieldRow label={L("ship_by", "Ship By") + ":"}>
@@ -369,6 +372,7 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
