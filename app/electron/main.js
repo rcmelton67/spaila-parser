@@ -377,6 +377,21 @@ ipcMain.handle("backup:save", async (_event, { folderPath, localStorageData }) =
     });
 
     fs.writeFileSync(dest, payload, "utf8");
+
+    // Keep only the 10 most recent .spailabackup files in the folder
+    try {
+      const MAX_BACKUPS = 10;
+      const allFiles = fs.readdirSync(folderPath)
+        .filter((f) => f.endsWith(".spailabackup"))
+        .map((f) => ({ name: f, mtime: fs.statSync(path.join(folderPath, f)).mtimeMs }))
+        .sort((a, b) => a.mtime - b.mtime); // oldest first
+
+      const excess = allFiles.length - MAX_BACKUPS;
+      for (let i = 0; i < excess; i++) {
+        try { fs.unlinkSync(path.join(folderPath, allFiles[i].name)); } catch (_) {}
+      }
+    } catch (_) {}
+
     return { ok: true, path: dest, filename };
   } catch (err) {
     return { ok: false, error: err.message };
