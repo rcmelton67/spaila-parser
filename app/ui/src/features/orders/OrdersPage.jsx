@@ -1222,7 +1222,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                                     : "Generate gift message PDF (no letterhead — plain page)"}
                                   onClick={(e) => { e.stopPropagation(); handleGenerateGiftLetter(r); }}
                                   style={{
-                                  position: "absolute", top: 3, left: 3,
+                                  position: "absolute", bottom: 3, right: 3,
                                   width: 16, height: 16,
                                   background: "none", border: "none", cursor: "pointer",
                                   padding: 0, lineHeight: 1,
@@ -1246,7 +1246,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                                   onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
                                   className="email-btn"
                                   style={{
-                                  position: "absolute", top: 3, left: 3,
+                                  position: "absolute", bottom: 3, right: 3,
                                   width: 16, height: 16,
                                   background: "none", border: "none", cursor: "pointer",
                                   padding: 0, lineHeight: 1,
