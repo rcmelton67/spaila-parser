@@ -821,34 +821,6 @@ export default function OrdersPage({ onImport, refreshKey }) {
         background: "#f7f7f7", flexShrink: 0,
       }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {/* Settings button */}
-          <button
-            onClick={() => setShowSettings(true)}
-            title="Settings"
-            style={{
-              width: 36, height: 36,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "#fff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "10px",
-              cursor: "pointer",
-              fontSize: "18px", color: "#64748b",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-              transition: "box-shadow 0.15s, border-color 0.15s, color 0.15s",
-              flexShrink: 0,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.14)";
-              e.currentTarget.style.borderColor = "#cbd5e1";
-              e.currentTarget.style.color = "#1e293b";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
-              e.currentTarget.style.borderColor = "#e2e8f0";
-              e.currentTarget.style.color = "#64748b";
-            }}
-          >⚙</button>
-
           {/* Save button — bright when rows exist, dim when nothing to save */}
           {(() => {
             const canSave = rows.length > 0;
@@ -887,6 +859,38 @@ export default function OrdersPage({ onImport, refreshKey }) {
               >💾</button>
             );
           })()}
+
+          {/* Settings button */}
+          <button
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            style={{
+              width: 36, height: 36,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "#fff",
+              border: "1px solid #e2e8f0",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "18px", color: "#64748b",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+              transition: "box-shadow 0.15s, border-color 0.15s, color 0.15s",
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.14)";
+              e.currentTarget.style.borderColor = "#cbd5e1";
+              e.currentTarget.style.color = "#1e293b";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
+              e.currentTarget.style.borderColor = "#e2e8f0";
+              e.currentTarget.style.color = "#64748b";
+            }}
+          >⚙</button>
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 28, background: "#d1d5db", margin: "0 4px", flexShrink: 0 }} />
+
           <button onClick={onImport} style={primaryButton}>+ Import Order</button>
           <button style={tab === "active"    ? tabStyleActive : tabStyle} onClick={() => setTab("active")}>
             Active ({rows.filter((r) => !(r.item_status ? r.item_status === "completed" : r.status === "completed" || r.status === "done")).length})
