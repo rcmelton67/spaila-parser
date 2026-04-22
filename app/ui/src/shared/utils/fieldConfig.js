@@ -450,8 +450,9 @@ export function saveDocumentsConfig(config) {
 const SHOP_CONFIG_KEY = "spaila_shop_config";
 
 export const DEFAULT_SHOP_CONFIG = {
-  shopName:   "",
-  saveFolder: "",   // absolute path chosen by user for manual saves/exports
+  shopName:      "",
+  saveFolder:    "",   // absolute path chosen by user for manual saves/exports
+  showEmailIcon: true, // show ✉ icon in buyer_name cells
 };
 
 export function loadShopConfig() {

@@ -1187,7 +1187,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                           ? contrastColor(cellBg)
                           : (displayValue ? "#1a1a1a" : "#bbb");
 
-                        const isBuyerName  = c.key === "buyer_name";
+                        const isBuyerName  = c.key === "buyer_name" && shopConfig.showEmailIcon !== false;
                         const isGiftMsg    = c.key === "gift_message";
                         const hasGiftMsg   = isGiftMsg && !!r.gift_message && documentsConfig.showPrintIcon !== false;
                         const needsIcon    = isBuyerName || hasGiftMsg;
