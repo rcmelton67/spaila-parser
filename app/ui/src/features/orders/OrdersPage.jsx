@@ -888,6 +888,49 @@ export default function OrdersPage({ onImport, refreshKey }) {
             }}
           >⚙</button>
 
+          {/* Gift-letter print button — separated by extra margin */}
+          {documentsConfig.showGiftLetterHeaderBtn !== false && (() => {
+            const eligibleRows = rows.filter((r) =>
+              selectedIds.has(r.id) && r.gift_message
+            );
+            const canPrint = eligibleRows.length > 0;
+            return (
+              <button
+                onClick={canPrint ? () => eligibleRows.forEach((r) => handleGenerateGiftLetter(r)) : undefined}
+                title={
+                  canPrint
+                    ? `Print gift letter${eligibleRows.length > 1 ? `s (${eligibleRows.length})` : ""}`
+                    : "Select order(s) with a gift message to print"
+                }
+                style={{
+                  marginLeft: 12,
+                  width: 36, height: 36,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: canPrint ? "#fff" : "#f1f5f9",
+                  border: `1px solid ${canPrint ? "#6d28d9" : "#e2e8f0"}`,
+                  borderRadius: "10px",
+                  cursor: canPrint ? "pointer" : "default",
+                  fontSize: "20px",
+                  color: canPrint ? "#6d28d9" : "#94a3b8",
+                  boxShadow: canPrint ? "0 1px 4px rgba(109,40,217,0.2)" : "none",
+                  transition: "all 0.15s",
+                  flexShrink: 0,
+                  opacity: canPrint ? 1 : 0.45,
+                }}
+                onMouseEnter={(e) => {
+                  if (!canPrint) return;
+                  e.currentTarget.style.background = "#f5f3ff";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(109,40,217,0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!canPrint) return;
+                  e.currentTarget.style.background = "#fff";
+                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(109,40,217,0.2)";
+                }}
+              >📄</button>
+            );
+          })()}
+
           {/* Divider */}
           <div style={{ width: 1, height: 28, background: "#d1d5db", margin: "0 4px", flexShrink: 0 }} />
 
