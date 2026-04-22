@@ -421,6 +421,7 @@ export const DEFAULT_DOCUMENTS_CONFIG = {
   letterheadName: "",   // original filename for display
   thankYouPath:   "",   // absolute path to thank-you letter
   thankYouName:   "",   // original filename for display
+  showPrintIcon:  true, // show 🖨 icon in gift_message cells
   // Gift message text overlay position on the letterhead
   giftTextX:        72,    // points from left edge (~1 inch)
   giftTextY:        500,   // points from bottom edge

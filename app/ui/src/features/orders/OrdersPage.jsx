@@ -1189,7 +1189,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
 
                         const isBuyerName  = c.key === "buyer_name";
                         const isGiftMsg    = c.key === "gift_message";
-                        const hasGiftMsg   = isGiftMsg && !!r.gift_message;
+                        const hasGiftMsg   = isGiftMsg && !!r.gift_message && documentsConfig.showPrintIcon !== false;
                         const needsIcon    = isBuyerName || hasGiftMsg;
                         return (
                           <td key={c.key} style={{
