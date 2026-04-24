@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 STORE_PATH = "parser/learning/learning_store.json"
 
 
+def _normalize_value(value) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
 def load_store() -> Dict[str, List[Dict]]:
     if not os.path.exists(STORE_PATH):
         return {}
@@ -137,6 +143,7 @@ def _deactivate_matching_assignments(
 
 
 def save_assignment(template_id: str, field: str, value: str, context=None) -> None:
+    value = _normalize_value(value)
     source = ""
     segment_id = getattr(context, "segment_id", "")
     start = getattr(context, "start", 0)
@@ -195,7 +202,7 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
 
 def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
     source = ""
-    value = getattr(candidate_or_value, "value", candidate_or_value)
+    value = _normalize_value(getattr(candidate_or_value, "value", candidate_or_value))
     segment_id = getattr(candidate_or_value, "segment_id", "")
     start = getattr(candidate_or_value, "start", 0)
     end = getattr(candidate_or_value, "end", 0)
@@ -205,7 +212,7 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
     right_context = getattr(candidate_or_value, "right_context", "")
     if isinstance(candidate_or_value, dict):
         source = candidate_or_value.get("source", source)
-        value = candidate_or_value.get("value", value)
+        value = _normalize_value(candidate_or_value.get("value", value))
         segment_id = candidate_or_value.get("segment_id", segment_id)
         start = candidate_or_value.get("start", start)
         end = candidate_or_value.get("end", end)

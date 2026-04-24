@@ -9,6 +9,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -17,6 +21,7 @@ except Exception:
 import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from workspace_paths import ensure_workspace_layout
 
 processed_files = set()
 processing_files = set()
@@ -29,56 +34,31 @@ last_match_state = {}
 # .eml paths present in inbox before watcher starts; not queued until a new drop (on_created).
 initial_inbox_files: set[str] = set()
 
-BASE_PATH = Path.home() / "Spaila"
-INBOX_PATH = BASE_PATH / "inbox"
-ORDERS_PATH = BASE_PATH / "orders"
-UNMATCHED_PATH = BASE_PATH / "unmatched"
-DUPLICATES_PATH = BASE_PATH / "duplicates"
-
-INBOX_PATH_STR = str(INBOX_PATH)
-ORDERS_PATH_STR = str(ORDERS_PATH)
-UNMATCHED_PATH_STR = str(UNMATCHED_PATH)
-DUPLICATES_PATH_STR = str(DUPLICATES_PATH)
+_WORKSPACE_DIRS = ensure_workspace_layout(print)
+BASE_PATH = _WORKSPACE_DIRS["root"]
+INBOX_PATH_STR = str(_WORKSPACE_DIRS["Inbox"])
+ORDERS_PATH_STR = str(_WORKSPACE_DIRS["Orders"])
+DUPLICATES_PATH_STR = str(_WORKSPACE_DIRS["Duplicates"])
+ARCHIVE_PATH_STR = str(_WORKSPACE_DIRS["Archive"])
+BACKUP_PATH_STR = str(_WORKSPACE_DIRS["Backup"])
 
 ORDERS_API_URL = "http://localhost:8055/orders"
 
 
-def _base_orders_folder_from_settings() -> str:
-    """
-    Same value as app settings.folders.baseOrdersFolder.
-    Set env SPAILA_BASE_ORDERS_FOLDER to match the Electron setting (localStorage is not readable here).
-    """
-    env = os.environ.get("SPAILA_BASE_ORDERS_FOLDER", "").strip()
-    if env:
-        return env
-    return ORDERS_PATH_STR
-
-
 def init_folders():
-    """Create inbox + orders + unmatched dirs under the Spaila root derived from base orders path."""
-    global INBOX_PATH_STR, ORDERS_PATH_STR, UNMATCHED_PATH_STR, DUPLICATES_PATH_STR
+    """Create canonical workspace folders under the shared Spaila root."""
+    global INBOX_PATH_STR, ORDERS_PATH_STR, DUPLICATES_PATH_STR, ARCHIVE_PATH_STR, BACKUP_PATH_STR
 
-    base_folder = _base_orders_folder_from_settings()
-    base_orders = Path(base_folder)
-    root = base_orders.parent
+    dirs = ensure_workspace_layout(print)
+    INBOX_PATH_STR = str(dirs["Inbox"])
+    ORDERS_PATH_STR = str(dirs["Orders"])
+    DUPLICATES_PATH_STR = str(dirs["Duplicates"])
+    ARCHIVE_PATH_STR = str(dirs["Archive"])
+    BACKUP_PATH_STR = str(dirs["Backup"])
 
-    inbox_path = root / "inbox"
-    orders_path = base_orders
-    unmatched_path = root / "unmatched"
-    duplicates_path = root / "duplicates"
-
-    inbox_path.mkdir(parents=True, exist_ok=True)
-    orders_path.mkdir(parents=True, exist_ok=True)
-    unmatched_path.mkdir(parents=True, exist_ok=True)
-    duplicates_path.mkdir(parents=True, exist_ok=True)
-
-    INBOX_PATH_STR = str(inbox_path)
-    ORDERS_PATH_STR = str(orders_path)
-    UNMATCHED_PATH_STR = str(unmatched_path)
-    DUPLICATES_PATH_STR = str(duplicates_path)
-
-    print(f"[INIT] Base path: {BASE_PATH}")
-    print(f"[INIT] Unmatched: {UNMATCHED_PATH_STR}")
+    print(f"[INIT] Base path: {dirs['root']}")
+    print(f"[INIT] Inbox: {INBOX_PATH_STR}")
+    print(f"[INIT] Orders: {ORDERS_PATH_STR}")
     print(f"[INIT] Duplicates: {DUPLICATES_PATH_STR}")
 
 
@@ -113,6 +93,7 @@ def extract_order_number_from_eml(file_path):
             msg = BytesParser(policy=policy.default).parse(f)
 
         body = ""
+        subject = str(msg.get("subject") or "")
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
@@ -126,10 +107,11 @@ def extract_order_number_from_eml(file_path):
             r"order\s*[:#]?\s*(\d{6,})",
             r"\b(\d{8,})\b",  # fallback: long number
         ]
-        for pattern in patterns:
-            match = re.search(pattern, body, re.IGNORECASE)
-            if match:
-                return match.group(1)
+        for text in (subject, body):
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
     except Exception as e:
         print(f"[ERROR] parse eml {file_path}: {e}")
 
@@ -460,6 +442,7 @@ def move_eml_to_order_folder(filepath: str, folder_path: str, basename: str, row
     ensure_folder(folder_path)
     dst = os.path.join(folder_path, basename)
     try:
+        print(f"[MOVE] MOVING FILE: {filepath} -> {dst}")
         shutil.move(filepath, dst)
         print(f"[MOVED] {basename} -> {folder_path}")
         print(f"[EML PATH SAVED] {dst}")
@@ -693,44 +676,13 @@ def move_to_duplicates(filepath):
 
 
 def move_to_unmatched(filepath):
-    """Move a single inbox .eml into the unmatched folder (used after per-file timeout)."""
-    unmatched_dir = UNMATCHED_PATH_STR
-    os.makedirs(unmatched_dir, exist_ok=True)
-
-    filename = os.path.basename(filepath)
-    target = os.path.join(unmatched_dir, filename)
-
+    """Deprecated: leave unmatched files in Inbox so Spaila reflects Helper state."""
     if os.path.exists(filepath):
-        shutil.move(filepath, target)
-        print(f"[UNMATCHED] {filename} -> unmatched")
+        print(f"[UNMATCHED] leaving file in Inbox: {os.path.basename(filepath)}")
 
 
 def move_unmatched_emails():
-    if not os.path.exists(INBOX_PATH_STR):
-        return
-
-    now = time.time()
-
-    for file in os.listdir(INBOX_PATH_STR):
-        if not file.lower().endswith(".eml"):
-            continue
-
-        src = os.path.join(INBOX_PATH_STR, file)
-
-        # Get file age
-        file_age = now - os.path.getmtime(src)
-
-        # Wait 60 seconds before treating as unmatched
-        if file_age < 60:
-            continue
-
-        dst = os.path.join(UNMATCHED_PATH_STR, file)
-
-        try:
-            shutil.move(src, dst)
-            print(f"[UNMATCHED] {file} -> unmatched")
-        except Exception as e:
-            print(f"[ERROR] unmatched {file}: {e}")
+    return
 
 
 def process_single_file(filepath):
@@ -751,7 +703,7 @@ def process_single_file(filepath):
     if not extracted:
         extracted = extract_order_number_from_eml(filepath)
     if not extracted:
-        print(f"[WATCHER] No order number extracted from {basename}")
+        print(f"[MATCH] NO MATCH FOUND: no order number extracted from {basename}")
         return False
 
     orders = _fetch_orders_for_matching()
@@ -801,6 +753,7 @@ def process_single_file(filepath):
         matched_folder = folder_path
         matched_api_num = row_number
         matched_order = order
+        print(f"[MATCH] MATCH FOUND: {matched_api_num}")
         break
 
     key = filepath
@@ -813,6 +766,7 @@ def process_single_file(filepath):
     last_match_state[key] = order_found
 
     if not order_found or not matched_folder:
+        print(f"[MATCH] NO MATCH FOUND: {extracted_norm}")
         return False
 
     return move_eml_to_order_folder(filepath, matched_folder, basename, matched_order)

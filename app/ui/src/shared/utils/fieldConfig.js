@@ -260,6 +260,62 @@ export function saveColumnOrder(order) {
   localStorage.setItem(COL_ORDER_KEY, JSON.stringify(order));
 }
 
+// ── Print column visibility ────────────────────────────────────────────────
+const PRINT_CONFIG_KEY = "spaila_print_config";
+
+function defaultPrintColumns() {
+  return Object.fromEntries(ALL_COLUMN_KEYS.map((key) => [key, true]));
+}
+
+function defaultPrintWrap() {
+  return Object.fromEntries(ALL_COLUMN_KEYS.map((key) => [key, key === "order_info"]));
+}
+
+export function defaultPrintConfig() {
+  return {
+    columns: defaultPrintColumns(),
+    wrap: defaultPrintWrap(),
+    orientation: "portrait",
+  };
+}
+
+export function loadPrintConfig() {
+  const defaults = defaultPrintConfig();
+  try {
+    const raw = localStorage.getItem(PRINT_CONFIG_KEY);
+    if (!raw) return defaults;
+    const saved = JSON.parse(raw);
+    const savedColumns = saved?.columns && typeof saved.columns === "object"
+      ? saved.columns
+      : saved;
+    return {
+      columns: Object.fromEntries(
+        ALL_COLUMN_KEYS.map((key) => [key, savedColumns?.[key] !== false])
+      ),
+      wrap: Object.fromEntries(
+        ALL_COLUMN_KEYS.map((key) => [key, saved?.wrap?.[key] ?? defaults.wrap[key]])
+      ),
+      orientation: saved?.orientation === "landscape" ? "landscape" : "portrait",
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+export function savePrintConfig(config) {
+  const payload = {
+    columns: Object.fromEntries(
+      ALL_COLUMN_KEYS.map((key) => [key, config?.columns?.[key] !== false])
+    ),
+    wrap: Object.fromEntries(
+      ALL_COLUMN_KEYS.map((key) => [key, !!config?.wrap?.[key]])
+    ),
+    orientation: config?.orientation === "landscape" ? "landscape" : "portrait",
+  };
+  localStorage.setItem(PRINT_CONFIG_KEY, JSON.stringify(payload));
+  window.dispatchEvent(new CustomEvent("spaila:printconfig"));
+}
+
 // ── Parser field order ────────────────────────────────────────────────────
 const PARSER_FIELD_ORDER_KEY = "spaila_parser_field_order";
 
@@ -454,6 +510,11 @@ export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
   saveFolder:    "",   // absolute path chosen by user for manual saves/exports
   showEmailIcon: true, // show ✉ icon in buyer_name cells
+  smtpEmailAddress: "",
+  smtpHost: "",
+  smtpPort: "587",
+  smtpUsername: "",
+  smtpPassword: "",
 };
 
 export function loadShopConfig() {
@@ -545,20 +606,202 @@ export function selectEmailTemplate(templates, row) {
   return templates.find((t) => !t.condition) ?? templates[templates.length - 1];
 }
 
-/** Replace {field} tokens in a string. Returns { text, warnings }.
- *  Pass an optional labelMap (key → displayName) so warnings use human-readable names. */
-export function renderEmailTemplate(tmpl, row, labelMap = {}) {
-  const warnings = [];
-  const text = tmpl.replace(/\{(\w+)\}/g, (_match, key) => {
-    const v = row[key];
-    if (v === null || v === undefined || v === "") {
+export function normalizeFieldValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function stripHtml(value) {
+  return String(value ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+}
+
+function normalizeUrlValue(value) {
+  let raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  raw = raw
+    .replace(/[\r\n\t]+/g, "")
+    .replace(/\s+/g, "")
+    .replace(/^[<({"'\[]+/, "")
+    .replace(/[>)}"'\],.;:!?]+$/, "");
+  if (!raw) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    return raw;
+  }
+  if (/^(www\.)/i.test(raw) || /^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(raw)) {
+    return `https://${raw.replace(/^\/+/, "")}`;
+  }
+  return raw;
+}
+
+function looksLikeUrl(value) {
+  const normalized = normalizeFieldValue(value);
+  if (!normalized) {
+    return false;
+  }
+  return /^https?:\/\//i.test(normalized)
+    || /^(www\.)/i.test(normalized)
+    || /^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(normalized);
+}
+
+function replaceTemplateVariables(tmpl, row, labelMap, warnings) {
+  return String(tmpl || "").replace(/\{(\w+)\}/g, (_match, key) => {
+    const raw = normalizeFieldValue(row[key]);
+    if (!raw) {
       const label = labelMap[key] || key;
       warnings.push(`Missing "${label}"`);
       return "";
     }
-    return String(v);
+    return looksLikeUrl(raw) ? normalizeUrlValue(raw) : raw;
   });
+}
+
+function convertAnchorsToPlainText(text) {
+  return String(text || "").replace(/<a\b[^>]*href\s*=\s*(["'])(.*?)\1[^>]*>(.*?)<\/a>/gis, (_match, _quote, href, label) => {
+    const normalizedHref = normalizeUrlValue(stripHtml(href));
+    const labelText = normalizeFieldValue(stripHtml(label));
+    if (!normalizedHref) {
+      return labelText;
+    }
+    if (!labelText || labelText === normalizedHref) {
+      return normalizedHref;
+    }
+    return `${labelText}: ${normalizedHref}`;
+  });
+}
+
+function convertAnchorsToPreviewHtml(text) {
+  return String(text || "").replace(/<a\b[^>]*href\s*=\s*(["'])(.*?)\1[^>]*>(.*?)<\/a>/gis, (_match, _quote, href, label) => {
+    const normalizedHref = normalizeUrlValue(stripHtml(href));
+    const labelText = normalizeFieldValue(stripHtml(label)) || normalizedHref;
+    if (!normalizedHref) {
+      return escapeHtml(labelText);
+    }
+    return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noreferrer">${escapeHtml(labelText)}</a>`;
+  });
+}
+
+function normalizeEmailTemplateText(text) {
+  return String(text || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<p\b[^>]*>/gi, "")
+    .replace(/<div\b[^>]*>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatPlainTextLinks(text) {
+  const urlPattern = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+  const sourceLines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const output = [];
+
+  function lastNonEmptyLine() {
+    for (let index = output.length - 1; index >= 0; index -= 1) {
+      const value = String(output[index] || "").trim();
+      if (value) {
+        return value;
+      }
+    }
+    return "";
+  }
+
+  for (const rawLine of sourceLines) {
+    const line = String(rawLine || "").replace(/[ \t]+$/g, "");
+    const matches = [...line.matchAll(urlPattern)];
+    if (!matches.length) {
+      output.push(line);
+      continue;
+    }
+
+    const trimmedLine = line.trim();
+    if (matches.length === 1 && trimmedLine === matches[0][0]) {
+      const normalizedUrl = normalizeUrlValue(matches[0][0]);
+      if (!normalizedUrl) {
+        output.push(line);
+        continue;
+      }
+      const priorLabel = lastNonEmptyLine();
+      if (!priorLabel || /^(https?:\/\/|www\.)/i.test(priorLabel)) {
+        if (output.length && output[output.length - 1] !== "") {
+          output.push("");
+        }
+        output.push("View here:");
+        output.push("");
+      } else if (output.length && output[output.length - 1] !== "") {
+        output.push("");
+      }
+      output.push(normalizedUrl);
+      continue;
+    }
+
+    for (let index = 0; index < matches.length; index += 1) {
+      const match = matches[index];
+      const nextMatch = matches[index + 1];
+      const rawUrl = match[0];
+      const normalizedUrl = normalizeUrlValue(rawUrl);
+      if (!normalizedUrl) {
+        continue;
+      }
+      const before = line.slice(index === 0 ? 0 : matches[index - 1].index + matches[index - 1][0].length, match.index).trim();
+      const after = line.slice(match.index + rawUrl.length, nextMatch ? nextMatch.index : line.length).trim();
+      const label = normalizeFieldValue([before, after].filter(Boolean).join(" ")) || "View here:";
+      if (output.length && output[output.length - 1] !== "") {
+        output.push("");
+      }
+      output.push(label);
+      output.push("");
+      output.push(normalizedUrl);
+    }
+  }
+
+  return output
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Replace {field} tokens in a string. Returns { text, warnings }.
+ *  Pass an optional labelMap (key → displayName) so warnings use human-readable names. */
+export function renderEmailTemplate(tmpl, row, labelMap = {}) {
+  const warnings = [];
+  const withValues = replaceTemplateVariables(tmpl, row, labelMap, warnings);
+  const text = formatPlainTextLinks(
+    normalizeEmailTemplateText(convertAnchorsToPlainText(withValues)),
+  );
   return { text, warnings };
+}
+
+export function renderEmailTemplatePreviewHtml(tmpl, row, labelMap = {}) {
+  const warnings = [];
+  const withValues = replaceTemplateVariables(tmpl, row, labelMap, warnings);
+  const html = convertAnchorsToPreviewHtml(withValues)
+    .replace(/\r?\n/g, "<br />");
+  return { html, warnings };
 }
 
 /** All field keys usable as {variables} in templates. */

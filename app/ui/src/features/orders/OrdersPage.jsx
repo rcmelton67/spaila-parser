@@ -15,12 +15,9 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import EditOrderModal from "./EditOrderModal.jsx";
-import SettingsModal from "../../settings/SettingsModal.jsx";
+import AppHeader from "../../shared/components/AppHeader.jsx";
 import {
   loadFieldConfig,
-  loadColumnOrder,
-  saveColumnOrder,
-  defaultColumnOrder,
   loadPriceList,
   matchPriceRule,
   PRICE_TYPE_FIELD_KEY,
@@ -28,36 +25,19 @@ import {
   loadStatusConfig,
   loadOrderStatuses,
   setOrderStatus,
-  loadViewConfig,
   loadDateConfig,
   DATE_FIELD_KEYS,
   formatDate,
-  generateDateVariants,
   loadEmailTemplates,
   selectEmailTemplate,
   renderEmailTemplate,
   loadShopConfig,
   loadDocumentsConfig,
+  loadPrintConfig,
+  loadViewConfig,
 } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
-
-const tabStyle = {
-  padding: "6px 14px",
-  border: "1px solid #ccc",
-  background: "#eee",
-  borderRadius: "4px",
-  cursor: "pointer",
-  fontSize: "13px",
-};
-
-const tabStyleActive = {
-  ...tabStyle,
-  background: "#fff",
-  borderBottom: "2px solid #2563eb",
-  fontWeight: "bold",
-  color: "#2563eb",
-};
 
 const primaryButton = {
   padding: "6px 14px",
@@ -84,7 +64,7 @@ function normalizePlatform(raw) {
 
 const PLATFORM_LABELS = { website: "Website", shopify: "Shopify", unknown: null };
 
-function OrderInfoCell({ row }) {
+function getOrderInfoBadges(row) {
   // order_context falls back to the row itself for single-item orders
   const ctx = row;
   const badges = [];
@@ -115,6 +95,12 @@ function OrderInfoCell({ row }) {
     badges.push({ key: "wrap", label: "Wrapped", bg: "#faf5ff", color: "#6b21a8" });
   }
 
+  return badges;
+}
+
+function OrderInfoCell({ row }) {
+  const badges = getOrderInfoBadges(row);
+
   if (!badges.length) {
     return <span style={{ color: "#bbb" }}>—</span>;
   }
@@ -133,8 +119,336 @@ function OrderInfoCell({ row }) {
   );
 }
 
+function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, canSendEmail }) {
+  if (!dock) return null;
+  const [currentSubject, setCurrentSubject] = React.useState(dock.currentSubject ?? dock.originalSubject ?? dock.subject ?? "");
+  const [currentBody, setCurrentBody] = React.useState(dock.currentBody ?? dock.originalBody ?? dock.body ?? "");
+  const [subjectFocused, setSubjectFocused] = React.useState(false);
+  const [sendState, setSendState] = React.useState({ sending: false, error: "", success: "" });
+  const noteWarnings = (dock.warnings || []).filter((warning) => !/^Multiple attachments found/i.test(String(warning || "")));
+  const originalSubject = dock.originalSubject ?? dock.subject ?? "";
+  const originalBody = dock.originalBody ?? dock.body ?? "";
+  const isCustomMessage = currentSubject === "" && currentBody === "";
+  const isEdited = !isCustomMessage && (currentSubject !== originalSubject || currentBody !== originalBody);
+  const editStateLabel = isCustomMessage ? "Custom message" : (isEdited ? "Edited" : "");
+
+  React.useEffect(() => {
+    setCurrentSubject(dock.currentSubject ?? dock.originalSubject ?? dock.subject ?? "");
+    setCurrentBody(dock.currentBody ?? dock.originalBody ?? dock.body ?? "");
+    setSubjectFocused(false);
+    setSendState({ sending: false, error: "", success: "" });
+  }, [dock]);
+
+  async function handleSend() {
+    if (!canSendEmail) {
+      setSendState({ sending: false, error: "SMTP account info is missing in Settings.", success: "" });
+      return;
+    }
+    if (!String(dock.to || "").trim()) {
+      setSendState({ sending: false, error: "Recipient is required.", success: "" });
+      return;
+    }
+    if (!String(currentSubject || "").trim()) {
+      setSendState({ sending: false, error: "Subject is required.", success: "" });
+      return;
+    }
+    if (!String(currentBody || "").trim()) {
+      setSendState({ sending: false, error: "Body is required.", success: "" });
+      return;
+    }
+    setSendState({ sending: true, error: "", success: "" });
+    try {
+      const result = await onSendEmail?.({ subject: currentSubject, body: currentBody });
+      if (result?.ok) {
+        setSendState({ sending: false, error: "", success: "Email sent" });
+      } else {
+        setSendState({ sending: false, error: result?.error || "Could not send email.", success: "" });
+      }
+    } catch (error) {
+      setSendState({ sending: false, error: error?.message || "Could not send email.", success: "" });
+    }
+  }
+
+  return (
+    <div style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(15, 23, 42, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 100000,
+      padding: 24,
+    }}>
+      <div style={{
+        width: "min(980px, 100%)",
+        maxHeight: "92vh",
+        overflow: "auto",
+        background: "#ffffff",
+        borderRadius: 16,
+        boxShadow: "0 24px 60px rgba(15, 23, 42, 0.28)",
+        border: "1px solid #dbe2ea",
+      }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", lineHeight: 1.2 }}>Mail Dock</div>
+            <div style={{ marginTop: 2, fontSize: 11, color: "#64748b", lineHeight: 1.3 }}>
+              Review the composed email before opening your mail app.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#64748b" }}>✕</button>
+        </div>
+
+        <div style={{ padding: 16, display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>To</div>
+              <div style={{ marginTop: 3, fontSize: 14, color: "#0f172a", lineHeight: 1.3 }}>{dock.to || "No recipient"}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Subject</div>
+              <input
+                value={currentSubject}
+                onChange={(event) => setCurrentSubject(event.target.value)}
+                onFocus={() => setSubjectFocused(true)}
+                onBlur={() => setSubjectFocused(false)}
+                placeholder="No subject"
+                style={{
+                  marginTop: 4,
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "8px 11px",
+                  border: `1px solid ${subjectFocused ? "#2563eb" : "#d1d5db"}`,
+                  borderRadius: 10,
+                  fontSize: 13,
+                  color: "#0f172a",
+                  background: "#fff",
+                  outline: "none",
+                  boxShadow: subjectFocused ? "0 0 0 3px rgba(37, 99, 235, 0.12)" : "none",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => setCurrentSubject("")}
+                  style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", borderRadius: 10, padding: "7px 11px", cursor: "pointer", fontWeight: 600, fontSize: 13 }}
+                >
+                  Clear Subject
+                </button>
+                <button
+                  onClick={() => setCurrentBody("")}
+                  style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", borderRadius: 10, padding: "7px 11px", cursor: "pointer", fontWeight: 600, fontSize: 13 }}
+                >
+                  Clear Body
+                </button>
+                <button
+                  onClick={() => {
+                    setCurrentSubject(originalSubject);
+                    setCurrentBody(originalBody);
+                  }}
+                  style={{ border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a", borderRadius: 10, padding: "7px 11px", cursor: "pointer", fontWeight: 600, fontSize: 13 }}
+                >
+                  Reload Template
+                </button>
+              </div>
+              {editStateLabel ? (
+                <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
+                  {editStateLabel}
+                </div>
+              ) : null}
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Body</div>
+                {editStateLabel ? (
+                  <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
+                    {editStateLabel}
+                  </div>
+                ) : null}
+              </div>
+              <textarea
+                value={currentBody}
+                onChange={(event) => setCurrentBody(event.target.value)}
+                placeholder="Compose your email"
+                style={{
+                  marginTop: 4,
+                  width: "100%",
+                  minHeight: 320,
+                  boxSizing: "border-box",
+                  padding: 12,
+                  background: "#f8fafc",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 12,
+                  whiteSpace: "pre-wrap",
+                  fontSize: 12.5,
+                  lineHeight: 1.5,
+                  color: "#0f172a",
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.6fr) minmax(260px, 1fr) auto", gap: 12, alignItems: "stretch" }}>
+            <div style={{ padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Attachments ({dock.attachmentPaths?.length || 0})
+              </div>
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: "4px 12px", alignItems: "center" }}>
+                {dock.attachmentPaths?.length ? dock.attachmentPaths.map((filePath) => (
+                  <div key={filePath} style={{ fontSize: 13, color: "#0f172a" }}>
+                    {String(filePath).split(/[/\\]/).pop()}
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 13, color: "#0f172a" }}>No attachments ready.</div>
+                )}
+              </div>
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 11, color: "#64748b" }}>
+                <div>{dock.attachmentSourceLabel || "Source: Order Folder"}</div>
+                {dock.environment?.attachmentCapability === "Manual" ? (
+                  <div>Attach manually</div>
+                ) : null}
+              </div>
+            </div>
+
+            <div style={{ padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Environment
+              </div>
+              <div style={{ marginTop: 8, fontSize: 13, color: "#0f172a" }}>
+                {dock.environment?.os || "Unknown"} • {dock.environment?.emailClient || "Unknown"}
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: "#64748b" }}>
+                Attachments: {dock.environment?.attachmentCapability || "Manual"}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, paddingLeft: 4 }}>
+              <button
+                onClick={handleSend}
+                disabled={sendState.sending || !canSendEmail}
+                style={{ border: "none", background: (sendState.sending || !canSendEmail) ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: (sendState.sending || !canSendEmail) ? "default" : "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", opacity: canSendEmail ? 1 : 0.55 }}
+              >
+                {sendState.sending ? "Sending..." : "Send"}
+              </button>
+              <button onClick={onOpenFolder} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "8px 13px", cursor: "pointer", fontWeight: 600, fontSize: 13, whiteSpace: "nowrap" }}>
+                Open Attachment Folder
+              </button>
+              <button onClick={onClose} style={{ border: "1px solid #e2e8f0", background: "#f8fafc", color: "#475569", borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontWeight: 500, fontSize: 13, whiteSpace: "nowrap" }}>
+                Close
+              </button>
+              <button
+                onClick={() => onOpenEmail?.({ subject: currentSubject, body: currentBody })}
+                style={{ border: "none", background: "#2563eb", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, boxShadow: "0 10px 24px rgba(37, 99, 235, 0.22)", whiteSpace: "nowrap" }}
+              >
+                Open Email App
+              </button>
+            </div>
+          </div>
+
+          {sendState.error ? (
+            <div style={{ fontSize: 12, color: "#b91c1c" }}>{sendState.error}</div>
+          ) : null}
+          {sendState.success ? (
+            <div style={{ fontSize: 12, color: "#047857" }}>✔ {sendState.success}</div>
+          ) : null}
+
+          {noteWarnings.length ? (
+            <div style={{ padding: 12, borderRadius: 12, background: "#1e293b", color: "#fff" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>Notes</div>
+              <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                {noteWarnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} style={{ fontSize: 12, color: "#fbbf24" }}>• {warning}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function isCompletedOrder(row) {
+  return row.item_status
+    ? row.item_status === "completed"
+    : row.status === "completed" || row.status === "done";
+}
+
+function parseNumericValue(value) {
+  const normalized = String(value ?? "").replace(/[^0-9.-]/g, "");
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseDateValue(value) {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeSortConfig(sort) {
+  return {
+    field: sort?.field || "order_date",
+    direction: sort?.direction === "asc" ? "asc" : "desc",
+  };
+}
+
+function compareSortValues(aValue, bValue, direction) {
+  if (aValue == null && bValue == null) return 0;
+  if (aValue == null) return 1;
+  if (bValue == null) return -1;
+  if (aValue < bValue) return direction === "asc" ? -1 : 1;
+  if (aValue > bValue) return direction === "asc" ? 1 : -1;
+  return 0;
+}
+
+function getRowSortValue(row, field, { statusConfig, orderStatuses }) {
+  if (!field) {
+    return null;
+  }
+
+  switch (field) {
+    case "status": {
+      const statusKey = orderStatuses[String(row.id)] ?? "";
+      const statusLabel = statusConfig.states.find((state) => state.key === statusKey)?.label || "";
+      return statusLabel ? statusLabel.toLowerCase() : null;
+    }
+    case "order_info": {
+      const badges = getOrderInfoBadges(row).map((badge) => badge.label).join(" ");
+      return badges ? badges.toLowerCase() : null;
+    }
+    case "price":
+    case "quantity":
+      return parseNumericValue(row[field]);
+    case "order_date":
+    case "ship_by":
+      return parseDateValue(row[field]);
+    default: {
+      const value = row[field];
+      if (value == null || value === "") {
+        return null;
+      }
+      return String(value).toLowerCase();
+    }
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 /* ── Draggable column header ────────────────────────────────────────────── */
-function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isExcluded, onToggleExclusion, searchActive }) {
+function SortableHeader({ col, width, fontSize, onStartResize, activeSort, onOpenMenu }) {
   const {
     attributes,
     listeners,
@@ -143,14 +457,18 @@ function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isE
     transition,
     isDragging,
   } = useSortable({ id: col.key });
+  const isSorted = activeSort.field === col.key;
+  const sortIndicator = isSorted ? (activeSort.direction === "asc" ? "↑" : "↓") : "";
 
   return (
     <th
       ref={setNodeRef}
+      onContextMenu={(e) => onOpenMenu(e, col)}
       style={{
         width,
         minWidth: width,
         maxWidth: width,
+        top: -17,
         padding: "5px 7px",
         textAlign: "left",
         fontWeight: 600,
@@ -159,17 +477,18 @@ function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isE
         letterSpacing: "0.04em",
         textTransform: "uppercase",
         border: "1px solid #ccc",
-        position: "relative",
+        background: isDragging ? "#dbeafe" : "#e5e5e5",
+        position: "sticky",
         userSelect: "none",
         whiteSpace: "normal",
         wordBreak: "break-word",
         overflow: "hidden",
-        background: isDragging ? "#dbeafe" : undefined,
-        opacity: isDragging ? 0.85 : isExcluded ? 0.45 : 1,
+        opacity: isDragging ? 0.85 : 1,
         transform: CSS.Transform.toString(transform),
         transition: transition ?? "transform 200ms ease",
-        zIndex: isDragging ? 10 : undefined,
+        zIndex: isDragging ? 12 : 4,
         boxSizing: "border-box",
+        boxShadow: "inset 0 -1px 0 #d1d5db",
       }}
       {...attributes}
     >
@@ -181,41 +500,13 @@ function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isE
           display: "block",
           whiteSpace: "normal",
           wordBreak: "break-word",
-          paddingRight: (isSearchable && searchActive) ? "20px" : "8px",
+          paddingRight: "8px",
         }}
         title={`Drag to reorder — ${col.label}`}
       >
-        {col.label}
+        <span>{col.label}</span>
+        {sortIndicator ? <span style={{ marginLeft: "6px", color: "#2563eb" }}>{sortIndicator}</span> : null}
       </span>
-
-      {/* Search-exclusion toggle — only while search is active */}
-      {isSearchable && searchActive && (
-        <button
-          onMouseDown={(e) => e.stopPropagation()} // don't start drag
-          onClick={(e) => { e.stopPropagation(); onToggleExclusion(col.key); }}
-          title={isExcluded ? `Re-include "${col.label}" in search` : `Exclude "${col.label}" from search`}
-          style={{
-            position: "absolute",
-            top: "50%",
-            right: "6px",
-            transform: "translateY(-50%)",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "2px",
-            lineHeight: 1,
-            fontSize: "10px",
-            color: isExcluded ? "#9ca3af" : "#aab",
-            opacity: isExcluded ? 1 : 0.55,
-            borderRadius: "3px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {isExcluded ? "↺" : "✕"}
-        </button>
-      )}
 
       {/* Column resize handle */}
       <div
@@ -235,22 +526,14 @@ function SortableHeader({ col, width, fontSize, onStartResize, isSearchable, isE
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-export default function OrdersPage({ onImport, refreshKey }) {
+export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, isActive, onCountsChange }) {
   const [rows, setRows] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
-  const [tab, setTab] = React.useState("active");
-  const [search, setSearch] = React.useState("");
-  const [activeSearchExclusions, setActiveSearchExclusions] = React.useState([]);
-
-  function toggleExclusion(key) {
-    setActiveSearchExclusions((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
-    );
-  }
-  function clearExclusions() { setActiveSearchExclusions([]); }
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [viewConfig, setViewConfig] = React.useState(() => loadViewConfig());
+  const [activeSort, setActiveSort] = React.useState(() => normalizeSortConfig(loadViewConfig().defaultSort));
   const [editingOrder, setEditingOrder] = React.useState(null);
-  const [showSettings, setShowSettings] = React.useState(false);
 
   // Dirty flag — false on startup, true only after something changes this session
   const [sessionDirty, setSessionDirty] = React.useState(false);
@@ -261,11 +544,34 @@ export default function OrdersPage({ onImport, refreshKey }) {
     setSessionDirty(true);
   }, [refreshKey]);
   const [emailToast, setEmailToast] = React.useState(null); // { warnings: string[] }
+  const [mailDock, setMailDock] = React.useState(null);
+  const [mailDockLoadingId, setMailDockLoadingId] = React.useState("");
+  const [emailEnvironment, setEmailEnvironment] = React.useState({ os: "Unknown", emailClient: "Default Email App", attachmentCapability: "Manual" });
   const [emailTemplates, setEmailTemplates] = React.useState(() => loadEmailTemplates());
   React.useEffect(() => {
     function onTpl() { setEmailTemplates(loadEmailTemplates()); }
     window.addEventListener("spaila:emailtemplates", onTpl);
     return () => window.removeEventListener("spaila:emailtemplates", onTpl);
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.parserApp?.getEmailEnvironment?.()
+      .then((info) => {
+        if (!cancelled && info) {
+          const nextEnvironment = {
+            os: info.os || "Unknown",
+            emailClient: info.emailClient || "Default Email App",
+            attachmentCapability: info.attachmentCapability || "Manual",
+          };
+          setEmailEnvironment(nextEnvironment);
+          setMailDock((current) => current ? { ...current, environment: nextEnvironment } : current);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const [shopConfig, setShopConfig] = React.useState(() => loadShopConfig());
@@ -288,12 +594,27 @@ export default function OrdersPage({ onImport, refreshKey }) {
     window.parserApp?.setTitle?.(name);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const smtpConfigured = !!(
+    String(shopConfig?.smtpEmailAddress || "").trim()
+    && String(shopConfig?.smtpHost || "").trim()
+    && String(shopConfig?.smtpPort || "").trim()
+    && String(shopConfig?.smtpUsername || "").trim()
+    && String(shopConfig?.smtpPassword || "").trim()
+  );
+
   // Documents config (letterhead path + text position)
   const [documentsConfig, setDocumentsConfig] = React.useState(() => loadDocumentsConfig());
   React.useEffect(() => {
     function onDocs() { setDocumentsConfig(loadDocumentsConfig()); }
     window.addEventListener("spaila:documentsconfig", onDocs);
     return () => window.removeEventListener("spaila:documentsconfig", onDocs);
+  }, []);
+
+  const [printConfig, setPrintConfig] = React.useState(() => loadPrintConfig());
+  React.useEffect(() => {
+    function onPrintConfig() { setPrintConfig(loadPrintConfig()); }
+    window.addEventListener("spaila:printconfig", onPrintConfig);
+    return () => window.removeEventListener("spaila:printconfig", onPrintConfig);
   }, []);
 
   const [giftLetterToast, setGiftLetterToast] = React.useState(null); // { error?: string }
@@ -369,14 +690,6 @@ export default function OrdersPage({ onImport, refreshKey }) {
     return () => window.removeEventListener("spaila:statusconfig", onStatusChange);
   }, []);
 
-  // View config — search fields, sort, visibility
-  const [viewConfig, setViewConfig] = React.useState(() => loadViewConfig());
-  React.useEffect(() => {
-    function onViewChange() { setViewConfig(loadViewConfig()); }
-    window.addEventListener("spaila:viewconfig", onViewChange);
-    return () => window.removeEventListener("spaila:viewconfig", onViewChange);
-  }, []);
-
   // Date config — display format, showYear, flexibleSearch
   const [dateConfig, setDateConfig] = React.useState(() => loadDateConfig());
   React.useEffect(() => {
@@ -384,6 +697,14 @@ export default function OrdersPage({ onImport, refreshKey }) {
     window.addEventListener("spaila:dateconfig", onDateChange);
     return () => window.removeEventListener("spaila:dateconfig", onDateChange);
   }, []);
+  React.useEffect(() => {
+    function onViewConfigChange() { setViewConfig(loadViewConfig()); }
+    window.addEventListener("spaila:viewconfig", onViewConfigChange);
+    return () => window.removeEventListener("spaila:viewconfig", onViewConfigChange);
+  }, []);
+  React.useEffect(() => {
+    setActiveSort(normalizeSortConfig(viewConfig.defaultSort));
+  }, [viewConfig.defaultSort?.field, viewConfig.defaultSort?.direction]);
 
   function handleSetStatus(orderId, statusKey) {
     setOrderStatus(orderId, statusKey);
@@ -391,12 +712,8 @@ export default function OrdersPage({ onImport, refreshKey }) {
     setSessionDirty(true);
   }
 
-  // Column order — single source of truth for both table and Settings
-  const [columnOrder, setColumnOrder] = React.useState(() => loadColumnOrder());
-
   function updateColumnOrder(next) {
-    setColumnOrder(next);
-    saveColumnOrder(next);
+    onColumnOrderChange(next);
   }
 
   // Build field lookup map: key → { label, visibleInOrders, defaultWidth }
@@ -433,6 +750,24 @@ export default function OrdersPage({ onImport, refreshKey }) {
         }),
     [columnOrder, fieldMap, statusConfig]
   );
+  const sortFieldOptions = React.useMemo(() => {
+    const preferredKeys = new Set(["order_date", "ship_by", "buyer_name", "order_number", "price"]);
+    const options = fieldConfig
+      .filter((field) => field.visibleInOrders || preferredKeys.has(field.key))
+      .map((field) => ({ key: field.key, label: field.label }));
+    if (activeSort.field && !options.some((option) => option.key === activeSort.field)) {
+      options.unshift({
+        key: activeSort.field,
+        label:
+          activeSort.field === "status"
+            ? (statusConfig.columnLabel || "Status")
+            : activeSort.field === "order_info"
+              ? "Order Info"
+              : (fieldMap[activeSort.field]?.label ?? activeSort.field),
+      });
+    }
+    return options;
+  }, [activeSort.field, fieldConfig, fieldMap, statusConfig.columnLabel]);
 
   // DnD sensors — require 6px movement to start drag (avoids accidental drags on click)
   const sensors = useSensors(
@@ -449,6 +784,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
   }
 
   const [contextMenu, setContextMenu] = React.useState({ visible: false, x: 0, y: 0, row: null });
+  const [headerMenu, setHeaderMenu] = React.useState({ visible: false, x: 0, y: 0, column: null });
   const [confirmDelete, setConfirmDelete] = React.useState({ open: false, rows: [] });
   const [selectedIds, setSelectedIds] = React.useState(new Set());
 
@@ -474,6 +810,101 @@ export default function OrdersPage({ onImport, refreshKey }) {
       return defaults;
     }
   });
+  const colWidthsRef = React.useRef(colWidths);
+  React.useEffect(() => {
+    colWidthsRef.current = colWidths;
+  }, [colWidths]);
+  const safeOrders = rows || [];
+  console.log("orders:", safeOrders);
+
+  const getDisplayedCellValue = React.useCallback((row, columnKey) => {
+    if (columnKey === "status") {
+      const currentKey = orderStatuses[String(row.id)] ?? "";
+      return statusConfig.states.find((s) => s.key === currentKey)?.label || "";
+    }
+
+    if (columnKey === "order_info") {
+      const badges = getOrderInfoBadges(row);
+      return badges.length ? badges.map((badge) => badge.label).join(", ") : "—";
+    }
+
+    let displayValue = DATE_FIELD_KEYS.has(columnKey)
+      ? formatDate(row[columnKey], dateConfig)
+      : row[columnKey];
+
+    if (columnKey === PRICE_TYPE_FIELD_KEY && !displayValue) {
+      const priceRule = matchPriceRule(row.price, priceList);
+      if (priceRule?.typeValue) {
+        displayValue = priceRule.typeValue;
+      }
+    }
+
+    return displayValue ?? "";
+  }, [dateConfig, orderStatuses, priceList, statusConfig.states]);
+
+  const getPrintCellPresentation = React.useCallback((row, columnKey) => {
+    const text = getDisplayedCellValue(row, columnKey) || "—";
+
+    if (columnKey === "status") {
+      const currentKey = orderStatuses[String(row.id)] ?? "";
+      const currentState = statusConfig.states.find((s) => s.key === currentKey);
+      const bg = currentState?.color || null;
+      return {
+        text,
+        bg,
+        color: bg ? contrastColor(bg) : (text === "—" ? "#9ca3af" : "#111827"),
+        fontStyle: undefined,
+      };
+    }
+
+    if (columnKey === "order_info") {
+      return {
+        text,
+        bg: null,
+        color: text === "—" ? "#9ca3af" : "#111827",
+        fontStyle: undefined,
+      };
+    }
+
+    const fMeta = fieldMap[columnKey];
+    const priceRule = matchPriceRule(row.price, priceList);
+    const paletteBg = priceRule && fMeta?.paletteEnabled ? priceRule.color : null;
+    const hl = fMeta?.highlight;
+    const rawValue = row[columnKey];
+    const highlightBg = !paletteBg && hl?.enabled && hl?.color && rawValue ? hl.color : null;
+    const bg = paletteBg || highlightBg || null;
+    const displayValue = getDisplayedCellValue(row, columnKey);
+
+    return {
+      text,
+      bg,
+      color: bg ? contrastColor(bg) : (displayValue ? "#111827" : "#9ca3af"),
+      fontStyle: !rawValue && columnKey === PRICE_TYPE_FIELD_KEY && priceRule?.typeValue ? "italic" : undefined,
+    };
+  }, [fieldMap, getDisplayedCellValue, orderStatuses, priceList, statusConfig.states]);
+
+  const getRowSearchValues = React.useCallback((row) => {
+    const dateStrings = [row.order_date, row.ship_by]
+      .flatMap((value) => [value, formatDate(value, dateConfig)])
+      .filter(Boolean);
+
+    return [
+      row.buyer_name,
+      row.order_number,
+      row.pet_name,
+      row.notes,
+      row.order_notes,
+      row.custom_1,
+      row.custom_2,
+      row.custom_3,
+      row.custom_4,
+      row.custom_5,
+      row.custom_6,
+      ...dateStrings,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+  }, [dateConfig]);
 
   function toggleRow(id) {
     setSelectedIds((prev) => {
@@ -484,10 +915,10 @@ export default function OrdersPage({ onImport, refreshKey }) {
   }
 
   function toggleAll() {
-    if (selectedIds.size === filtered.length && filtered.length > 0) {
+    if (selectedIds.size === displayOrders.length && displayOrders.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filtered.map((r) => r.id)));
+      setSelectedIds(new Set(displayOrders.map((r) => r.id)));
     }
   }
 
@@ -495,61 +926,141 @@ export default function OrdersPage({ onImport, refreshKey }) {
     setContextMenu((m) => ({ ...m, visible: false, row: null }));
   }
 
+  function closeHeaderMenu() {
+    setHeaderMenu((m) => ({ ...m, visible: false, column: null }));
+  }
+
   function handleContextMenu(e, row) {
     e.preventDefault();
+    closeHeaderMenu();
     setContextMenu({ visible: true, x: e.clientX, y: e.clientY, row });
+  }
+
+  function handleHeaderContextMenu(e, column) {
+    e.preventDefault();
+    e.stopPropagation();
+    closeContextMenu();
+    setHeaderMenu({ visible: true, x: e.clientX, y: e.clientY, column });
+  }
+
+  function applySort(field, direction) {
+    setActiveSort(normalizeSortConfig({ field, direction }));
+  }
+
+  function resetSortToDefault() {
+    applySort(viewConfig.defaultSort?.field, viewConfig.defaultSort?.direction);
   }
 
   function getTargetRows() {
     const { row } = contextMenu;
     if (!row) return [];
     if (selectedIds.has(row.id) && selectedIds.size > 1) {
-      return filtered.filter((r) => selectedIds.has(r.id));
+      return displayOrders.filter((r) => selectedIds.has(r.id));
     }
     return [row];
   }
 
   async function handleComposeEmail(row) {
+    setMailDockLoadingId(row.id);
     const warnings = [];
-    // Build label map from current fieldConfig so warnings show user-defined names
-    const labelMap = Object.fromEntries(fieldConfig.map((f) => [f.key, f.label]));
-    // Select template
-    const template = selectEmailTemplate(emailTemplates, row);
-    // Render subject + body
-    const { text: subject, warnings: subjectWarnings } = renderEmailTemplate(template.subject_template, row, labelMap);
-    const { text: body,    warnings: bodyWarnings    } = renderEmailTemplate(template.body_template,    row, labelMap);
-    warnings.push(...subjectWarnings, ...bodyWarnings);
-    // Gather attachments
-    let attachmentPaths = [];
-    if (template.attachment_mode !== "none" && row.order_folder_path) {
-      const result = await window.parserApp?.listAttachments?.({
-        folderPath: row.order_folder_path,
+    try {
+      const labelMap = Object.fromEntries(fieldConfig.map((f) => [f.key, f.label]));
+      const template = selectEmailTemplate(emailTemplates, row);
+      const { text: subject, warnings: subjectWarnings } = renderEmailTemplate(template.subject_template, row, labelMap);
+      const { text: body, warnings: bodyWarnings } = renderEmailTemplate(template.body_template, row, labelMap);
+      warnings.push(...subjectWarnings, ...bodyWarnings);
+
+      const attachmentResult = await window.parserApp?.resolveAttachments?.({
+        orderFolderPath: row.order_folder_path || "",
+        sourceEmlPath: row.source_eml_path || "",
         mode: template.attachment_mode,
         extensions: template.attachment_extensions || [],
       });
-      if (result) {
-        attachmentPaths = result.files || [];
-        warnings.push(...(result.warnings || []));
+      const attachmentPaths = attachmentResult?.files || [];
+      warnings.push(...(attachmentResult?.warnings || []));
+
+      const attachmentSourceLabel = attachmentResult?.source === "order_folder_path"
+        ? "Source: order folder"
+        : attachmentResult?.source === "source_eml_path"
+          ? "Source: source_eml_path"
+          : "";
+      const attachmentFolderPath = attachmentResult?.sourcePath || attachmentPaths[0] || "";
+
+      setMailDock({
+        row,
+        to: row.buyer_email || "",
+        subject,
+        body,
+        originalSubject: subject,
+        originalBody: body,
+        currentSubject: subject,
+        currentBody: body,
+        warnings,
+        attachmentPaths,
+        attachmentSource: attachmentResult?.source || "none",
+        attachmentSourceLabel,
+        attachmentSourcePath: attachmentResult?.sourcePath || "",
+        attachmentFolderPath,
+        environment: emailEnvironment,
+      });
+    } catch (error) {
+      setEmailToast({ warnings: [error.message || "Could not prepare mail dock."] });
+    } finally {
+      setMailDockLoadingId("");
+    }
+  }
+
+  async function handleLaunchMailDock(draft = {}) {
+    if (!mailDock) return;
+    try {
+      const result = await window.parserApp?.composeEmail?.({
+        to: mailDock.to,
+        subject: draft.subject ?? mailDock.currentSubject ?? mailDock.subject,
+        body: draft.body ?? mailDock.currentBody ?? mailDock.body,
+        attachmentFolderPath: mailDock.attachmentFolderPath || mailDock.attachmentSourcePath || "",
+      });
+      if (result?.warning) {
+        setEmailToast({ warnings: [result.warning] });
       }
+    } catch (error) {
+      setEmailToast({ warnings: [error.message || "Could not open email app."] });
     }
-    // Show warnings toast (non-blocking)
-    if (warnings.length) setEmailToast({ warnings });
-    // Open compose
-    const result = await window.parserApp?.composeEmail?.({
-      to: row.buyer_email || "",
-      subject,
-      body,
-      attachmentPaths,
+  }
+
+  async function handleOpenAttachmentFolder() {
+    if (!mailDock) return;
+    const folderPath = mailDock.attachmentFolderPath || mailDock.attachmentSourcePath || "";
+    if (!folderPath) {
+      setEmailToast({ warnings: ["No attachment folder available."] });
+      return;
+    }
+    try {
+      const result = await window.parserApp?.openFolder?.(folderPath);
+      if (!result?.ok) {
+        setEmailToast({ warnings: [result?.error || "Could not open attachment folder."] });
+      }
+    } catch (error) {
+      setEmailToast({ warnings: [error.message || "Could not open attachment folder."] });
+    }
+  }
+
+  async function handleSendDockEmail(draft = {}) {
+    if (!mailDock) return { ok: false, error: "Mail Dock is not ready." };
+    const result = await window.parserApp?.sendDockEmail?.({
+      smtp: {
+        emailAddress: shopConfig?.smtpEmailAddress || "",
+        host: shopConfig?.smtpHost || "",
+        port: shopConfig?.smtpPort || "",
+        username: shopConfig?.smtpUsername || "",
+        password: shopConfig?.smtpPassword || "",
+      },
+      to: mailDock.to,
+      subject: draft.subject ?? mailDock.currentSubject ?? mailDock.subject,
+      body: draft.body ?? mailDock.currentBody ?? mailDock.body,
+      attachmentPaths: mailDock.attachmentPaths || [],
+      orderFolderPath: mailDock.attachmentFolderPath || mailDock.attachmentSourcePath || "",
     });
-    // If mailto fallback was used but attachments existed, add note
-    if (result?.method === "mailto" && result?.attachmentsFallback) {
-      setEmailToast((prev) => ({
-        warnings: [
-          ...(prev?.warnings || []),
-          "Outlook not found — attachments were not included. Install Outlook or add files manually.",
-        ],
-      }));
-    }
+    return result || { ok: false, error: "Could not send email." };
   }
 
   async function handleMoveToCompleted() {
@@ -605,33 +1116,43 @@ export default function OrdersPage({ onImport, refreshKey }) {
   }
 
   React.useEffect(() => {
-    if (!contextMenu.visible) return;
-    function onDown() { closeContextMenu(); }
-    function onKey(e) { if (e.key === "Escape") closeContextMenu(); }
+    if (!contextMenu.visible && !headerMenu.visible) return;
+    function onDown() {
+      closeContextMenu();
+      closeHeaderMenu();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") {
+        closeContextMenu();
+        closeHeaderMenu();
+      }
+    }
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [contextMenu.visible]);
+  }, [contextMenu.visible, headerMenu.visible]);
 
   function startResize(e, key) {
     e.preventDefault();
+    e.stopPropagation();
     const startX = e.clientX;
     const startWidth = colWidths[key] ?? 120;
+    let latestWidth = startWidth;
     function onMove(ev) {
       const newWidth = Math.max(40, startWidth + (ev.clientX - startX));
+      latestWidth = newWidth;
       setColWidths((prev) => ({ ...prev, [key]: newWidth }));
     }
     function onUp() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // Persist after drag ends
-      setColWidths((prev) => {
-        try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(prev)); } catch (_) {}
-        return prev;
-      });
+      const nextWidths = { ...colWidthsRef.current, [key]: latestWidth };
+      colWidthsRef.current = nextWidths;
+      setColWidths(nextWidths);
+      try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(nextWidths)); } catch (_) {}
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -676,110 +1197,214 @@ export default function OrdersPage({ onImport, refreshKey }) {
 
   React.useEffect(() => { loadOrders(); }, [refreshKey]);
 
-  // ── Apply viewConfig: visibility, search, sort ───────────────────────────
-  const filtered = React.useMemo(() => {
-    const sf = viewConfig.searchableFields ?? {};
-    const mode = viewConfig.searchMode ?? "smart";
-    const includeInfo = viewConfig.includeOrderInfo ?? true;
-    const showCompleted = viewConfig.showCompleted ?? true;
+  const filteredOrders = React.useMemo(() => {
+    let base = safeOrders.filter((row) => activeTab === "completed" ? isCompletedOrder(row) : !isCompletedOrder(row));
 
-    // 1. Visibility / tab filter
-    // If item_status is set, it is authoritative. Fall back to order-level status only when unset.
-    const isCompleted = (r) => r.item_status
-      ? r.item_status === "completed"
-      : r.status === "completed" || r.status === "done";
-    let base = rows.filter((r) => {
-      if (tab === "completed") return isCompleted(r);
-      // Active tab: hide completed rows unless showCompleted is on
-      if (!showCompleted && isCompleted(r)) return false;
-      if (isCompleted(r)) return false; // completed always go to completed tab only
-      return true;
-    });
-
-    // 2. Search filter
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      base = base.filter((r) => {
-        // Collect searchable values — skip globally-disabled AND runtime-excluded fields
-        const flexDates = viewConfig.flexibleSearch ?? true; // from viewConfig; date override below
-        const vals = Object.entries(sf)
-          .filter(([key, on]) => on && !activeSearchExclusions.includes(key))
-          .flatMap(([key]) => {
-            const raw = r[key];
-            if (DATE_FIELD_KEYS.has(key) && dateConfig.flexibleSearch) {
-              return generateDateVariants(raw);
-            }
-            return [(raw || "").toLowerCase()];
-          });
-
-        // Order Info composite (platform badge label + gift flags + notes text)
-        if (includeInfo) {
-          const raw = r.platform || r.source || "";
-          vals.push(normalizePlatform(raw)); // "website" / "shopify"
-          if (r.gift_message) vals.push((r.gift_message || "").toLowerCase());
-          if (r.order_notes)  vals.push((r.order_notes  || "").toLowerCase());
-          if (r._item_count > 1) vals.push(`${r._item_count} items`);
-        }
-
-        if (mode === "exact") {
-          return vals.some((v) => v === q);
-        }
-        // smart: partial match
-        return vals.some((v) => v.includes(q));
-      });
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return base;
     }
 
-    // 3. Default sort
-    const sortField = viewConfig.defaultSort?.field || "order_date";
-    const sortDir   = viewConfig.defaultSort?.direction || "desc";
-    base = [...base].sort((a, b) => {
-      const av = (a[sortField] ?? "").toString().toLowerCase();
-      const bv = (b[sortField] ?? "").toString().toLowerCase();
-      if (av < bv) return sortDir === "asc" ? -1 :  1;
-      if (av > bv) return sortDir === "asc" ?  1 : -1;
-      return 0;
-    });
+    return base.filter((row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery)));
+  }, [activeTab, getRowSearchValues, safeOrders, searchQuery]);
 
-    return base;
-  }, [rows, search, viewConfig, activeSearchExclusions, dateConfig, tab]);
+  const displayOrders = React.useMemo(() => {
+    const indexedRows = filteredOrders.map((row, index) => ({ row, index }));
+    const sortConfig = normalizeSortConfig(activeSort);
 
-  // Count matching rows per tab when a search is active — used for tab badges
+    const compare = (a, b) => {
+      const aValue = getRowSortValue(a.row, sortConfig.field, { statusConfig, orderStatuses });
+      const bValue = getRowSortValue(b.row, sortConfig.field, { statusConfig, orderStatuses });
+      const result = compareSortValues(aValue, bValue, sortConfig.direction);
+      return result || (a.index - b.index);
+    };
+
+    return [...indexedRows].sort(compare).map(({ row }) => row);
+  }, [activeSort, filteredOrders, orderStatuses, statusConfig]);
+
+  const totalCounts = React.useMemo(() => ({
+    active: safeOrders.filter((row) => !isCompletedOrder(row)).length,
+    completed: safeOrders.filter((row) => isCompletedOrder(row)).length,
+  }), [safeOrders]);
+
+  React.useEffect(() => {
+    onCountsChange?.(totalCounts);
+  }, [onCountsChange, totalCounts]);
+
   const tabCounts = React.useMemo(() => {
-    if (!search.trim()) return null;
-    const sf = viewConfig.searchableFields ?? {};
-    const mode = viewConfig.searchMode ?? "smart";
-    const includeInfo = viewConfig.includeOrderInfo ?? true;
-    const isCompleted = (r) => r.item_status
-      ? r.item_status === "completed"
-      : r.status === "completed" || r.status === "done";
-    const q = search.trim().toLowerCase();
-    const matches = (r) => {
-      const vals = Object.entries(sf)
-        .filter(([key, on]) => on && !activeSearchExclusions.includes(key))
-        .flatMap(([key]) => {
-          const raw = r[key];
-          if (DATE_FIELD_KEYS.has(key) && dateConfig.flexibleSearch) return generateDateVariants(raw);
-          return [(raw || "").toLowerCase()];
-        });
-      if (includeInfo) {
-        vals.push(normalizePlatform(r.platform || r.source || ""));
-        if (r.gift_message) vals.push((r.gift_message || "").toLowerCase());
-        if (r.order_notes)  vals.push((r.order_notes  || "").toLowerCase());
-        if (r._item_count > 1) vals.push(`${r._item_count} items`);
-      }
-      return mode === "exact" ? vals.some((v) => v === q) : vals.some((v) => v.includes(q));
-    };
+    if (!searchQuery.trim()) return null;
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const matches = (row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery));
     return {
-      active:    rows.filter((r) => !isCompleted(r) && matches(r)).length,
-      completed: rows.filter((r) =>  isCompleted(r) && matches(r)).length,
+      active: safeOrders.filter((row) => !isCompletedOrder(row) && matches(row)).length,
+      completed: safeOrders.filter((row) => isCompletedOrder(row) && matches(row)).length,
     };
-  }, [rows, search, viewConfig, activeSearchExclusions, dateConfig]);
+  }, [getRowSearchValues, safeOrders, searchQuery]);
 
-  const allSelected = filtered.length > 0 && selectedIds.size === filtered.length;
+  const safeDisplayOrders = displayOrders || [];
+
+  const handlePrint = React.useCallback(async () => {
+    const visiblePrintColumns = visibleColumns.filter(
+      (column) => (printConfig?.columns?.[column.key] ?? true) !== false
+    );
+    const totalPrintWidth = visiblePrintColumns.reduce(
+      (sum, column) => sum + (colWidths[column.key] ?? column.defaultWidth ?? 120),
+      0
+    ) || 1;
+    const headerHtml = visiblePrintColumns.length
+      ? visiblePrintColumns.map((column) => `<th class="col-${column.key.replace(/_/g, "-")}">${escapeHtml(column.label)}</th>`).join("")
+      : "<th>Print Output</th>";
+    const columnStyleHtml = visiblePrintColumns.map((column) => {
+      const className = `.col-${column.key.replace(/_/g, "-")}`;
+      const shouldWrap = !!printConfig?.wrap?.[column.key];
+      return shouldWrap
+        ? `${className} { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }`
+        : `${className} { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }`;
+    }).join("\n      ");
+    const colgroupHtml = visiblePrintColumns.length
+      ? `<colgroup>${visiblePrintColumns.map((column) => {
+          const width = colWidths[column.key] ?? column.defaultWidth ?? 120;
+          const percent = (width / totalPrintWidth) * 100;
+          return `<col style="width:${percent.toFixed(4)}%">`;
+        }).join("")}</colgroup>`
+      : "";
+
+    const rowsHtml = safeDisplayOrders.length
+      ? safeDisplayOrders.map((row) => {
+          const cells = visiblePrintColumns.map((column) => {
+            const presentation = getPrintCellPresentation(row, column.key);
+            const styles = [
+              presentation.bg ? `background:${presentation.bg}` : "",
+              presentation.color ? `color:${presentation.color}` : "",
+              presentation.fontStyle ? `font-style:${presentation.fontStyle}` : "",
+              "print-color-adjust:exact",
+              "-webkit-print-color-adjust:exact",
+            ].filter(Boolean).join(";");
+            return `<td class="col-${column.key.replace(/_/g, "-")}" style="${styles}">${escapeHtml(presentation.text)}</td>`;
+          }).join("");
+          return `<tr>${cells}</tr>`;
+        }).join("")
+      : `<tr><td colspan="${Math.max(1, visiblePrintColumns.length)}" style="text-align:center;color:#666;">${
+        visiblePrintColumns.length ? "No orders to print" : "No print fields are enabled"
+      }</td></tr>`;
+
+    const summarySearch = searchQuery.trim();
+    const shopName = shopConfig.shopName?.trim() || "Parser Viewer";
+    const weekdayFromSearch = (() => {
+      if (!summarySearch) {
+        return "";
+      }
+      const normalized = summarySearch.trim();
+      const match = normalized.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+      if (!match) {
+        return "";
+      }
+      const month = Number.parseInt(match[1], 10);
+      const day = Number.parseInt(match[2], 10);
+      const yearPart = match[3];
+      const year = yearPart
+        ? (yearPart.length === 2 ? 2000 + Number.parseInt(yearPart, 10) : Number.parseInt(yearPart, 10))
+        : new Date().getFullYear();
+      const parsed = new Date(year, month - 1, day);
+      if (
+        Number.isNaN(parsed.getTime())
+        || parsed.getFullYear() !== year
+        || parsed.getMonth() !== month - 1
+        || parsed.getDate() !== day
+      ) {
+        return "";
+      }
+      return parsed.toLocaleDateString(undefined, { weekday: "long" });
+    })();
+    const headerParts = [
+      shopName,
+      summarySearch || "",
+      weekdayFromSearch,
+    ].filter(Boolean);
+    const printHtml = `<!doctype html>
+<html>
+  <head>
+    <title>${escapeHtml(shopName)} - Orders Print</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: "Segoe UI", sans-serif; color: #111827; background: #ffffff; }
+      .page {
+        padding: 24px;
+        background: #fff;
+      }
+      .meta { margin: 0 0 18px; font-size: 22px; color: #111827; line-height: 1.35; font-weight: 700; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+      th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; vertical-align: top; }
+      th { background: #f3f4f6; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      tbody tr:nth-child(even) td:not([style*="background:"]) { background: #fafafa; }
+      .col-order-info { font-size: 11px; line-height: 1.35; }
+      ${columnStyleHtml}
+      @media print {
+        * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        @page { size: ${printConfig?.orientation === "landscape" ? "landscape" : "portrait"}; margin: 0.5in; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="meta">${escapeHtml(headerParts.join(" — "))}</div>
+      <table>
+        ${colgroupHtml}
+        <thead><tr>${headerHtml}</tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+  </body>
+</html>`;
+
+    const result = await window.parserApp?.exportPrintPdf?.({
+      title: "Orders Print",
+      html: printHtml,
+      orientation: printConfig?.orientation === "landscape" ? "landscape" : "portrait",
+    });
+    if (result && !result.ok) {
+      alert(`Could not open printable PDF: ${result.error || "unknown error"}`);
+    }
+  }, [colWidths, getPrintCellPresentation, printConfig, safeDisplayOrders, searchQuery, shopConfig.shopName, visibleColumns]);
+
+  React.useEffect(() => {
+    if (!isActive) {
+      return undefined;
+    }
+
+    function onKeyDown(event) {
+      const target = event.target;
+      const tag = target?.tagName?.toLowerCase?.() || "";
+      const isTyping = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
+      if (isTyping || event.repeat) {
+        return;
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        handlePrint();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handlePrint, isActive]);
+
+  const allSelected = safeDisplayOrders.length > 0 && selectedIds.size === safeDisplayOrders.length;
   const someSelected = selectedIds.size > 0 && !allSelected;
+  const activeSearchTerm = searchQuery.trim();
+  const hasActiveSearch = !!activeSearchTerm;
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "'Segoe UI', sans-serif", background: "#f5f5f5" }}>
+      <MailDockModal
+        dock={mailDock}
+        onClose={() => setMailDock(null)}
+        onOpenEmail={handleLaunchMailDock}
+        onOpenFolder={handleOpenAttachmentFolder}
+        onSendEmail={handleSendDockEmail}
+        canSendEmail={smtpConfigured}
+      />
 
       {/* Email warnings toast */}
       {emailToast && (
@@ -838,221 +1463,191 @@ export default function OrdersPage({ onImport, refreshKey }) {
         </div>
       )}
 
-      {/* Command bar */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "10px 16px", borderBottom: "1px solid #ddd",
-        background: "#f7f7f7", flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {/* Save button — bright when rows exist, dim when nothing to save */}
-          {(() => {
-            const canSave = sessionDirty && rows.length > 0;
-            return (
-              <button
-                onClick={canSave ? handleSaveToFolder : undefined}
-                title={
-                  !canSave ? "Nothing to save yet"
-                  : shopConfig.saveFolder ? `Save to ${shopConfig.saveFolder}`
-                  : "Save (set folder in Settings → General)"
-                }
-                style={{
-                  width: 36, height: 36,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  background: canSave ? "#2563eb" : "#e2e8f0",
-                  border: `1px solid ${canSave ? "#1d4ed8" : "#cbd5e1"}`,
-                  borderRadius: "10px",
-                  cursor: canSave ? "pointer" : "default",
-                  fontSize: "18px",
-                  color: canSave ? "#fff" : "#94a3b8",
-                  boxShadow: canSave ? "0 1px 3px rgba(37,99,235,0.4)" : "none",
-                  transition: "all 0.2s",
-                  flexShrink: 0,
-                  opacity: canSave ? 1 : 0.55,
-                }}
-                onMouseEnter={(e) => {
-                  if (!canSave) return;
-                  e.currentTarget.style.background = "#1d4ed8";
-                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(37,99,235,0.5)";
-                }}
-                onMouseLeave={(e) => {
-                  if (!canSave) return;
-                  e.currentTarget.style.background = "#2563eb";
-                  e.currentTarget.style.boxShadow = "0 1px 3px rgba(37,99,235,0.4)";
-                }}
-              >💾</button>
-            );
-          })()}
-
-          {/* Settings button */}
-          <button
-            onClick={() => setShowSettings(true)}
-            title="Settings"
-            style={{
-              width: 36, height: 36,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "#fff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "10px",
-              cursor: "pointer",
-              fontSize: "18px", color: "#64748b",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-              transition: "box-shadow 0.15s, border-color 0.15s, color 0.15s",
-              flexShrink: 0,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.14)";
-              e.currentTarget.style.borderColor = "#cbd5e1";
-              e.currentTarget.style.color = "#1e293b";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
-              e.currentTarget.style.borderColor = "#e2e8f0";
-              e.currentTarget.style.color = "#64748b";
-            }}
-          >⚙</button>
-
-          {/* Thank-you letter button — opens the configured PDF ready to print */}
-          {documentsConfig.showThankYouHeaderBtn !== false && (() => {
-            const hasDoc = !!documentsConfig.thankYouPath;
-            const titleText = hasDoc
-              ? "Open thank you letter (ready to print)"
-              : "No thank you letter configured — go to Settings → Documents";
-            return (
-              <button
-                onClick={hasDoc ? async () => {
-                  const result = await window.parserApp?.openFile?.({ filePath: documentsConfig.thankYouPath });
-                  if (result && !result.ok) alert(`Could not open file: ${result.error}`);
-                } : undefined}
-                title={titleText}
-                style={{
-                  marginLeft: 12,
-                  width: 36, height: 36,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  background: "#fff",
-                  border: `1px solid ${hasDoc ? "#0369a1" : "#e2e8f0"}`,
-                  borderRadius: "10px",
-                  cursor: hasDoc ? "pointer" : "default",
-                  fontSize: "20px",
-                  color: hasDoc ? "#0369a1" : "#94a3b8",
-                  boxShadow: hasDoc ? "0 1px 4px rgba(3,105,161,0.2)" : "none",
-                  transition: "all 0.15s",
-                  flexShrink: 0,
-                  opacity: hasDoc ? 1 : 0.35,
-                }}
-                onMouseEnter={(e) => {
-                  if (!hasDoc) return;
-                  e.currentTarget.style.background = "#f0f9ff";
-                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(3,105,161,0.3)";
-                }}
-                onMouseLeave={(e) => {
-                  if (!hasDoc) return;
-                  e.currentTarget.style.background = "#fff";
-                  e.currentTarget.style.boxShadow = "0 1px 4px rgba(3,105,161,0.2)";
-                }}
-              >📄</button>
-            );
-          })()}
-
-          {/* Divider */}
-          <div style={{ width: 1, height: 28, background: "#d1d5db", margin: "0 4px", flexShrink: 0 }} />
-
-          <button onClick={onImport} style={tabStyle}>+ Import Order</button>
-          <button style={tab === "active"    ? tabStyleActive : tabStyle} onClick={() => setTab("active")}>
-            Active ({rows.filter((r) => !(r.item_status ? r.item_status === "completed" : r.status === "completed" || r.status === "done")).length})
-            {tabCounts && (
-              <span style={{
-                marginLeft: 6, background: tab === "active" ? "#2563eb" : "#6b7280",
-                color: "#fff", borderRadius: 999, padding: "1px 7px",
-                fontSize: 11, fontWeight: 700, lineHeight: "16px",
-              }}>{tabCounts.active}</span>
-            )}
-          </button>
-          <button style={tab === "completed" ? tabStyleActive : tabStyle} onClick={() => setTab("completed")}>
-            Completed
-          </button>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              if (!e.target.value) clearExclusions();
-            }}
-            placeholder="Search orders…"
-            style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: "4px", fontSize: "13px", width: "180px" }}
-          />
-          {/* Font size control */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: "2px",
-            border: "1px solid #ccc", borderRadius: "4px",
-            overflow: "hidden",
-          }}>
-            <button
-              onClick={() => changeTableFontSize(-1)}
-              title="Decrease font size"
-              disabled={tableFontSize <= 9}
-              style={{
-                padding: "4px 7px", border: "none", background: "none",
-                cursor: tableFontSize <= 9 ? "default" : "pointer",
-                fontSize: "11px", color: tableFontSize <= 9 ? "#bbb" : "#555",
-                lineHeight: 1,
-              }}
-            >A−</button>
-            <span style={{
-              fontSize: "11px", color: "#666", minWidth: "24px",
-              textAlign: "center", userSelect: "none",
-            }}>{tableFontSize}</span>
-            <button
-              onClick={() => changeTableFontSize(1)}
-              title="Increase font size"
-              disabled={tableFontSize >= 20}
-              style={{
-                padding: "4px 7px", border: "none", background: "none",
-                cursor: tableFontSize >= 20 ? "default" : "pointer",
-                fontSize: "13px", color: tableFontSize >= 20 ? "#bbb" : "#555",
-                lineHeight: 1,
-              }}
-            >A+</button>
-          </div>
-        </div>
-      </div>
-
-      {/* Search-exclusion indicator bar */}
-      {activeSearchExclusions.length > 0 && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: "8px",
-          padding: "5px 16px", background: "#fffbeb",
-          borderBottom: "1px solid #fde68a", fontSize: "12px", color: "#92400e",
-          flexShrink: 0,
-        }}>
-          <span>Search excluding:</span>
-          {activeSearchExclusions.map((key) => {
-            const col = visibleColumns.find((c) => c.key === key);
-            return (
-              <span key={key} style={{
-                padding: "1px 8px", borderRadius: "999px",
-                background: "#fde68a", color: "#78350f", fontWeight: 600,
-              }}>
-                {col?.label ?? key}
+      <AppHeader
+        canSave={sessionDirty && safeOrders.length > 0}
+        onSave={handleSaveToFolder}
+        saveTitle={
+          !(sessionDirty && safeOrders.length > 0) ? "Nothing to save yet"
+          : shopConfig.saveFolder ? `Save to ${shopConfig.saveFolder}`
+          : "Save (set folder in Settings -> General)"
+        }
+        onSettings={onSettings}
+        onWorkspace={onWorkspace}
+        documentsConfig={documentsConfig}
+        onImport={onImport}
+        activeTab={activeTab}
+        selectedNav={activeTab}
+        onSelectTab={onActiveTabChange}
+        activeCount={totalCounts.active}
+        completedCount={totalCounts.completed}
+        tabCounts={tabCounts}
+        rightContent={
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <button
-                  onClick={() => toggleExclusion(key)}
-                  style={{ marginLeft: "4px", background: "none", border: "none",
-                    cursor: "pointer", color: "#92400e", padding: 0, fontSize: "11px" }}
-                >✕</button>
-              </span>
-            );
-          })}
-          <button
-            onClick={clearExclusions}
-            style={{ marginLeft: "auto", fontSize: "11px", color: "#2563eb",
-              background: "none", border: "none", cursor: "pointer", padding: 0 }}
-          >Reset</button>
-        </div>
-      )}
+                  onClick={() => changeTableFontSize(-1)}
+                  title="Decrease sheet font size"
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #ccc",
+                    background: "#fff",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    color: "#374151",
+                    minWidth: 34,
+                  }}
+                >
+                  A-
+                </button>
+                <button
+                  onClick={() => changeTableFontSize(1)}
+                  title="Increase sheet font size"
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #ccc",
+                    background: "#fff",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    color: "#374151",
+                    minWidth: 34,
+                  }}
+                >
+                  A+
+                </button>
+              </div>
+              <div style={{ width: 1, height: 26, background: "#d1d5db" }} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ position: "relative" }}>
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search orders…"
+                  style={{ padding: "6px 34px 6px 10px", border: "1px solid #ccc", borderRadius: "4px", fontSize: "13px", width: "280px", minWidth: "180px" }}
+                />
+                {hasActiveSearch && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    title="Clear search"
+                    style={{
+                      position: "absolute",
+                      right: 6,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 22,
+                      height: 22,
+                      border: "none",
+                      borderRadius: 999,
+                      background: "#e5e7eb",
+                      color: "#374151",
+                      cursor: "pointer",
+                      fontSize: "13px",
+                      lineHeight: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 0,
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {hasActiveSearch && (
+                <div style={{
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  background: "#eff6ff",
+                  color: "#1d4ed8",
+                  border: "1px solid #bfdbfe",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                }}>
+                  Search active
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <select
+                value={activeSort.field}
+                onChange={(e) => applySort(e.target.value, activeSort.direction)}
+                style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: "4px", fontSize: "13px", width: "185px", background: "#fff" }}
+              >
+                {sortFieldOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                value={activeSort.direction}
+                onChange={(e) => applySort(activeSort.field, e.target.value)}
+                style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: "4px", fontSize: "13px", width: "135px", background: "#fff" }}
+              >
+                <option value="asc">Ascending ↑</option>
+                <option value="desc">Descending ↓</option>
+              </select>
+            </div>
+            <button
+              onClick={handlePrint}
+              style={{
+                padding: "6px 14px",
+                border: "1px solid #ccc",
+                background: "#fff",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: 600,
+                color: "#374151",
+              }}
+            >
+              Print
+            </button>
+          </>
+        }
+      />
 
       {/* Body */}
       <div style={{ flex: 1, overflow: "auto", padding: "16px", overflowX: "auto" }}>
+        {hasActiveSearch && (
+          <div style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: "8px",
+            color: "#1e3a8a",
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          }}>
+            <span>
+              Showing filtered results for <strong>{activeSearchTerm}</strong>.
+            </span>
+            <button
+              onClick={() => setSearchQuery("")}
+              style={{
+                flexShrink: 0,
+                border: "1px solid #93c5fd",
+                borderRadius: "6px",
+                background: "#fff",
+                color: "#1d4ed8",
+                padding: "5px 10px",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Clear search
+            </button>
+          </div>
+        )}
         {error ? (
           <div style={{ padding: "16px 18px", background: "#fee2e2", borderRadius: "8px", color: "#991b1b", fontSize: "13px", display: "flex", alignItems: "center", gap: "12px" }}>
             <span style={{ flex: 1 }}>{error}</span>
@@ -1063,18 +1658,18 @@ export default function OrdersPage({ onImport, refreshKey }) {
               ↺ Retry
             </button>
           </div>
-        ) : loading ? (
+        ) : (!rows || loading) ? (
           <div style={{ color: "#888", padding: "12px", fontSize: "13px" }}>Loading orders…</div>
-        ) : filtered.length === 0 ? (
+        ) : safeDisplayOrders.length === 0 ? (
           <div style={{ textAlign: "center", padding: "60px 20px" }}>
             <div style={{ color: "#888", fontSize: "14px", marginBottom: "14px" }}>
-              {search
+              {searchQuery.trim()
                 ? "No orders match your search."
-                : tab === "completed"
+                : activeTab === "completed"
                   ? "No completed orders yet."
                   : "No active orders yet."}
             </div>
-            {!search && tab === "active" && <button onClick={onImport} style={primaryButton}>+ Import your first order</button>}
+            {!searchQuery.trim() && activeTab === "active" && <button onClick={onImport} style={primaryButton}>+ Import your first order</button>}
           </div>
         ) : (
           <DndContext
@@ -1103,9 +1698,14 @@ export default function OrdersPage({ onImport, refreshKey }) {
                   <tr>
                     <th style={{
                       width: 30, minWidth: 30, maxWidth: 30,
+                      top: -17,
                       padding: "5px 0 5px 8px",
                       border: "1px solid #ccc", userSelect: "none",
+                      background: "#e5e5e5",
+                      position: "sticky",
+                      zIndex: 5,
                       boxSizing: "border-box",
+                      boxShadow: "inset 0 -1px 0 #d1d5db",
                     }}>
                       <input
                         type="checkbox"
@@ -1122,10 +1722,8 @@ export default function OrdersPage({ onImport, refreshKey }) {
                         width={colWidths[c.key] ?? c.defaultWidth}
                         fontSize={tableFontSize}
                         onStartResize={startResize}
-                        isSearchable={!!(viewConfig.searchableFields?.[c.key])}
-                        isExcluded={activeSearchExclusions.includes(c.key)}
-                        onToggleExclusion={toggleExclusion}
-                        searchActive={search.trim().length > 0}
+                        activeSort={activeSort}
+                        onOpenMenu={handleHeaderContextMenu}
                       />
                     ))}
                   </tr>
@@ -1133,7 +1731,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
               </SortableContext>
 
               <tbody>
-                {filtered.map((r, i) => {
+                {(safeDisplayOrders || []).map((r, i) => {
                   const isSelected = selectedIds.has(r.id);
                   const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall
                   // Price-list lookup: find matching rule for this row's price
@@ -1272,9 +1870,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
                             padding: "5px 7px",
                             border: "1px solid #e8e8e8",
                             background: cellBg, color: cellTextColor,
-                            whiteSpace: "nowrap",
                             overflow: "hidden",
-                            textOverflow: "ellipsis",
                             verticalAlign: "top",
                             fontStyle: !r[c.key] && c.key === PRICE_TYPE_FIELD_KEY && priceRule?.typeValue
                               ? "italic" : undefined,
@@ -1317,23 +1913,37 @@ export default function OrdersPage({ onImport, refreshKey }) {
                                   title="Compose email"
                                   onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
                                   className="email-btn"
+                                  disabled={mailDockLoadingId === r.id}
                                   style={{
                                     position: "absolute", bottom: 2, right: 3,
                                     width: 20, height: 20,
-                                    background: "none", border: "none", cursor: "pointer",
+                                    background: "none", border: "none", cursor: mailDockLoadingId === r.id ? "wait" : "pointer",
                                     padding: 0, lineHeight: 1,
                                     fontSize: 17,
                                     color: iconColor,
-                                    opacity: 0.9,
+                                    opacity: mailDockLoadingId === r.id ? 0.5 : 0.9,
                                     transition: "opacity 0.15s, transform 0.1s",
                                     display: "flex", alignItems: "center", justifyContent: "center",
                                   }}
                                   onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
                                   onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
-                                >✉</button>
+                                >{mailDockLoadingId === r.id ? "…" : "✉"}</button>
                               );
                             })()}
-                            {displayValue ?? ""}
+                            <div style={{
+                              display: "-webkit-box",
+                              WebkitBoxOrient: "vertical",
+                              WebkitLineClamp: 3,
+                              overflow: "hidden",
+                              whiteSpace: "normal",
+                              overflowWrap: "anywhere",
+                              wordBreak: "break-word",
+                              lineHeight: 1.35,
+                              maxHeight: `${rowH - 10}px`,
+                              paddingRight: needsIcon ? 20 : 0,
+                            }}>
+                              {displayValue ?? ""}
+                            </div>
                           </td>
                         );
                       })}
@@ -1353,13 +1963,6 @@ export default function OrdersPage({ onImport, refreshKey }) {
           onSaved={() => { setEditingOrder(null); loadOrders(); setSessionDirty(true); }}
         />
       )}
-
-      <SettingsModal
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        columnOrder={columnOrder}
-        onColumnOrderChange={updateColumnOrder}
-      />
 
       {/* Confirm delete dialog */}
       {confirmDelete.open && (
@@ -1427,7 +2030,7 @@ export default function OrdersPage({ onImport, refreshKey }) {
         >
           {(() => {
             const n = contextMenu.row && selectedIds.has(contextMenu.row.id) && selectedIds.size > 1 ? selectedIds.size : 1;
-            const menuItems = tab === "completed"
+            const menuItems = activeTab === "completed"
               ? [
                   { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
                   { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
@@ -1438,6 +2041,55 @@ export default function OrdersPage({ onImport, refreshKey }) {
                 ];
             return menuItems;
           })().map(({ label, action, color }) => (
+            <div
+              key={label}
+              onClick={action}
+              style={{ padding: "8px 16px", cursor: "pointer", color, userSelect: "none" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >{label}</div>
+          ))}
+        </div>
+      )}
+      {headerMenu.visible && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed", top: headerMenu.y, left: headerMenu.x,
+            background: "#fff", border: "1px solid #d1d5db", borderRadius: "6px",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.14)", zIndex: 10000,
+            padding: "4px 0", minWidth: "190px", fontSize: "13px",
+          }}
+        >
+          {(() => {
+            const column = headerMenu.column;
+            if (!column) return [];
+            const defaultSort = normalizeSortConfig(viewConfig.defaultSort);
+            return [
+              {
+                label: `Sort ${column.label} Ascending`,
+                action: () => {
+                  applySort(column.key, "asc");
+                  closeHeaderMenu();
+                },
+              },
+              {
+                label: `Sort ${column.label} Descending`,
+                action: () => {
+                  applySort(column.key, "desc");
+                  closeHeaderMenu();
+                },
+              },
+              {
+                label: `Reset to Default (${defaultSort.field === column.key ? column.label : (fieldMap[defaultSort.field]?.label ?? defaultSort.field)} ${defaultSort.direction === "asc" ? "↑" : "↓"})`,
+                action: () => {
+                  resetSortToDefault();
+                  closeHeaderMenu();
+                },
+                color: "#2563eb",
+              },
+            ];
+          })().map(({ label, action, color = "#111" }) => (
             <div
               key={label}
               onClick={action}

@@ -1,6 +1,13 @@
 import React from "react";
 import { createPortal } from "react-dom";
-import { loadFieldConfig, buildLabelMap, loadParserFieldOrder } from "../../shared/utils/fieldConfig.js";
+import AppHeader from "../../shared/components/AppHeader.jsx";
+import {
+  loadFieldConfig,
+  buildLabelMap,
+  loadParserFieldOrder,
+  loadDocumentsConfig,
+  normalizeFieldValue,
+} from "../../shared/utils/fieldConfig.js";
 
 // Build a key → visibleInParser boolean map from config.
 function buildParserVisibilityMap(config) {
@@ -95,46 +102,63 @@ function computeSelectionOffset(container, targetNode, targetOffset) {
   return total;
 }
 
-function renderHighlightedText(text, highlights) {
-  if (!highlights.length) {
+function renderHighlightedText(text, ranges, showDetectedFields = false, pulseAttention = false) {
+  if (!ranges.length) {
     return text;
   }
 
-  const ranges = [...highlights].sort((a, b) => a.start - b.start);
+  const activeRanges = [...ranges]
+    .filter((range) => typeof range.start === "number" && typeof range.end === "number" && range.end > range.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  if (!activeRanges.length) {
+    return text;
+  }
+
+  const boundaries = Array.from(new Set([
+    0,
+    text.length,
+    ...activeRanges.flatMap((range) => [
+      Math.max(0, Math.min(text.length, range.start)),
+      Math.max(0, Math.min(text.length, range.end)),
+    ]),
+  ])).sort((a, b) => a - b);
+
   let elements = [];
-  let lastIndex = 0;
 
-  ranges.forEach((range, i) => {
-    if (range.start > lastIndex) {
-      elements.push(
-        <span key={`t-${i}`}>
-          {text.slice(lastIndex, range.start)}
-        </span>,
-      );
+  for (let i = 0; i < boundaries.length - 1; i += 1) {
+    const segStart = boundaries[i];
+    const segEnd = boundaries[i + 1];
+    if (segEnd <= segStart) {
+      continue;
     }
 
-    const segmentText = text.slice(range.start, range.end);
-    let className = "";
-
-    if (range.decision === "assigned") {
-      className = "assigned";
-    } else if (range.decision === "suggested") {
-      className = "suggested";
+    const segmentText = text.slice(segStart, segEnd);
+    const overlapping = activeRanges.filter((range) => range.start < segEnd && range.end > segStart);
+    if (!overlapping.length) {
+      elements.push(<span key={`t-${i}`}>{segmentText}</span>);
+      continue;
     }
+
+    const decisionRange = overlapping.find((range) => range.kind !== "attention") || null;
+    const hasAssigned = overlapping.some((range) => range.decision === "assigned");
+    const hasSuggested = overlapping.some((range) => range.decision === "suggested");
+    const hasAttention = overlapping.some((range) => range.kind === "attention");
 
     elements.push(
-      <span key={`s-${i}`} className={className}>
+      <span
+        key={`s-${i}`}
+        data-start={decisionRange ? String(decisionRange.rawStart ?? decisionRange.start) : undefined}
+        data-end={decisionRange ? String(decisionRange.rawEnd ?? decisionRange.end) : undefined}
+        className={[
+          decisionRange ? "email-range" : "",
+          hasAssigned ? "assigned" : "",
+          !hasAssigned && hasSuggested ? "suggested" : "",
+          decisionRange && showDetectedFields ? "email-range-visible" : "",
+          hasAttention ? "email-attention" : "",
+          hasAttention && pulseAttention ? "email-attention-pulse" : "",
+        ].filter(Boolean).join(" ")}
+      >
         {segmentText}
-      </span>,
-    );
-
-    lastIndex = range.end;
-  });
-
-  if (lastIndex < text.length) {
-    elements.push(
-      <span key="end">
-        {text.slice(lastIndex)}
       </span>,
     );
   }
@@ -152,6 +176,7 @@ function buildHighlights(decisions, suppressedFields) {
       end: decision.end,
       field: decision.field,
       decision: decision.decision,
+      kind: "decision",
     })),
   ];
 }
@@ -164,21 +189,49 @@ function manualItemHighlights(items) {
       end: value.end,
       field,
       decision: "assigned",
+      kind: "decision",
     })));
 }
 
-function buildUnifiedHighlights(decisions, suppressedFields, items) {
+function manualGiftMessageHighlight(giftMessage) {
+  if (!giftMessage || typeof giftMessage.start !== "number" || typeof giftMessage.end !== "number" || giftMessage.end <= giftMessage.start) {
+    return [];
+  }
+  return [{
+    start: giftMessage.start,
+    end: giftMessage.end,
+    field: "gift_message",
+    decision: "assigned",
+    kind: "decision",
+  }];
+}
+
+function buildUnifiedHighlights(decisions, suppressedFields, items, giftMessage) {
   return [
     ...buildHighlights(decisions, suppressedFields),
     ...manualItemHighlights(items),
+    ...manualGiftMessageHighlight(giftMessage),
   ];
+}
+
+function buildGiftAttentionHighlights(meta) {
+  const ranges = Array.isArray(meta?.gift_attention_ranges) ? meta.gift_attention_ranges : [];
+  return ranges
+    .filter((range) => typeof range?.start === "number" && typeof range?.end === "number" && range.end > range.start)
+    .map((range) => ({
+      start: range.start,
+      end: range.end,
+      rawStart: range.start,
+      rawEnd: range.end,
+      kind: "attention",
+    }));
 }
 
 function itemFieldValue(value) {
   if (value && typeof value === "object") {
-    return value.value || "";
+    return normalizeFieldValue(value.value || "");
   }
-  return value || "";
+  return normalizeFieldValue(value || "");
 }
 
 /** True when any meaningful field on an item has been filled. */
@@ -292,6 +345,9 @@ function buildItemState(decisions, previousItems = [], previousItemMeta = [], pr
       nextMeta.price = {
         source: "parser",
         decision: priceDecision.decision,
+        start: priceDecision.start,
+        end: priceDecision.end,
+        value: priceDecision.value,
       };
     } else {
       // Item index > 0, or no price decision: always empty.
@@ -516,7 +572,7 @@ function FieldRow({
   isKeyActive,
   navKey,
 }) {
-  const value = decision?.value ?? "";
+  const value = normalizeFieldValue(decision?.value ?? "");
   const canAccept = !!decision && !loading && !actionAlreadyApplied("save_assignment", decision);
   const canReject = !!decision && !loading && !actionAlreadyApplied("save_rejection", decision);
   const inputState = decision?.decision === "assigned"
@@ -730,7 +786,19 @@ function ItemFieldRow({
   );
 }
 
-export default function App({ onCreated, onBack }) {
+export default function App({
+  onCreated,
+  onOrderCreated,
+  onBack,
+  onImport,
+  onWorkspace,
+  onSettings,
+  ordersTab = "active",
+  onOrdersTabChange,
+  importRequestKey = 0,
+  selectedFilePath = "",
+  selectedFileRequestKey = 0,
+}) {
   // Field label config — reloads whenever the user saves Settings.
   const [fieldConfig, setFieldConfig] = React.useState(() => loadFieldConfig());
   React.useEffect(() => {
@@ -745,6 +813,13 @@ export default function App({ onCreated, onBack }) {
     function onOrderChange() { setParserFieldOrder(loadParserFieldOrder()); }
     window.addEventListener("spaila:parserfieldorder", onOrderChange);
     return () => window.removeEventListener("spaila:parserfieldorder", onOrderChange);
+  }, []);
+
+  const [documentsConfig, setDocumentsConfig] = React.useState(() => loadDocumentsConfig());
+  React.useEffect(() => {
+    function onDocsChange() { setDocumentsConfig(loadDocumentsConfig()); }
+    window.addEventListener("spaila:documentsconfig", onDocsChange);
+    return () => window.removeEventListener("spaila:documentsconfig", onDocsChange);
   }, []);
 
   // Derive label and visibility arrays from live config so changes propagate everywhere.
@@ -788,11 +863,16 @@ export default function App({ onCreated, onBack }) {
   const [giftMessage, setGiftMessage] = React.useState(null);
   const [giftMessageMeta, setGiftMessageMeta] = React.useState(null);
   const [activeKeyField, setActiveKeyField] = React.useState(null);
+  const [createToast, setCreateToast] = React.useState("");
+  const [showDetectedFields, setShowDetectedFields] = React.useState(false);
+  const [pulseGiftAttention, setPulseGiftAttention] = React.useState(false);
   const actionLockRef = React.useRef("");
   const debounceRef = React.useRef(null);
   const textRef = React.useRef(null);
   const importEmlRef = React.useRef(null);
   const activeKeyFieldRef = React.useRef(null);
+  const giftPulseTimerRef = React.useRef(null);
+  const lastGiftPulseFileRef = React.useRef("");
   // Synchronous mirror of selection state. Written before React schedules a
   // re-render so field click handlers always read the live value regardless of
   // whether the async state update has propagated yet.
@@ -808,20 +888,50 @@ export default function App({ onCreated, onBack }) {
   const decisionMap = Object.fromEntries(
     visibleDecisions.map((decision) => [decision.field, decision]),
   );
-  const highlights = buildUnifiedHighlights(state.decisions, suppressedFields, state.items);
+  const highlights = buildUnifiedHighlights(state.decisions, suppressedFields, state.items, giftMessage);
+  const attentionHighlights = buildGiftAttentionHighlights(meta);
   const currentOrderNumber = decisionMap.order_number?.value || "";
 
   // Only blue (user-confirmed) values — used by Create Order
   const assignedFields = Object.fromEntries(
     visibleDecisions
       .filter((d) => d.decision === "assigned")
-      .map((d) => [d.field, d.value]),
+      .map((d) => [d.field, normalizeFieldValue(d.value)]),
   );
 
   const priceCandidateCount = meta?.price_candidate_count ?? 0;
   // Combine state and ref so hasSelection is true the moment text is highlighted,
   // even before the async state update propagates.
   const hasSelection = !!(selection?.selected_text || lastSelectionRef.current?.selected_text);
+
+  const scrollToRange = React.useCallback((field, start, end) => {
+    if (typeof start !== "number" || typeof end !== "number" || end <= start) {
+      return;
+    }
+    const selector = `[data-start="${String(start)}"][data-end="${String(end)}"]`;
+    const el = textRef.current?.querySelector(selector) || document.querySelector(selector);
+    if (!el) {
+      console.warn("Range not found for field", field);
+      return;
+    }
+    el.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+    el.classList.remove("email-flash");
+    void el.offsetWidth;
+    el.classList.add("email-flash");
+    window.setTimeout(() => {
+      el.classList.remove("email-flash");
+    }, 1500);
+  }, []);
+
+  const scrollToDecisionRange = React.useCallback((field, source) => {
+    if (!source) {
+      return;
+    }
+    scrollToRange(field, source.start, source.end);
+  }, [scrollToRange]);
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
 
@@ -958,26 +1068,26 @@ export default function App({ onCreated, onBack }) {
   function buildOrderPayload() {
     return {
       order: {
-        order_number: assignedFields.order_number || "",
-        order_date: assignedFields.order_date || "",
-        buyer_name: assignedFields.buyer_name || "",
-        buyer_email: assignedFields.buyer_email || "",
-        shipping_address: assignedFields.shipping_address || "",
-        ship_by: assignedFields.ship_by || "",
-        gift_message: giftMessage?.value || "",
+        order_number: normalizeFieldValue(assignedFields.order_number || ""),
+        order_date: normalizeFieldValue(assignedFields.order_date || ""),
+        buyer_name: normalizeFieldValue(assignedFields.buyer_name || ""),
+        buyer_email: normalizeFieldValue(assignedFields.buyer_email || ""),
+        shipping_address: normalizeFieldValue(assignedFields.shipping_address || ""),
+        ship_by: normalizeFieldValue(assignedFields.ship_by || ""),
+        gift_message: normalizeFieldValue(giftMessage?.value || ""),
       },
       items: state.items.map((item, index) => ({
         item_index: index + 1,
         quantity: 1,
-        price: (typeof item.price === "object" ? item.price?.value : item.price) || "",
-        order_notes: (typeof item.order_notes === "object" ? item.order_notes?.value : item.order_notes) || "",
+        price: normalizeFieldValue((typeof item.price === "object" ? item.price?.value : item.price) || ""),
+        order_notes: normalizeFieldValue((typeof item.order_notes === "object" ? item.order_notes?.value : item.order_notes) || ""),
         custom_fields: {
-          custom_1: (typeof item.custom_1 === "object" ? item.custom_1?.value : item.custom_1) || "",
-          custom_2: (typeof item.custom_2 === "object" ? item.custom_2?.value : item.custom_2) || "",
-          custom_3: (typeof item.custom_3 === "object" ? item.custom_3?.value : item.custom_3) || "",
-          custom_4: (typeof item.custom_4 === "object" ? item.custom_4?.value : item.custom_4) || "",
-          custom_5: (typeof item.custom_5 === "object" ? item.custom_5?.value : item.custom_5) || "",
-          custom_6: (typeof item.custom_6 === "object" ? item.custom_6?.value : item.custom_6) || "",
+          custom_1: normalizeFieldValue((typeof item.custom_1 === "object" ? item.custom_1?.value : item.custom_1) || ""),
+          custom_2: normalizeFieldValue((typeof item.custom_2 === "object" ? item.custom_2?.value : item.custom_2) || ""),
+          custom_3: normalizeFieldValue((typeof item.custom_3 === "object" ? item.custom_3?.value : item.custom_3) || ""),
+          custom_4: normalizeFieldValue((typeof item.custom_4 === "object" ? item.custom_4?.value : item.custom_4) || ""),
+          custom_5: normalizeFieldValue((typeof item.custom_5 === "object" ? item.custom_5?.value : item.custom_5) || ""),
+          custom_6: normalizeFieldValue((typeof item.custom_6 === "object" ? item.custom_6?.value : item.custom_6) || ""),
         },
       })),
       meta: {
@@ -989,7 +1099,17 @@ export default function App({ onCreated, onBack }) {
     };
   }
 
-  async function handleCreateOrder() {
+  React.useEffect(() => {
+    if (!createToast) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => setCreateToast(""), 2200);
+    return () => clearTimeout(timer);
+  }, [createToast]);
+
+  async function createOrder({ importAnother = false } = {}) {
+    setState((current) => ({ ...current, loading: true, error: "" }));
     try {
       const payload = buildOrderPayload();
       console.log("CREATE ORDER PAYLOAD:", payload);
@@ -999,13 +1119,27 @@ export default function App({ onCreated, onBack }) {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || data?.detail || "Failed to create order");
+      }
       console.log("ORDER CREATED:", data);
-      alert("Order created successfully");
+      setCreateToast("Order created");
+      onOrderCreated?.();
+      if (importAnother) {
+        await importEmlRef.current?.({ resetBeforeOpen: true });
+        return;
+      }
+      setState((current) => ({ ...current, loading: false }));
       if (onCreated) onCreated();
     } catch (err) {
       console.error("CREATE ORDER FAILED:", err);
+      setState((current) => ({ ...current, loading: false }));
       alert("Failed to create order");
     }
+  }
+
+  async function handleCreateOrder() {
+    await createOrder({ importAnother: true });
   }
 
   React.useEffect(() => {
@@ -1014,10 +1148,38 @@ export default function App({ onCreated, onBack }) {
     console.log("HIGHLIGHTS:", highlights);
   }, [decisionMap, highlights, visibleDecisions]);
 
+  React.useEffect(() => () => {
+    if (giftPulseTimerRef.current) {
+      window.clearTimeout(giftPulseTimerRef.current);
+    }
+  }, []);
+
   const applyResult = React.useCallback((result) => {
     const nextFlags = result.flags || {};
+    const nextAttentionRanges = Array.isArray(result.meta?.gift_attention_ranges) ? result.meta.gift_attention_ranges : [];
     setFlags(nextFlags);
     setMeta(result.meta || {});
+
+    if (result.filePath) {
+      if (result.filePath !== lastGiftPulseFileRef.current) {
+        lastGiftPulseFileRef.current = result.filePath;
+        if (giftPulseTimerRef.current) {
+          window.clearTimeout(giftPulseTimerRef.current);
+        }
+        if (nextAttentionRanges.length) {
+          setPulseGiftAttention(true);
+          giftPulseTimerRef.current = window.setTimeout(() => {
+            setPulseGiftAttention(false);
+            giftPulseTimerRef.current = null;
+          }, 1500);
+        } else {
+          setPulseGiftAttention(false);
+          giftPulseTimerRef.current = null;
+        }
+      }
+    } else {
+      setPulseGiftAttention(false);
+    }
 
     // Auto-scroll to Gift Message field when gift/personalization is detected.
     if (nextFlags.is_gift || nextFlags.has_personalization) {
@@ -1095,6 +1257,35 @@ export default function App({ onCreated, onBack }) {
     setSelection(null);
   }, []);
 
+  const resetParserUi = React.useCallback(({ loading = false, error = "" } = {}) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    actionLockRef.current = "";
+    clearSelection();
+    setFlags({});
+    setMeta({});
+    setSegments([]);
+    setSuppressedFields([]);
+    setSelectedField(null);
+    setActiveItemIndex(0);
+    setItemMeta([emptyItemMeta()]);
+    setGiftMessage(null);
+    setGiftMessageMeta(null);
+    setActiveKeyField(null);
+    setState({
+      text: "",
+      subject: "",
+      decisions: [],
+      filePath: "",
+      error,
+      loading,
+      quantity: 1,
+      items: [emptyItem()],
+    });
+  }, [clearSelection]);
+
   const captureSelection = React.useCallback(() => {
     const container = textRef.current;
     const browserSelection = window.getSelection();
@@ -1151,7 +1342,12 @@ export default function App({ onCreated, onBack }) {
     if (!state.filePath || !sel?.selected_text) {
       return;
     }
-    const actionKey = `manual:${field}:${sel.start}:${sel.end}:${sel.selected_text}`;
+    const normalizedValue = normalizeFieldValue(sel.selected_text);
+    if (!normalizedValue) {
+      return;
+    }
+    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
+    const actionKey = `manual:${field}:${sel.start}:${sel.end}:${normalizedValue}`;
     if (actionLockRef.current === actionKey) {
       return;
     }
@@ -1166,7 +1362,7 @@ export default function App({ onCreated, onBack }) {
         orderNumber: currentOrderNumber,
         decision: {
           field,
-          value: sel.selected_text,
+          value: normalizedValue,
           segment_id: sel.segment_id,
           start: sel.start,
           end: sel.end,
@@ -1175,7 +1371,7 @@ export default function App({ onCreated, onBack }) {
         },
       });
       const assignedDecision = result.decisions?.find((decision) => decision.field === field) || null;
-      const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items);
+      const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage);
       console.log("DECISIONS_AFTER_ASSIGN:", result.decisions);
       console.log("HIGHLIGHTS:", nextHighlights);
       console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", assignedDecision
@@ -1188,7 +1384,7 @@ export default function App({ onCreated, onBack }) {
         }
         : {
           field,
-          value: sel.selected_text,
+          value: normalizedValue,
           start: sel.start,
           end: sel.end,
           decision: null,
@@ -1212,6 +1408,11 @@ export default function App({ onCreated, onBack }) {
     if (!sel?.selected_text) {
       return;
     }
+    const normalizedValue = normalizeFieldValue(sel.selected_text);
+    if (!normalizedValue) {
+      return;
+    }
+    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
 
     setState((current) => ({
       ...current,
@@ -1222,7 +1423,7 @@ export default function App({ onCreated, onBack }) {
         return {
           ...item,
           [field]: {
-            value: sel.selected_text,
+            value: normalizedValue,
             start: sel.start,
             end: sel.end,
           },
@@ -1240,7 +1441,7 @@ export default function App({ onCreated, onBack }) {
           decision: "assigned",
           start: sel.start,
           end: sel.end,
-          value: sel.selected_text,
+          value: normalizedValue,
         },
       };
     }));
@@ -1248,7 +1449,7 @@ export default function App({ onCreated, onBack }) {
     console.log("HIGHLIGHTS:", highlights);
     console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", {
       field,
-      value: sel.selected_text,
+      value: normalizedValue,
       start: sel.start,
       end: sel.end,
       decision: "assigned",
@@ -1291,18 +1492,22 @@ export default function App({ onCreated, onBack }) {
       return;
     }
     setSelectedField(field);
+    scrollToDecisionRange(field, decision);
     // Check ref first — state may not have propagated yet when the click fires.
     const sel = lastSelectionRef.current || selection;
     if (sel?.selected_text) {
       assignSelectionToField(field);
     }
-  }, [assignSelectionToField, selection]);
+  }, [assignSelectionToField, scrollToDecisionRange, selection]);
 
   const assignGiftMessage = React.useCallback(() => {
     const sel = lastSelectionRef.current || selection;
     if (!sel?.selected_text) return;
-    setGiftMessage({ value: sel.selected_text, start: sel.start, end: sel.end });
-    setGiftMessageMeta({ decision: "assigned", source: "manual", value: sel.selected_text });
+    const normalizedValue = normalizeFieldValue(sel.selected_text);
+    if (!normalizedValue) return;
+    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
+    setGiftMessage({ value: normalizedValue, start: sel.start, end: sel.end });
+    setGiftMessageMeta({ decision: "assigned", source: "manual", value: normalizedValue });
     setSelectedField("gift_message");
     clearSelection();
   }, [clearSelection, selection]);
@@ -1315,14 +1520,23 @@ export default function App({ onCreated, onBack }) {
 
   const handleItemFieldClick = React.useCallback((field, itemIndex) => {
     setSelectedField(`item:${itemIndex}:${field}`);
+    const itemValue = state.items[itemIndex]?.[field];
+    const itemSource = (itemValue && typeof itemValue === "object")
+      ? itemValue
+      : itemMeta[itemIndex]?.[field] || null;
+    scrollToDecisionRange(`item:${itemIndex}:${field}`, itemSource);
     const sel = lastSelectionRef.current || selection;
     if (sel?.selected_text) {
       assignSelectionToItemField(field, itemIndex);
     }
-  }, [assignSelectionToItemField, selection]);
+  }, [assignSelectionToItemField, itemMeta, scrollToDecisionRange, selection, state.items]);
 
-  const importEml = async () => {
-    setState((current) => ({ ...current, loading: true, error: "" }));
+  const importEml = async ({ resetBeforeOpen = false } = {}) => {
+    if (resetBeforeOpen) {
+      resetParserUi({ loading: true });
+    } else {
+      setState((current) => ({ ...current, loading: true, error: "" }));
+    }
     try {
       const result = await window.parserApp.importEml();
       if (!result) {
@@ -1345,13 +1559,46 @@ export default function App({ onCreated, onBack }) {
     }
   };
 
-  // Keep ref up to date so the mount effect always calls the latest version.
+  // Keep ref up to date so import requests always call the latest version.
   importEmlRef.current = importEml;
 
-  // Automatically open the file picker when the page first loads.
   React.useEffect(() => {
-    importEmlRef.current();
-  }, []);
+    importEmlRef.current?.();
+  }, [importRequestKey]);
+
+  React.useEffect(() => {
+    if (!selectedFilePath) {
+      return;
+    }
+    let cancelled = false;
+    async function openSelectedFile() {
+      resetParserUi({ loading: true });
+      try {
+        const result = await window.parserApp?.parseFile?.({ filePath: selectedFilePath });
+        if (!cancelled) {
+          setSuppressedFields([]);
+          setActiveItemIndex(0);
+          setGiftMessage(null);
+          setGiftMessageMeta(null);
+          setActiveKeyField(null);
+          clearSelection();
+          applyResult(result);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            loading: false,
+            error: error.message || "Failed to open email",
+          }));
+        }
+      }
+    }
+    openSelectedFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyResult, clearSelection, resetParserUi, selectedFilePath, selectedFileRequestKey]);
 
 
   const teach = async (action, decision) => {
@@ -1361,7 +1608,8 @@ export default function App({ onCreated, onBack }) {
       return;
     }
 
-    const actionKey = `${action}:${decision.field}:${decision.segment_id}:${decision.value}`;
+    const normalizedDecisionValue = normalizeFieldValue(decision.value);
+    const actionKey = `${action}:${decision.field}:${decision.segment_id}:${normalizedDecisionValue}`;
     if (actionLockRef.current === actionKey) {
       const skip = { reason: "duplicate_action_lock", action, field: decision.field, actionKey };
       console.log(action === "save_rejection" ? "REJECT_SKIPPED" : "TEACH_SKIPPED", skip);
@@ -1390,6 +1638,7 @@ export default function App({ onCreated, onBack }) {
           orderNumber: currentOrderNumber,
           decision: {
             ...decision,
+            value: normalizedDecisionValue,
             suppressed_fields: nextSuppressed,
           },
         };
@@ -1398,7 +1647,7 @@ export default function App({ onCreated, onBack }) {
           : await window.parserApp.saveRejection(payload);
         if (action === "save_assignment") {
           const assignedDecision = result.decisions?.find((row) => row.field === decision.field) || null;
-      const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items);
+          const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage);
           console.log("DECISIONS_AFTER_ASSIGN:", result.decisions);
           console.log("HIGHLIGHTS:", nextHighlights);
           console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", assignedDecision
@@ -1411,7 +1660,7 @@ export default function App({ onCreated, onBack }) {
             }
             : {
               field: decision.field,
-              value: decision.value,
+              value: normalizedDecisionValue,
               start: decision.start,
               end: decision.end,
               decision: null,
@@ -1465,37 +1714,61 @@ export default function App({ onCreated, onBack }) {
   const _emailTrimOffset = _rawEmail.length - _rawEmail.trimStart().length;
   const _displayEmail = _emailTrimOffset > 0 ? _rawEmail.trimStart() : _rawEmail;
   emailTrimOffsetRef.current = _emailTrimOffset;
+  const displayHighlights = React.useMemo(
+    () => (_emailTrimOffset > 0
+      ? [...highlights, ...attentionHighlights]
+          .map((h) => ({
+            ...h,
+            rawStart: h.start,
+            rawEnd: h.end,
+            start: h.start - _emailTrimOffset,
+            end: h.end - _emailTrimOffset,
+          }))
+          .filter((h) => h.end > 0 && h.start < _displayEmail.length)
+      : [...highlights, ...attentionHighlights].map((h) => ({
+          ...h,
+          rawStart: h.start,
+          rawEnd: h.end,
+        }))),
+    [_displayEmail.length, _emailTrimOffset, attentionHighlights, highlights]
+  );
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        {onBack && (
-          <button className="back-button" onClick={onBack}>
-            ← Orders
-          </button>
-        )}
-        <button className="import-button" onClick={importEml} disabled={state.loading}>
+      <AppHeader
+        canSave={false}
+        saveTitle="Nothing to save yet"
+        onSettings={onSettings}
+        onWorkspace={onWorkspace}
+        documentsConfig={documentsConfig}
+        onImport={onImport}
+        activeTab={ordersTab}
+        selectedNav="import"
+        onSelectTab={(nextTab) => {
+          onOrdersTabChange?.(nextTab);
+          onBack?.(nextTab);
+        }}
+        showCounts={false}
+      />
+
+      <div className="parser-context-bar">
+        <button
+          className="parser-secondary-action"
+          onClick={importEml}
+          disabled={state.loading}
+        >
           {state.loading ? "Loading…" : state.filePath ? "Change File" : "Import EML"}
         </button>
         {state.filePath && (
-          <div className="topbar-subject">
+          <div className="parser-subject-meta" title={state.subject || "(no subject)"}>
             <span className="subject-label">Subject:</span>{" "}
             <span>{state.subject || "(no subject)"}</span>
           </div>
         )}
-        {state.filePath ? (
-          <div className="topbar-file-info" title={state.filePath}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-          </div>
-        ) : null}
-      </header>
+      </div>
 
       {state.error ? <div className="error-banner">{state.error}</div> : null}
+      {createToast ? <div className="create-feedback-toast">{createToast}</div> : null}
 
       {/* ── Empty state — shown when no file is loaded ── */}
       {!state.filePath && !state.loading && (
@@ -1508,7 +1781,17 @@ export default function App({ onCreated, onBack }) {
 
       <main className={`split-view${!state.filePath ? " split-view-hidden" : ""}`}>
         <section className="panel text-panel">
-          <div className="panel-title">Email Content</div>
+          <div className="panel-title panel-title-row">
+            <span>Email Content</span>
+            <label className="email-visibility-toggle">
+              <input
+                type="checkbox"
+                checked={showDetectedFields}
+                onChange={(event) => setShowDetectedFields(event.target.checked)}
+              />
+              <span>Show detected fields</span>
+            </label>
+          </div>
           <pre
             ref={textRef}
             className="email-content"
@@ -1518,11 +1801,9 @@ export default function App({ onCreated, onBack }) {
             {_displayEmail
               ? renderHighlightedText(
                   _displayEmail,
-                  _emailTrimOffset > 0
-                    ? highlights
-                        .map((h) => ({ ...h, start: h.start - _emailTrimOffset, end: h.end - _emailTrimOffset }))
-                        .filter((h) => h.end > 0 && h.start < _displayEmail.length)
-                    : highlights,
+                  displayHighlights,
+                  showDetectedFields,
+                  pulseGiftAttention,
                 )
               : "(import an .eml file to view content)"
             }
@@ -1605,6 +1886,7 @@ export default function App({ onCreated, onBack }) {
               selected={selectedField === "gift_message"}
               onSelect={() => {
                 setSelectedField("gift_message");
+                scrollToDecisionRange("gift_message", giftMessage || giftMessageMeta);
                 if (selection?.selected_text) assignGiftMessage();
               }}
               onAccept={assignGiftMessage}
@@ -1676,15 +1958,15 @@ export default function App({ onCreated, onBack }) {
             <button
               type="button"
               onClick={handleCreateOrder}
-              disabled={!canCreateOrder}
+              disabled={!canCreateOrder || state.loading}
               style={{
                 marginTop: "12px",
                 padding: "10px 16px",
-                background: canCreateOrder ? "#2563eb" : "#ccc",
+                background: canCreateOrder && !state.loading ? "#2563eb" : "#ccc",
                 color: "white",
                 border: "none",
                 borderRadius: "6px",
-                cursor: canCreateOrder ? "pointer" : "not-allowed",
+                cursor: canCreateOrder && !state.loading ? "pointer" : "not-allowed",
                 width: "100%",
                 fontWeight: 600,
                 fontSize: "14px",

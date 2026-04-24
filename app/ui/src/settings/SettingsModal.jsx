@@ -7,16 +7,18 @@ import {
   loadPriceList, savePriceList,
   PRICE_TYPE_FIELD_KEY,
   contrastColor,
-  loadStatusConfig, saveStatusConfig, DEFAULT_STATUS_CONFIG,
-  loadViewConfig, saveViewConfig, DEFAULT_VIEW_CONFIG, SEARCH_FIELD_GROUPS,
+  loadStatusConfig, saveStatusConfig,
+  loadViewConfig, saveViewConfig, SEARCH_FIELD_GROUPS,
   FIELD_DEFS,
-  loadDateConfig, saveDateConfig, DEFAULT_DATE_CONFIG, formatDate,
-  loadArchiveConfig, saveArchiveConfig, DEFAULT_ARCHIVE_CONFIG,
+  loadDateConfig, saveDateConfig, formatDate,
+  loadArchiveConfig, saveArchiveConfig,
   loadEmailTemplates, saveEmailTemplates, DEFAULT_EMAIL_TEMPLATES, EMAIL_VARIABLE_KEYS,
   evalEmailCondition,
-  loadShopConfig, saveShopConfig, DEFAULT_SHOP_CONFIG,
-  loadDocumentsConfig, saveDocumentsConfig, DEFAULT_DOCUMENTS_CONFIG,
+  loadShopConfig, saveShopConfig,
+  loadDocumentsConfig, saveDocumentsConfig,
+  loadPrintConfig, savePrintConfig,
 } from "../shared/utils/fieldConfig.js";
+import AppHeader from "../shared/components/AppHeader.jsx";
 
 function swapItems(arr, i, j) {
   const next = [...arr];
@@ -25,16 +27,17 @@ function swapItems(arr, i, j) {
 }
 
 const TABS = [
-  { id: "general",   label: "General"     },
   { id: "orders",    label: "Orders"      },
   { id: "parser",    label: "Parser"      },
-  { id: "pricing",   label: "Pricing"     },
+  { id: "emails",    label: "Emails"      },
   { id: "status",    label: "Status"      },
-  { id: "view",      label: "Search/Sort" },
+  { id: "pricing",   label: "Pricing"     },
+  { id: "view",      label: "Search / Sort" },
   { id: "dates",     label: "Dates"       },
   { id: "archive",   label: "Archive"     },
-  { id: "emails",    label: "Emails"      },
-  { id: "documents", label: "Documents"   },
+  { id: "printing",  label: "Printing"    },
+  { id: "documents", label: "Docs"        },
+  { id: "general",   label: "General"     },
 ];
 
 /* ── icons ─────────────────────────────────────────────────────────────── */
@@ -191,40 +194,41 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
   ];
 
   return (
-    <>
-      {/* Column headers */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
-        gap: "0 8px", padding: "5px 10px",
-        background: "#f3f4f6", borderRadius: "6px 6px 0 0",
-        borderBottom: "1px solid #e5e7eb",
-        fontSize: "11px", fontWeight: 600, color: "#6b7280",
-        letterSpacing: "0.05em", textTransform: "uppercase", alignItems: "center",
-      }}>
-        <span>System key</span>
-        <span>Display name</span>
-        <span style={{ textAlign: "center" }} title="Show/hide column">👁</span>
-        <span style={{ textAlign: "center" }} title="Apply row color to this cell">🎨</span>
-        <span style={{ textAlign: "center" }} title="Highlight cell when populated">Highlight</span>
-        <span style={{ textAlign: "center" }}>Order</span>
-      </div>
+    <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+      <div style={{ minWidth: "700px" }}>
+        {/* Column headers */}
+        <div style={{
+          display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
+          gap: "0 8px", padding: "5px 10px",
+          background: "#f3f4f6", borderRadius: "6px 6px 0 0",
+          borderBottom: "1px solid #e5e7eb",
+          fontSize: "11px", fontWeight: 600, color: "#6b7280",
+          letterSpacing: "0.05em", textTransform: "uppercase", alignItems: "center",
+        }}>
+          <span>System key</span>
+          <span>Display name</span>
+          <span style={{ textAlign: "center" }} title="Show/hide column">👁</span>
+          <span style={{ textAlign: "center" }} title="Apply row color to this cell">🎨</span>
+          <span style={{ textAlign: "center" }} title="Highlight cell when populated">Highlight</span>
+          <span style={{ textAlign: "center" }}>Order</span>
+        </div>
 
-      <div style={{ border: "1px solid #e5e7eb", borderTop: "none", borderRadius: "0 0 6px 6px", overflow: "hidden" }}>
-        {orderedFields.map((f, i) => {
-          const isVisible = f.visibleInOrders;
-          const orderIdx  = localOrder.indexOf(f.key);
-          const isFirst   = orderIdx === 0;
-          const isLast    = orderIdx === localOrder.length - 1;
-          const hlEnabled = f.highlight?.enabled ?? false;
-          const hlColor   = f.highlight?.color   ?? null;
+        <div style={{ border: "1px solid #e5e7eb", borderTop: "none", borderRadius: "0 0 6px 6px", overflow: "hidden" }}>
+          {orderedFields.map((f, i) => {
+            const isVisible = f.visibleInOrders;
+            const orderIdx  = localOrder.indexOf(f.key);
+            const isFirst   = orderIdx === 0;
+            const isLast    = orderIdx === localOrder.length - 1;
+            const hlEnabled = f.highlight?.enabled ?? false;
+            const hlColor   = f.highlight?.color   ?? null;
 
-          return (
-            <div key={f.key} style={{
-              display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
-              gap: "0 8px", padding: "8px 10px", alignItems: "center",
-              background: i % 2 === 0 ? "#fff" : "#fafafa",
-              borderBottom: i < orderedFields.length - 1 ? "1px solid #f3f4f6" : "none",
-            }}>
+            return (
+              <div key={f.key} style={{
+                display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
+                gap: "0 8px", padding: "8px 10px", alignItems: "center",
+                background: i % 2 === 0 ? "#fff" : "#fafafa",
+                borderBottom: i < orderedFields.length - 1 ? "1px solid #f3f4f6" : "none",
+              }}>
               {/* System key */}
               <div style={{ fontSize: "12px", color: "#9ca3af", fontFamily: "monospace",
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -249,7 +253,7 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
                   color: (f.fixed || f._isVirtual) ? "#9ca3af" : "#111",
                   background: (f.fixed || f._isVirtual) ? "#f9fafb" : "#fff",
                   cursor: (f.fixed || f._isVirtual) ? "not-allowed" : "text",
-                  outline: "none", width: "100%", boxSizing: "border-box",
+                  outline: "none", maxWidth: "100%", minWidth: 0, boxSizing: "border-box",
                 }}
                 onFocus={(e) => { if (!f.fixed) e.target.style.borderColor = "#2563eb"; }}
                 onBlur={(e)  => { e.target.style.borderColor = f.fixed ? "#e5e7eb" : "#d1d5db"; }}
@@ -318,11 +322,12 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
                     padding: "2px 5px", cursor: isLast ? "default" : "pointer",
                     color: isLast ? "#d1d5db" : "#374151", fontSize: "11px", lineHeight: 1 }}>↓</button>
               </div>
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -333,53 +338,54 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
  */
 function FieldTable({ fields, visibilityKey, setLabel, toggleVisible }) {
   return (
-    <>
-      {/* Column headers */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "150px 1fr 100px 44px",
-        gap: "0 12px",
-        padding: "5px 10px",
-        background: "#f3f4f6",
-        borderRadius: "6px 6px 0 0",
-        borderBottom: "1px solid #e5e7eb",
-        fontSize: "11px",
-        fontWeight: 600,
-        color: "#6b7280",
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        alignItems: "center",
-      }}>
-        <span>System key</span>
-        <span>Display name</span>
-        <span style={{ textAlign: "center" }}>Visible</span>
-        <span></span>
-      </div>
+    <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+      <div style={{ minWidth: "520px" }}>
+        {/* Column headers */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "150px 1fr 100px 44px",
+          gap: "0 12px",
+          padding: "5px 10px",
+          background: "#f3f4f6",
+          borderRadius: "6px 6px 0 0",
+          borderBottom: "1px solid #e5e7eb",
+          fontSize: "11px",
+          fontWeight: 600,
+          color: "#6b7280",
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          alignItems: "center",
+        }}>
+          <span>System key</span>
+          <span>Display name</span>
+          <span style={{ textAlign: "center" }}>Visible</span>
+          <span></span>
+        </div>
 
-      <div style={{
-        border: "1px solid #e5e7eb",
-        borderTop: "none",
-        borderRadius: "0 0 6px 6px",
-        overflow: "hidden",
-      }}>
-        {fields.map((f, i) => {
-          const isVisible = f[visibilityKey];
-          // In the orders tab, fixed fields are always visible and cannot be toggled.
-          const canToggle = !(visibilityKey === "visibleInOrders" && f.fixed);
+        <div style={{
+          border: "1px solid #e5e7eb",
+          borderTop: "none",
+          borderRadius: "0 0 6px 6px",
+          overflow: "hidden",
+        }}>
+          {fields.map((f, i) => {
+            const isVisible = f[visibilityKey];
+            // In the orders tab, fixed fields are always visible and cannot be toggled.
+            const canToggle = !(visibilityKey === "visibleInOrders" && f.fixed);
 
-          return (
-            <div
-              key={f.key}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "150px 1fr 100px 44px",
-                gap: "0 12px",
-                padding: "8px 10px",
-                alignItems: "center",
-                background: i % 2 === 0 ? "#fff" : "#fafafa",
-                borderBottom: i < fields.length - 1 ? "1px solid #f3f4f6" : "none",
-              }}
-            >
+            return (
+              <div
+                key={f.key}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "150px 1fr 100px 44px",
+                  gap: "0 12px",
+                  padding: "8px 10px",
+                  alignItems: "center",
+                  background: i % 2 === 0 ? "#fff" : "#fafafa",
+                  borderBottom: i < fields.length - 1 ? "1px solid #f3f4f6" : "none",
+                }}
+              >
               {/* System key */}
               <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#9ca3af", fontFamily: "monospace" }}>
                 {f.fixed && <LockIcon />}
@@ -402,7 +408,8 @@ function FieldTable({ fields, visibilityKey, setLabel, toggleVisible }) {
                   background: f.fixed ? "#f9fafb" : "#fff",
                   cursor: f.fixed ? "not-allowed" : "text",
                   outline: "none",
-                  width: "100%",
+                  maxWidth: "100%",
+                  minWidth: 0,
                   boxSizing: "border-box",
                 }}
                 onFocus={(e) => { if (!f.fixed) e.target.style.borderColor = "#2563eb"; }}
@@ -436,11 +443,12 @@ function FieldTable({ fields, visibilityKey, setLabel, toggleVisible }) {
                     : <span style={{ color: "#dc2626" }}>off</span>
                 }
               </div>
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -465,7 +473,8 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
 
   function renderSection(title, sectionKeys, sectionSet) {
     return (
-      <>
+      <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+        <div style={{ minWidth: "560px" }}>
         {/* Section header */}
         <div style={{
           display: "grid",
@@ -525,7 +534,7 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
                     color: f.fixed ? "#9ca3af" : "#111",
                     background: f.fixed ? "#f9fafb" : "#fff",
                     cursor: f.fixed ? "not-allowed" : "text",
-                    outline: "none", width: "100%", boxSizing: "border-box",
+                    outline: "none", maxWidth: "100%", minWidth: 0, boxSizing: "border-box",
                   }}
                   onFocus={(e) => { if (!f.fixed) e.target.style.borderColor = "#2563eb"; }}
                   onBlur={(e) => { e.target.style.borderColor = f.fixed ? "#e5e7eb" : "#d1d5db"; }}
@@ -582,7 +591,8 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
             );
           })}
         </div>
-      </>
+        </div>
+      </div>
     );
   }
 
@@ -649,7 +659,8 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
           No price rules yet. Click <strong>+ Add row</strong> to create one.
         </div>
       ) : (
-        <>
+        <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+          <div style={{ minWidth: "460px" }}>
           {/* Header */}
           <div style={{
             display: "grid", gridTemplateColumns: "100px 1fr 54px 60px",
@@ -679,7 +690,7 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
                 border: isDark ? "1px solid rgba(255,255,255,0.35)" : "1px solid rgba(0,0,0,0.18)",
                 background: isDark ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.7)",
                 color: textColor,
-                outline: "none", width: "100%", boxSizing: "border-box",
+                outline: "none", maxWidth: "100%", minWidth: 0, boxSizing: "border-box",
               };
 
               return (
@@ -746,7 +757,8 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
               );
             })}
           </div>
-        </>
+          </div>
+        </div>
       )}
     </>
   );
@@ -855,7 +867,8 @@ function StatusTab({ config, setConfig }) {
           No states defined. Click <strong>+ Add state</strong> to create one.
         </div>
       ) : (
-        <>
+        <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+          <div style={{ minWidth: "520px" }}>
           {/* Column headers */}
           <div style={{
             display: "grid", gridTemplateColumns: "1fr 60px 44px 52px",
@@ -963,7 +976,8 @@ function StatusTab({ config, setConfig }) {
               </span>
             ))}
           </div>
-        </>
+          </div>
+        </div>
       )}
     </>
   );
@@ -1233,6 +1247,8 @@ function newTemplateId() {
 
 function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfig }) {
   const [editingId, setEditingId] = React.useState(null);
+  const [smtpState, setSmtpState] = React.useState({ testing: false, message: "", error: "" });
+  const [smtpProvider, setSmtpProvider] = React.useState("other");
 
   // Track last-focused subject/body field so variable pills know where to insert
   const focusRef = React.useRef({ field: null, el: null, start: 0, end: 0 });
@@ -1334,7 +1350,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
   }
 
   const inputStyle = {
-    width: "100%", padding: "5px 8px", border: "1px solid #d1d5db",
+    maxWidth: "560px", padding: "5px 8px", border: "1px solid #d1d5db",
     borderRadius: "4px", fontSize: "12px", boxSizing: "border-box",
   };
   const labelStyle = { fontSize: "11px", color: "#6b7280", marginBottom: "3px", display: "block" };
@@ -1464,8 +1480,183 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
   const defaultIdx = templates.findIndex((t) => !t.condition);
   const defaultNotLast = defaultIdx !== -1 && defaultIdx !== templates.length - 1;
 
+  async function handleTestSmtp() {
+    setSmtpState({ testing: true, message: "", error: "" });
+    try {
+      const result = await window.parserApp?.testSmtpConnection?.({
+        config: {
+          emailAddress: shopConfig?.smtpEmailAddress || "",
+          host: shopConfig?.smtpHost || "",
+          port: shopConfig?.smtpPort || "",
+          username: shopConfig?.smtpUsername || "",
+          password: shopConfig?.smtpPassword || "",
+        },
+      });
+      if (result?.ok) {
+        setSmtpState({ testing: false, message: result.message || "SMTP connection successful.", error: "" });
+      } else {
+        setSmtpState({ testing: false, message: "", error: result?.error || "Unable to connect — check settings or network" });
+      }
+    } catch (error) {
+      setSmtpState({ testing: false, message: "", error: error?.message || "Unable to connect — check settings or network" });
+    }
+  }
+
+  const providerHelp = {
+    gmail: {
+      title: "Gmail Setup",
+      steps: [
+        "Enable 2-Step Verification on your Google account",
+        "Generate an App Password: Google Account -> Security -> App Passwords",
+        "Use this App Password below (not your Gmail password)",
+      ],
+      settings: [
+        "SMTP Host: smtp.gmail.com",
+        "Port: 587 (or 465)",
+        "Username: your full Gmail address",
+      ],
+    },
+    outlook: {
+      title: "Outlook Setup",
+      steps: [
+        "Use your Outlook email and password",
+        "If you have issues, create an App Password in Microsoft account security",
+      ],
+      settings: [
+        "SMTP Host: smtp.office365.com",
+        "Port: 587",
+        "Username: your full email address",
+      ],
+    },
+    other: {
+      title: "Other Provider Setup",
+      steps: [
+        "Use your email provider's SMTP settings",
+        "Most providers support Port 587 (TLS) or 465 (SSL)",
+        "Contact your provider if you are unsure",
+      ],
+      settings: [],
+    },
+  };
+  const selectedProviderHelp = providerHelp[smtpProvider] || providerHelp.other;
+
   return (
     <div style={{ padding: "4px 0" }}>
+
+      <div style={{
+        background: "#f9fafb", border: "1px solid #e5e7eb",
+        borderRadius: "10px", padding: "14px 18px", marginBottom: "16px",
+      }}>
+        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: 8 }}>
+          Email Sending Setup
+        </div>
+        <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.6, marginBottom: 12 }}>
+          To send emails from Spaila, enter your email provider's SMTP details below.
+          <br />
+          Most providers require an App Password instead of your normal password.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {[
+            { id: "gmail", label: "Gmail" },
+            { id: "outlook", label: "Outlook" },
+            { id: "other", label: "Other" },
+          ].map((provider) => (
+            <button
+              key={provider.id}
+              type="button"
+              onClick={() => setSmtpProvider(provider.id)}
+              style={{
+                padding: "6px 12px",
+                border: `1px solid ${smtpProvider === provider.id ? "#93c5fd" : "#d1d5db"}`,
+                borderRadius: 999,
+                background: smtpProvider === provider.id ? "#eff6ff" : "#fff",
+                color: "#111827",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {provider.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 6 }}>
+            {selectedProviderHelp.title}
+          </div>
+          <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.6 }}>
+            {selectedProviderHelp.steps.map((step, index) => (
+              <div key={step}>{index + 1}. {step}</div>
+            ))}
+            {selectedProviderHelp.settings.map((setting) => (
+              <div key={setting} style={{ marginTop: 4 }}>{setting}</div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+          <label>
+            <span style={labelStyle}>Email Address</span>
+            <input
+              value={shopConfig?.smtpEmailAddress ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpEmailAddress: e.target.value }))}
+              placeholder="you@example.com"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
+          <label>
+            <span style={labelStyle}>SMTP Host</span>
+            <input
+              value={shopConfig?.smtpHost ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpHost: e.target.value }))}
+              placeholder="smtp.gmail.com"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
+          <label>
+            <span style={labelStyle}>Port</span>
+            <input
+              value={shopConfig?.smtpPort ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpPort: e.target.value }))}
+              placeholder="587"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
+          <label>
+            <span style={labelStyle}>Username</span>
+            <input
+              value={shopConfig?.smtpUsername ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpUsername: e.target.value }))}
+              placeholder="usually same as email"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            <span style={labelStyle}>Password (App Password)</span>
+            <input
+              type="password"
+              value={shopConfig?.smtpPassword ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpPassword: e.target.value }))}
+              placeholder="App Password (recommended)"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleTestSmtp}
+            disabled={smtpState.testing}
+            style={{ padding: "6px 12px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+          >
+            {smtpState.testing ? "Testing..." : "Test Connection"}
+          </button>
+          {smtpState.message ? <div style={{ fontSize: 12, color: "#047857" }}>✔ Connection successful</div> : null}
+          {smtpState.error ? <div style={{ fontSize: 12, color: "#b91c1c" }}>{smtpState.error}</div> : null}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+          Some networks (work or public WiFi) may block email sending.
+        </div>
+      </div>
 
       {/* ── Email icon visibility ── */}
       <div style={{
@@ -1685,7 +1876,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
       })}
 
       <button onClick={addTemplate} style={{
-        marginTop: 4, width: "100%", padding: "8px",
+        marginTop: 4, maxWidth: "320px", padding: "8px 14px",
         border: "1px dashed #9ca3af", borderRadius: "6px",
         background: "none", color: "#6b7280", fontSize: "13px", cursor: "pointer",
       }}>+ Add Template</button>
@@ -1804,6 +1995,155 @@ function ArchiveTab({ config, setConfig }) {
   );
 }
 
+/* ── Printing tab ────────────────────────────────────────────────────────── */
+function PrintingTab({ columns, config, setConfig }) {
+  const rowStyle = { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" };
+  const checkStyle = { width: "15px", height: "15px", cursor: "pointer", accentColor: "#2563eb" };
+  const labelStyle = { fontSize: "13px", color: "#374151", cursor: "pointer" };
+
+  function setVisible(key, value) {
+    setConfig((prev) => ({
+      ...prev,
+      columns: { ...(prev?.columns || {}), [key]: value },
+    }));
+  }
+
+  function setWrap(key, value) {
+    setConfig((prev) => ({
+      ...prev,
+      wrap: { ...(prev?.wrap || {}), [key]: value },
+    }));
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "4px" }}>
+        Printing Fields
+      </div>
+      <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6 }}>
+        Choose which columns from the Orders sheet should be included in PDFs and printouts.
+        Only fields currently visible on the Orders sheet appear here.
+      </div>
+
+      <div style={{ marginBottom: "22px" }}>
+        <div style={{ fontSize: "13px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
+          Page orientation
+        </div>
+        <div style={{ display: "flex", gap: "10px" }}>
+          {[
+            { value: "portrait", label: "Portrait", desc: "Best for shorter field sets." },
+            { value: "landscape", label: "Landscape", desc: "Wider layout for more columns." },
+          ].map((option) => (
+            <label
+              key={option.value}
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "8px",
+                padding: "10px 12px",
+                border: "1px solid",
+                borderColor: config.orientation === option.value ? "#2563eb" : "#e5e7eb",
+                borderRadius: "7px",
+                cursor: "pointer",
+                background: config.orientation === option.value ? "#eff6ff" : "#fff",
+              }}
+            >
+              <input
+                type="radio"
+                name="printOrientation"
+                value={option.value}
+                checked={config.orientation === option.value}
+                onChange={() => setConfig((prev) => ({ ...prev, orientation: option.value }))}
+                style={{ marginTop: "2px", accentColor: "#2563eb" }}
+              />
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "#111" }}>{option.label}</div>
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>{option.desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: "8px",
+        overflow: "hidden",
+        background: "#fff",
+      }}>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 90px 130px",
+          gap: "0 12px",
+          padding: "8px 12px",
+          background: "#f3f4f6",
+          borderBottom: "1px solid #e5e7eb",
+          fontSize: "11px",
+          fontWeight: 700,
+          color: "#6b7280",
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          alignItems: "center",
+        }}>
+          <span>Display name</span>
+          <span style={{ textAlign: "center" }}>Print</span>
+          <span style={{ textAlign: "center" }}>Wrap if needed</span>
+        </div>
+
+        {columns.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: "13px", color: "#6b7280" }}>
+            No Orders sheet fields are currently visible.
+          </div>
+        ) : columns.map((column, index) => {
+          const id = `print_${column.key}`;
+          const wrapId = `print_wrap_${column.key}`;
+          const isVisible = config?.columns?.[column.key] !== false;
+          const shouldWrap = !!config?.wrap?.[column.key];
+          return (
+            <div
+              key={column.key}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 90px 130px",
+                gap: "0 12px",
+                padding: "10px 12px",
+                alignItems: "center",
+                background: index % 2 === 0 ? "#fff" : "#fafafa",
+                borderBottom: index < columns.length - 1 ? "1px solid #f3f4f6" : "none",
+              }}
+            >
+              <label htmlFor={id} style={labelStyle}>{column.label}</label>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <div style={rowStyle}>
+                  <input
+                    id={id}
+                    type="checkbox"
+                    style={checkStyle}
+                    checked={isVisible}
+                    onChange={(e) => setVisible(column.key, e.target.checked)}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <div style={rowStyle}>
+                  <input
+                    id={wrapId}
+                    type="checkbox"
+                    style={checkStyle}
+                    checked={shouldWrap}
+                    onChange={(e) => setWrap(column.key, e.target.checked)}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ── Documents tab ──────────────────────────────────────────────────────── */
 function DocumentsTab({ config, setConfig }) {
   async function pickFile(field, nameField, title, filters) {
@@ -1889,7 +2229,7 @@ function DocumentsTab({ config, setConfig }) {
   return (
     <div>
       <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
-        Documents
+        Docs
       </div>
 
       {/* Letterhead */}
@@ -2018,7 +2358,7 @@ function DocumentsTab({ config, setConfig }) {
           Coordinates are in points (1 inch = 72 pt) measured from the bottom-left corner of the page.
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 20px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 240px))", gap: "12px 20px" }}>
           {[
             { key: "giftTextX",        label: "X (left offset, pt)",    min: 0,   max: 800 },
             { key: "giftTextY",        label: "Y (from bottom, pt)",    min: 0,   max: 1200 },
@@ -2040,7 +2380,7 @@ function DocumentsTab({ config, setConfig }) {
                   border: "1px solid #d1d5db",
                   borderRadius: "6px",
                   fontSize: "13px",
-                  width: "100%",
+                  maxWidth: "240px",
                   boxSizing: "border-box",
                 }}
                 onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
@@ -2076,46 +2416,25 @@ function DocumentsTab({ config, setConfig }) {
 }
 
 /* ── main component ─────────────────────────────────────────────────────── */
-export default function SettingsModal({ open, onClose, columnOrder: externalColumnOrder, onColumnOrderChange }) {
-  const [activeTab, setActiveTab] = React.useState("general");
-  const [fields, setFields] = React.useState([]);
-  const [localOrder, setLocalOrder] = React.useState([]);
-  const [localParserOrder, setLocalParserOrder] = React.useState([]);
-  const [localPriceList, setLocalPriceList] = React.useState([]);
-  const [localStatusConfig, setLocalStatusConfig] = React.useState(() => structuredClone(DEFAULT_STATUS_CONFIG));
+export default function SettingsPage({ onOrders, onImport, onWorkspace, onSettings, ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
+  const [activeTab, setActiveTab] = React.useState("orders");
+  const [fields, setFields] = React.useState(() => loadFieldConfig());
+  const [localOrder, setLocalOrder] = React.useState(() => externalColumnOrder ? [...externalColumnOrder] : defaultColumnOrder());
+  const [localParserOrder, setLocalParserOrder] = React.useState(() => loadParserFieldOrder());
+  const [localPriceList, setLocalPriceList] = React.useState(() => loadPriceList());
+  const [localStatusConfig, setLocalStatusConfig] = React.useState(() => loadStatusConfig());
   const [localViewConfig, setLocalViewConfig] = React.useState(() => loadViewConfig());
   const [localDateConfig, setLocalDateConfig] = React.useState(() => loadDateConfig());
   const [localArchiveConfig, setLocalArchiveConfig] = React.useState(() => loadArchiveConfig());
   const [localEmailTemplates, setLocalEmailTemplates] = React.useState(() => loadEmailTemplates());
   const [localShopConfig, setLocalShopConfig] = React.useState(() => loadShopConfig());
   const [localDocumentsConfig, setLocalDocumentsConfig] = React.useState(() => loadDocumentsConfig());
-
-  React.useEffect(() => {
-    if (open) {
-      setFields(loadFieldConfig());
-      setLocalOrder(externalColumnOrder ? [...externalColumnOrder] : defaultColumnOrder());
-      setLocalParserOrder(loadParserFieldOrder());
-      setLocalPriceList(loadPriceList());
-      setLocalStatusConfig(loadStatusConfig());
-      setLocalViewConfig(loadViewConfig());
-      setLocalDateConfig(loadDateConfig());
-      setLocalArchiveConfig(loadArchiveConfig());
-      setLocalEmailTemplates(loadEmailTemplates());
-      setLocalShopConfig(loadShopConfig());
-      setLocalDocumentsConfig(loadDocumentsConfig());
-    }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  React.useEffect(() => {
-    if (!open) return;
-    function onKey(e) { if (e.key === "Escape") onClose(); }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  const [localPrintConfig, setLocalPrintConfig] = React.useState(() => loadPrintConfig());
 
   function handleSave() {
     saveShopConfig(localShopConfig);
     saveDocumentsConfig(localDocumentsConfig);
+    savePrintConfig(localPrintConfig);
     saveFieldConfig(fields);
     saveColumnOrder(localOrder);
     if (onColumnOrderChange) onColumnOrderChange(localOrder);
@@ -2126,7 +2445,7 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
     saveDateConfig(localDateConfig);
     saveArchiveConfig(localArchiveConfig);
     saveEmailTemplates(localEmailTemplates);
-    onClose();
+    onOrders?.();
   }
 
   /** Update the shared label for a field key. Both tabs write here. */
@@ -2175,86 +2494,132 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
     setLocalOrder(defaultColumnOrder());
   }
 
-  if (!open) return null;
+  const printingColumns = React.useMemo(() => {
+    const fieldMap = Object.fromEntries(fields.map((field) => [field.key, field]));
+    return localOrder.flatMap((key) => {
+      if (key === "status") {
+        return localStatusConfig.enabled
+          ? [{ key, label: localStatusConfig.columnLabel || "Status" }]
+          : [];
+      }
+      if (key === "order_info") {
+        return [{ key, label: "Order Info" }];
+      }
+      const field = fieldMap[key];
+      if (!field?.visibleInOrders) {
+        return [];
+      }
+      return [{ key, label: field.label || key }];
+    });
+  }, [fields, localOrder, localStatusConfig]);
+
+  const contentShellStyle = {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "32px",
+    minWidth: 0,
+  };
+  const mainColumnStyle = {
+    flex: "0 1 860px",
+    maxWidth: "860px",
+    minWidth: 0,
+  };
+  const helperPanelStyle = {
+    flex: "0 0 340px",
+    width: "340px",
+    minWidth: "340px",
+    position: "sticky",
+    top: 0,
+    alignSelf: "flex-start",
+  };
+  const helperCardStyle = {
+    border: "1px solid #e5e7eb",
+    borderRadius: "12px",
+    background: "#f9fafb",
+    padding: "18px 18px 16px",
+  };
 
   return (
-    <div
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-      style={{
-        position: "fixed", inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        zIndex: 2000,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
-    >
-      <div style={{
-        background: "#fff",
-        borderRadius: "10px",
-        boxShadow: "0 24px 64px rgba(0,0,0,0.26)",
-        width: "min(92vw, 860px)",
-        height: "94vh",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
+    <div style={{
+      height: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      background: "#f3f4f6",
+      overflow: "hidden",
+    }}>
+      <AppHeader
+        canSave={false}
+        saveTitle="Nothing to save yet"
+        onSettings={onSettings}
+        onWorkspace={onWorkspace}
+        documentsConfig={localDocumentsConfig}
+        onImport={onImport}
+        activeTab={ordersTab}
+        selectedNav="settings"
+        onSelectTab={(nextTab) => {
+          onOrdersTabChange?.(nextTab);
+          onOrders?.(nextTab);
+        }}
+        showCounts={false}
+      />
 
-        {/* Header */}
+      <div style={{ flex: 1, minHeight: 0, padding: "20px 24px 24px" }}>
         <div style={{
-          display: "flex", alignItems: "center",
-          padding: "16px 24px",
-          borderBottom: "1px solid #e5e7eb",
-          flexShrink: 0,
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: "14px",
+          overflow: "hidden",
+          boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)",
         }}>
-          <div style={{ flex: 1 }}>
-            <span style={{ fontWeight: 700, fontSize: "17px", color: "#111" }}>
-              Settings
-            </span>
-            {localShopConfig.shopName?.trim() && (
-              <span style={{ marginLeft: 10, fontSize: "13px", color: "#6b7280", fontWeight: 400 }}>
-                — {localShopConfig.shopName.trim()}
-              </span>
-            )}
-          </div>
-          <button onClick={onClose} style={{
-            background: "none", border: "none", fontSize: "20px",
-            cursor: "pointer", color: "#666", lineHeight: 1, padding: "2px 6px",
-          }}>×</button>
-        </div>
+          {/* Body */}
+          <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
-        {/* Body */}
-        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+            {/* Sidebar */}
+            <div style={{
+              width: "210px",
+              borderRight: "1px solid #e5e7eb",
+              background: "#f9fafb",
+              padding: "18px 0",
+              flexShrink: 0,
+            }}>
+              <div style={{
+                padding: "0 18px 12px",
+                fontSize: "11px",
+                fontWeight: 700,
+                color: "#9ca3af",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+              }}>
+                Settings
+              </div>
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: "10px 18px", border: "none",
+                    background: activeTab === tab.id ? "#eff6ff" : "none",
+                    color: activeTab === tab.id ? "#2563eb" : "#374151",
+                    fontWeight: activeTab === tab.id ? 600 : 400,
+                    fontSize: "13px", cursor: "pointer",
+                    borderLeft: activeTab === tab.id ? "3px solid #2563eb" : "3px solid transparent",
+                  }}
+                  onMouseEnter={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "#f3f4f6"; }}
+                  onMouseLeave={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "none"; }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
 
-          {/* Sidebar */}
-          <div style={{
-            width: "170px",
-            borderRight: "1px solid #e5e7eb",
-            background: "#f9fafb",
-            padding: "10px 0",
-            flexShrink: 0,
-          }}>
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  display: "block", width: "100%", textAlign: "left",
-                  padding: "10px 18px", border: "none",
-                  background: activeTab === tab.id ? "#eff6ff" : "none",
-                  color: activeTab === tab.id ? "#2563eb" : "#374151",
-                  fontWeight: activeTab === tab.id ? 600 : 400,
-                  fontSize: "13px", cursor: "pointer",
-                  borderLeft: activeTab === tab.id ? "3px solid #2563eb" : "3px solid transparent",
-                }}
-                onMouseEnter={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "#f3f4f6"; }}
-                onMouseLeave={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "none"; }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Content */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "22px 26px 80px" }}>
+            {/* Content */}
+            <div style={{ flex: 1, overflow: "auto", padding: "22px 26px 80px" }}>
+              <div style={contentShellStyle}>
+                <div style={mainColumnStyle}>
 
             {activeTab === "general" && (
               <div>
@@ -2272,7 +2637,8 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
                     onChange={(e) => setLocalShopConfig((p) => ({ ...p, shopName: e.target.value }))}
                     placeholder="Your shop name here"
                     style={{
-                      width: "100%", maxWidth: "360px",
+                      maxWidth: "500px",
+                      minWidth: "320px",
                       padding: "9px 12px",
                       border: "1px solid #d1d5db",
                       borderRadius: "6px",
@@ -2488,6 +2854,14 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
               />
             )}
 
+            {activeTab === "printing" && (
+              <PrintingTab
+                columns={printingColumns}
+                config={localPrintConfig}
+                setConfig={setLocalPrintConfig}
+              />
+            )}
+
             {activeTab === "parser" && (
               <>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "4px" }}>
@@ -2520,28 +2894,40 @@ export default function SettingsModal({ open, onClose, columnOrder: externalColu
               </>
             )}
 
+                </div>
+
+                <aside style={helperPanelStyle}>
+                  <div style={helperCardStyle}>
+                    <div style={{ fontSize: "12px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                      Reserved Panel
+                    </div>
+                    <div style={{ fontSize: "14px", fontWeight: 600, color: "#111827", marginBottom: "6px" }}>
+                      Tips and guidance will appear here
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6 }}>
+                      This space is intentionally kept open for future help text, examples, and section-specific guidance.
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            display: "flex", justifyContent: "flex-end", gap: "8px",
+            padding: "13px 24px",
+            borderTop: "1px solid #e5e7eb",
+            background: "#fafafa",
+            flexShrink: 0,
+          }}>
+            <button onClick={handleSave} style={{
+              padding: "8px 22px", border: "none", borderRadius: "6px",
+              background: "#2563eb", color: "#fff", cursor: "pointer",
+              fontSize: "13px", fontWeight: 600,
+            }}>Save</button>
           </div>
         </div>
-
-        {/* Footer */}
-        <div style={{
-          display: "flex", justifyContent: "flex-end", gap: "8px",
-          padding: "13px 24px",
-          borderTop: "1px solid #e5e7eb",
-          background: "#fafafa",
-          flexShrink: 0,
-        }}>
-          <button onClick={onClose} style={{
-            padding: "8px 18px", border: "1px solid #d1d5db",
-            borderRadius: "6px", background: "#fff", cursor: "pointer", fontSize: "13px",
-          }}>Cancel</button>
-          <button onClick={handleSave} style={{
-            padding: "8px 22px", border: "none", borderRadius: "6px",
-            background: "#2563eb", color: "#fff", cursor: "pointer",
-            fontSize: "13px", fontWeight: 600,
-          }}>Save</button>
-        </div>
-
       </div>
     </div>
   );

@@ -2,13 +2,517 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn, execFile } = require("child_process");
+const { spawn } = require("child_process");
+const nodemailer = require("nodemailer");
+const { pathToFileURL } = require("url");
+const { ensureWorkspaceLayout } = require("./workspacePaths");
 
 // ── Helper process (sync_folders.py) ────────────────────────────────────────
 const ROOT = path.join(__dirname, "..", "..");
 const APP_ICON = path.join(ROOT, "spaila-logo.blue.ico");
+const DEFAULT_APP_NAME = "Parser Viewer";
+let currentBrandName = DEFAULT_APP_NAME;
 let helperProcess = null;
 let helperRestarting = false;
+let cachedWorkspaceDirs = null;
+
+function getWorkspaceDirs() {
+  if (!cachedWorkspaceDirs) {
+    cachedWorkspaceDirs = ensureWorkspaceLayout((message) => console.log(message));
+  }
+  return cachedWorkspaceDirs;
+}
+
+function getBrandName() {
+  const name = String(currentBrandName || "").trim();
+  return name || DEFAULT_APP_NAME;
+}
+
+function withBrandTitle(title, fallback = "") {
+  const detail = String(title || fallback || "").trim();
+  return detail ? `${getBrandName()} - ${detail}` : getBrandName();
+}
+
+function getSenderWindow(event) {
+  return BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getAllWindows()[0] || null;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function injectBrandingIntoHtml(html, title) {
+  const brandedTitle = escapeHtml(withBrandTitle(title));
+  const faviconTag = `<link rel="icon" type="image/x-icon" href="${pathToFileURL(APP_ICON).href}" />`;
+  let page = String(html || "");
+
+  if (!/<html[\s>]/i.test(page)) {
+    page = `<!doctype html><html><head></head><body>${page}</body></html>`;
+  }
+
+  if (/<title>.*?<\/title>/i.test(page)) {
+    page = page.replace(/<title>.*?<\/title>/i, `<title>${brandedTitle}</title>`);
+  } else if (/<head[^>]*>/i.test(page)) {
+    page = page.replace(/<head([^>]*)>/i, `<head$1>\n    <title>${brandedTitle}</title>`);
+  }
+
+  if (!/rel=["']icon["']/i.test(page) && /<\/head>/i.test(page)) {
+    page = page.replace(/<\/head>/i, `    ${faviconTag}\n  </head>`);
+  }
+
+  return page;
+}
+
+function sanitizeFilenamePart(value, fallback = "document") {
+  const cleaned = String(value || "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || fallback;
+}
+
+function relativeWorkspacePath(targetPath) {
+  if (!targetPath) {
+    return "";
+  }
+  const { root } = getWorkspaceDirs();
+  try {
+    const rel = path.relative(root, targetPath);
+    if (!rel || rel.startsWith("..")) {
+      return "";
+    }
+    return rel.split(path.sep).join("/");
+  } catch (_error) {
+    return "";
+  }
+}
+
+function isWithinWorkspace(targetPath) {
+  if (!targetPath) {
+    return false;
+  }
+  const { root } = getWorkspaceDirs();
+  try {
+    const rel = path.relative(root, targetPath);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  } catch (_error) {
+    return false;
+  }
+}
+
+function safeStat(targetPath) {
+  try {
+    return fs.statSync(targetPath);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function focusExplorerWindowSoon(delayMs = 250) {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const script = `
+Start-Sleep -Milliseconds ${Math.max(0, Number(delayMs) || 0)}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32 {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$window = Get-Process explorer -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } |
+  Sort-Object StartTime -Descending |
+  Select-Object -First 1
+if ($window -and $window.MainWindowHandle -ne 0) {
+  [void][Win32]::ShowWindowAsync($window.MainWindowHandle, 9)
+  [void][Win32]::SetForegroundWindow($window.MainWindowHandle)
+}
+`;
+  try {
+    spawn("powershell.exe", [
+      "-NoProfile",
+      "-STA",
+      "-ExecutionPolicy", "Bypass",
+      "-Command", script,
+    ], {
+      cwd: ROOT,
+      windowsHide: true,
+      detached: false,
+      stdio: "ignore",
+    });
+  } catch (error) {
+    console.error("[shell:focus-folder] could not foreground Explorer:", error);
+  }
+}
+
+async function openFolderVisible(targetPath, logPrefix = "shell:open-folder") {
+  console.log(`[${logPrefix}] opening:`, targetPath);
+  const err = await shell.openPath(targetPath);
+  if (err) {
+    console.error(`[${logPrefix}] openPath failed:`, targetPath, err);
+    return { ok: false, error: err };
+  }
+  focusExplorerWindowSoon(250);
+  return { ok: true, path: targetPath };
+}
+
+function getEmailEnvironmentInfo() {
+  const osLabel = process.platform === "win32"
+    ? "Windows"
+    : process.platform === "darwin"
+      ? "macOS"
+      : process.platform === "linux"
+        ? "Linux"
+        : "Unknown";
+
+  return {
+    os: osLabel,
+    emailClient: "Default Email App",
+    attachmentCapability: "Manual",
+  };
+}
+
+function normalizeEmailLink(value) {
+  let raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  raw = raw
+    .replace(/[\r\n\t]+/g, "")
+    .replace(/\s+/g, "")
+    .replace(/^[<({"'\[]+/, "")
+    .replace(/[>)}"'\],.;:!?]+$/, "");
+  if (!raw) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+  if (/^(www\.)/i.test(raw)) {
+    return `https://${raw}`;
+  }
+  return raw;
+}
+
+function convertPlainTextEmailToHtml(text) {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const parts = normalizedText.split(/(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi);
+  const html = parts.map((part) => {
+    if (!part) {
+      return "";
+    }
+    if (/^(https?:\/\/|www\.)/i.test(part)) {
+      const href = normalizeEmailLink(part);
+      const safeHref = escapeHtml(href);
+      return `<a href="${safeHref}">${safeHref}</a>`;
+    }
+    return escapeHtml(part).replace(/\n/g, "<br />");
+  }).join("");
+  return `<!doctype html><html><body>${html}</body></html>`;
+}
+
+function normalizeSmtpConfig(config = {}) {
+  return {
+    emailAddress: String(config.emailAddress || "").trim(),
+    host: String(config.host || "").trim(),
+    port: Number.parseInt(String(config.port || "").trim(), 10) || 587,
+    username: String(config.username || "").trim(),
+    password: String(config.password || ""),
+  };
+}
+
+function validateSmtpConfig(config) {
+  const smtp = normalizeSmtpConfig(config);
+  if (!smtp.emailAddress) return { ok: false, error: "Email Address is required." };
+  if (!smtp.host) return { ok: false, error: "SMTP Host is required." };
+  if (!smtp.port || !Number.isFinite(smtp.port)) return { ok: false, error: "SMTP Port is required." };
+  if (!smtp.username) return { ok: false, error: "SMTP Username is required." };
+  if (!smtp.password) return { ok: false, error: "SMTP Password is required." };
+  return { ok: true, smtp };
+}
+
+function createSmtpTransport(config) {
+  const smtp = normalizeSmtpConfig(config);
+  return nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.username,
+      pass: smtp.password,
+    },
+  });
+}
+
+function getSentEmailFolder(orderFolderPath = "") {
+  const { root } = getWorkspaceDirs();
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = now.toLocaleString("en-US", { month: "long" }).toLowerCase();
+  const orderFolderName = sanitizeFilenamePart(path.basename(String(orderFolderPath || "").trim()) || "email");
+  return path.join(root, "sent", year, month, orderFolderName);
+}
+
+function copyFilesIntoFolder(filePaths, destinationFolder) {
+  const copied = [];
+  for (const filePath of Array.isArray(filePaths) ? filePaths : []) {
+    const source = String(filePath || "").trim();
+    if (!source || !path.isAbsolute(source) || !fs.existsSync(source)) {
+      continue;
+    }
+    const target = path.join(destinationFolder, path.basename(source));
+    fs.copyFileSync(source, target);
+    copied.push(target);
+  }
+  return copied;
+}
+
+function decodeHeaderValue(value) {
+  return String(value || "").replace(/\r?\n[\t ]+/g, " ").trim();
+}
+
+function extractEmailMetadata(filePath) {
+  const stat = safeStat(filePath);
+  let subject = "";
+  let timestamp = stat ? new Date(stat.mtimeMs).toISOString() : "";
+  let preview = "";
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const headerEnd = raw.search(/\r?\n\r?\n/);
+    const headers = headerEnd >= 0 ? raw.slice(0, headerEnd) : raw;
+    const body = headerEnd >= 0 ? raw.slice(headerEnd) : "";
+    const subjectMatch = headers.match(/^Subject:\s*(.+)$/im);
+    const dateMatch = headers.match(/^Date:\s*(.+)$/im);
+    subject = decodeHeaderValue(subjectMatch?.[1] || "");
+    const parsedDate = Date.parse(decodeHeaderValue(dateMatch?.[1] || ""));
+    if (Number.isFinite(parsedDate)) {
+      timestamp = new Date(parsedDate).toISOString();
+    }
+    preview = body
+      .replace(/<[^>]+>/g, " ")
+      .replace(/=\r?\n/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\r?\n+/g, " ")
+      .trim()
+      .slice(0, 160);
+  } catch (_error) {
+    // Fall back to filename and mtime only.
+  }
+
+  return {
+    name: path.basename(filePath),
+    subject: subject || path.basename(filePath),
+    preview,
+    timestamp,
+  };
+}
+
+function countFolderEntries(targetPath) {
+  const stat = safeStat(targetPath);
+  if (!stat) {
+    return 0;
+  }
+  if (stat.isFile()) {
+    return 1;
+  }
+  let total = 0;
+  const stack = [targetPath];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_error) {
+      continue;
+    }
+    for (const entry of entries) {
+      total += 1;
+      if (entry.isDirectory()) {
+        stack.push(path.join(current, entry.name));
+      }
+    }
+  }
+  return total;
+}
+
+function isValidOrderFolderName(name) {
+  return /.+[–-]\s*\d+$/.test(String(name || "").trim());
+}
+
+function countOrderFolders(targetPath) {
+  const stat = safeStat(targetPath);
+  if (!stat?.isDirectory()) {
+    return 0;
+  }
+
+  let total = 0;
+  const stack = [targetPath];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_error) {
+      continue;
+    }
+
+    const childDirectories = entries.filter((entry) => entry.isDirectory());
+    if (childDirectories.length === 0) {
+      if (isValidOrderFolderName(path.basename(current))) {
+        total += 1;
+      }
+      continue;
+    }
+
+    for (const entry of childDirectories) {
+      stack.push(path.join(current, entry.name));
+    }
+  }
+
+  return total;
+}
+
+function listFolderEntries(targetPath) {
+  const stat = safeStat(targetPath);
+  if (!stat) {
+    return [];
+  }
+  if (stat.isFile()) {
+    return [{
+      name: path.basename(targetPath),
+      path: targetPath,
+      relativePath: relativeWorkspacePath(targetPath),
+      kind: "file",
+      modifiedAt: new Date(stat.mtimeMs).toISOString(),
+    }];
+  }
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(targetPath, { withFileTypes: true });
+  } catch (_error) {
+    return [];
+  }
+
+  return entries
+    .map((entry) => {
+      const fullPath = path.join(targetPath, entry.name);
+      const entryStat = safeStat(fullPath);
+      return {
+        name: entry.name,
+        path: fullPath,
+        relativePath: relativeWorkspacePath(fullPath),
+        kind: entry.isDirectory() ? "directory" : "file",
+        modifiedAt: entryStat ? new Date(entryStat.mtimeMs).toISOString() : "",
+      };
+    })
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === "directory" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function listInboxItems(inboxPath) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(inboxPath, { withFileTypes: true });
+  } catch (_error) {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".eml"))
+    .map((entry) => {
+      const fullPath = path.join(inboxPath, entry.name);
+      return {
+        path: fullPath,
+        relativePath: relativeWorkspacePath(fullPath),
+        ...extractEmailMetadata(fullPath),
+      };
+    })
+    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+}
+
+function filterAttachmentFiles(files, mode, extensions) {
+  let filtered = Array.isArray(files) ? [...files] : [];
+  if (mode === "images") {
+    filtered = filtered.filter((filePath) => /\.(jpe?g|png|gif|bmp|webp)$/i.test(filePath));
+  } else if (mode === "extension" && extensions?.length) {
+    const exts = extensions.map((value) => String(value).toLowerCase().replace(/^\./, ""));
+    filtered = filtered.filter((filePath) => exts.includes(path.extname(filePath).toLowerCase().replace(".", "")));
+  }
+  return filtered;
+}
+
+function listAttachmentFilesFromPath(targetPath, mode, extensions) {
+  if (!targetPath || mode === "none") {
+    return [];
+  }
+  const stat = safeStat(targetPath);
+  if (!stat) {
+    return [];
+  }
+  if (stat.isDirectory()) {
+    try {
+      const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+      const files = entries.filter((entry) => entry.isFile()).map((entry) => path.join(targetPath, entry.name));
+      return filterAttachmentFiles(files, mode, extensions);
+    } catch (_error) {
+      return [];
+    }
+  }
+  return filterAttachmentFiles([targetPath], mode, extensions);
+}
+
+function resolveAttachmentPayload({ orderFolderPath, sourceEmlPath, mode, extensions }) {
+  const warnings = [];
+  if (mode === "none") {
+    return { files: [], source: "none", sourcePath: "", warnings };
+  }
+
+  const fromOrderFolder = listAttachmentFilesFromPath(orderFolderPath, mode, extensions);
+  if (fromOrderFolder.length) {
+    if (fromOrderFolder.length > 1) {
+      warnings.push(`Multiple attachments found (${fromOrderFolder.length} files)`);
+    }
+    return {
+      files: fromOrderFolder,
+      source: "order_folder_path",
+      sourcePath: orderFolderPath,
+      warnings,
+    };
+  }
+
+  const fromSourcePath = listAttachmentFilesFromPath(sourceEmlPath, mode, extensions);
+  if (fromSourcePath.length) {
+    if (fromSourcePath.length > 1) {
+      warnings.push(`Multiple attachments found (${fromSourcePath.length} files)`);
+    }
+    return {
+      files: fromSourcePath,
+      source: "source_eml_path",
+      sourcePath: sourceEmlPath,
+      warnings,
+    };
+  }
+
+  warnings.push("Attachments not ready yet");
+  return {
+    files: [],
+    source: "not_ready",
+    sourcePath: "",
+    warnings,
+  };
+}
 
 function startHelper() {
   if (helperProcess) return;
@@ -52,7 +556,9 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
+    title: getBrandName(),
     icon: APP_ICON,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -60,6 +566,20 @@ function createWindow() {
     },
   });
 
+  window.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[WINDOW render-process-gone]", details);
+  });
+  window.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    console.error("[WINDOW did-fail-load]", { errorCode, errorDescription, validatedURL, isMainFrame });
+  });
+  window.on("unresponsive", () => {
+    console.error("[WINDOW unresponsive]");
+  });
+  window.on("closed", () => {
+    console.log("[WINDOW closed]");
+  });
+
+  window.removeMenu();
   window.maximize();
   window.show();
   window.loadFile(path.join(__dirname, "..", "ui", "index.html"));
@@ -139,7 +659,7 @@ function findOriginalEmlInOrders(orderNumber) {
     return null;
   }
 
-  const ordersRoot = path.join(ROOT, "..", "Spaila", "orders");
+  const ordersRoot = getWorkspaceDirs().Orders;
   if (!fs.existsSync(ordersRoot)) {
     return null;
   }
@@ -189,7 +709,9 @@ async function resolveParserPath(payload) {
 }
 
 ipcMain.handle("parser:import-eml", async () => {
-  const result = await dialog.showOpenDialog({
+  const result = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], {
+    title: withBrandTitle("Import Order"),
+    defaultPath: getWorkspaceDirs().Inbox,
     properties: ["openFile"],
     filters: [{ name: "EML Files", extensions: ["eml"] }],
   });
@@ -270,14 +792,125 @@ ipcMain.handle("parser:resolve-path", async (_event, payload) => {
 });
 
 ipcMain.handle("shell:open-folder", async (_event, folderPath) => {
-  if (!folderPath) return { error: "No folder path provided" };
-  const err = await shell.openPath(folderPath);
-  return err ? { error: err } : { ok: true };
+  const rawPath = String(folderPath || "").trim();
+  if (!rawPath) {
+    console.error("[shell:open-folder] missing path");
+    return { ok: false, error: "No folder path provided" };
+  }
+  if (!path.isAbsolute(rawPath)) {
+    console.error("[shell:open-folder] path is not absolute:", rawPath);
+    return { ok: false, error: "Folder path must be absolute" };
+  }
+
+  const stat = safeStat(rawPath);
+  if (!stat) {
+    console.error("[shell:open-folder] path does not exist:", rawPath);
+    return { ok: false, error: "Folder path does not exist" };
+  }
+
+  const targetPath = stat.isDirectory() ? rawPath : path.dirname(rawPath);
+
+  try {
+    return await openFolderVisible(targetPath, "shell:open-folder");
+  } catch (error) {
+    console.error("[shell:open-folder] unexpected error:", targetPath, error);
+    return { ok: false, error: error?.message || "Could not open folder" };
+  }
 });
 
 ipcMain.handle("app:set-title", (_event, title) => {
+  const nextTitle = String(title || "").trim() || DEFAULT_APP_NAME;
+  currentBrandName = nextTitle;
+  try { app.setName(nextTitle); } catch (_) {}
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.setTitle(title || "Parser Viewer");
+  if (win) win.setTitle(nextTitle);
+  return { ok: true, title: nextTitle };
+});
+
+ipcMain.handle("orders:open-print-preview", async (event, payload = {}) => {
+  const html = String(payload.html || "");
+  if (!html.trim()) {
+    return { ok: false, error: "No print content provided." };
+  }
+
+  const title = String(payload.title || "").trim() || "Print Preview";
+  const parent = getSenderWindow(event) || undefined;
+  const preview = new BrowserWindow({
+    width: 1100,
+    height: 820,
+    minWidth: 800,
+    minHeight: 600,
+    show: false,
+    parent,
+    title: withBrandTitle(title),
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  preview.removeMenu();
+  preview.once("ready-to-show", () => preview.show());
+  await preview.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(injectBrandingIntoHtml(html, title))}`);
+  return { ok: true };
+});
+
+ipcMain.handle("orders:export-print-pdf", async (_event, payload = {}) => {
+  const html = String(payload.html || "");
+  if (!html.trim()) {
+    return { ok: false, error: "No print content provided." };
+  }
+
+  const title = String(payload.title || "").trim() || "Print";
+  const isLandscape = payload.orientation === "landscape";
+  const printWindow = new BrowserWindow({
+    width: 1100,
+    height: 820,
+    show: false,
+    title: withBrandTitle(title),
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  try {
+    printWindow.removeMenu();
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(injectBrandingIntoHtml(html, title))}`);
+    const pdfBuffer = await printWindow.webContents.printToPDF({
+      landscape: isLandscape,
+      printBackground: true,
+      preferCSSPageSize: true,
+    });
+
+    const brand = sanitizeFilenamePart(getBrandName(), "Shop");
+    const label = sanitizeFilenamePart(title, "Print");
+    const outputPath = path.join(os.tmpdir(), `${brand} ${label}.pdf`);
+    fs.writeFileSync(outputPath, pdfBuffer);
+
+    const openError = await shell.openPath(outputPath);
+    if (openError) {
+      return { ok: false, error: openError };
+    }
+
+    return { ok: true, path: outputPath };
+  } catch (error) {
+    return { ok: false, error: error.message || "Failed to export print PDF." };
+  } finally {
+    if (!printWindow.isDestroyed()) {
+      printWindow.close();
+    }
+  }
 });
 
 // ── Gift message → letterhead PDF overlay ────────────────────────────────
@@ -451,8 +1084,9 @@ ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) 
 });
 
 ipcMain.handle("dialog:pick-file", async (_event, { title, filters }) => {
-  const result = await dialog.showOpenDialog({
-    title: title || "Select File",
+  const owner = getSenderWindow(_event) || undefined;
+  const result = await dialog.showOpenDialog(owner, {
+    title: withBrandTitle(title, "Select File"),
     properties: ["openFile"],
     filters: filters || [{ name: "All Files", extensions: ["*"] }],
   });
@@ -461,12 +1095,84 @@ ipcMain.handle("dialog:pick-file", async (_event, { title, filters }) => {
 });
 
 ipcMain.handle("dialog:pick-folder", async () => {
-  const result = await dialog.showOpenDialog({
-    title: "Select Archive Folder",
+  const owner = BrowserWindow.getAllWindows()[0] || undefined;
+  const result = await dialog.showOpenDialog(owner, {
+    title: withBrandTitle("Select Archive Folder"),
     properties: ["openDirectory", "createDirectory"],
   });
   if (result.canceled || !result.filePaths.length) return { canceled: true };
   return { path: result.filePaths[0] };
+});
+
+ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
+  const dirs = getWorkspaceDirs();
+  const bucket = dirs[payload.bucket] ? payload.bucket : "Inbox";
+  const selectedRoot = dirs[bucket];
+  const requestedRelativePath = String(payload.relativePath || "").trim();
+  const requestedPath = requestedRelativePath
+    ? path.join(dirs.root, requestedRelativePath.split("/").join(path.sep))
+    : selectedRoot;
+  const currentPath = isWithinWorkspace(requestedPath) && fs.existsSync(requestedPath)
+    ? requestedPath
+    : selectedRoot;
+  const currentStat = safeStat(currentPath);
+  const currentKind = currentStat?.isDirectory() ? "directory" : currentStat?.isFile() ? "file" : "missing";
+
+  return {
+    root: dirs.root,
+    buckets: Object.entries(dirs)
+      .filter(([key]) => key !== "root")
+      .map(([key, folderPath]) => ({
+        key,
+        path: folderPath,
+        relativePath: relativeWorkspacePath(folderPath),
+        count: key === "Orders" ? countOrderFolders(folderPath) : countFolderEntries(folderPath),
+      })),
+    inboxItems: listInboxItems(dirs.Inbox),
+    currentBucket: bucket,
+    currentPath,
+    currentRelativePath: relativeWorkspacePath(currentPath),
+    currentKind,
+    entries: listFolderEntries(currentPath),
+  };
+});
+
+ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
+  const dirs = getWorkspaceDirs();
+  const inboxPath = dirs.Inbox;
+  const incomingPaths = Array.isArray(payload.filePaths) ? payload.filePaths : [];
+  const added = [];
+  const skipped = [];
+
+  for (const sourcePath of incomingPaths) {
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      skipped.push({ path: sourcePath, reason: "missing" });
+      continue;
+    }
+    const stat = safeStat(sourcePath);
+    if (!stat?.isFile()) {
+      skipped.push({ path: sourcePath, reason: "not_a_file" });
+      continue;
+    }
+
+    const ext = path.extname(sourcePath);
+    const base = path.basename(sourcePath, ext);
+    let targetPath = path.join(inboxPath, path.basename(sourcePath));
+    let suffix = 1;
+    while (fs.existsSync(targetPath)) {
+      targetPath = path.join(inboxPath, `${base}_${suffix}${ext}`);
+      suffix += 1;
+    }
+
+    try {
+      fs.copyFileSync(sourcePath, targetPath);
+      added.push({ path: targetPath, relativePath: relativeWorkspacePath(targetPath) });
+    } catch (error) {
+      skipped.push({ path: sourcePath, reason: error.message || "copy_failed" });
+    }
+  }
+
+  return { ok: true, added, skipped };
 });
 
 // ── Email compose ────────────────────────────────────────────────────────────
@@ -474,153 +1180,113 @@ ipcMain.handle("dialog:pick-folder", async () => {
 ipcMain.handle("email:list-attachments", async (_event, { folderPath, mode, extensions }) => {
   if (!folderPath || mode === "none") return { files: [], warnings: [] };
   try {
-    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-    let files = entries
-      .filter((e) => e.isFile())
-      .map((e) => path.join(folderPath, e.name));
-
-    if (mode === "images") {
-      files = files.filter((f) => /\.(jpe?g|png|gif|bmp|webp)$/i.test(f));
-    } else if (mode === "extension" && extensions?.length) {
-      const exts = extensions.map((e) => e.toLowerCase().replace(/^\./, ""));
-      files = files.filter((f) => {
-        const ext = path.extname(f).toLowerCase().replace(".", "");
-        return exts.includes(ext);
-      });
-    }
-
+    const files = listAttachmentFilesFromPath(folderPath, mode, extensions);
     const warnings = [];
     if (files.length === 0) warnings.push("No attachments found");
     else if (files.length > 1) warnings.push(`Multiple attachments found (${files.length} files)`);
-
     return { files, warnings };
   } catch (err) {
     return { files: [], warnings: [`Could not read folder: ${err.message}`] };
   }
 });
 
-/**
- * Convert a plain-text email body to HTML in JavaScript so URLs become
- * clickable <a> tags. Done here (not in PowerShell) for reliability.
- */
-function _plainTextToHtml(text) {
-  // 1. Escape HTML special characters
-  let html = (text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-  // 2. Wrap bare URLs in anchor tags
-  html = html.replace(/(https?:\/\/[^\s<>"]+)/gi, '<a href="$1">$1</a>');
-
-  // 3. Convert newlines to <br>
-  html = html.replace(/\r?\n/g, "<br>\n");
-
-  return (
-    '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.8;color:#222">' +
-    html +
-    "</div>"
-  );
-}
-
-function _buildOutlookScript(to, subject, body, attachments) {
-  // Convert body to HTML before encoding — PowerShell just decodes and sets HTMLBody.
-  const htmlBody = _plainTextToHtml(body);
-
-  // Base64 encode a string for PowerShell UTF-8 decoding
-  const enc = (s) => Buffer.from(s || "", "utf8").toString("base64");
-  const decodeExpr = (b64) =>
-    `[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}'))`;
-
-  // Base64 encode a string for PowerShell -EncodedCommand (requires UTF-16LE)
-  const encCmd = (s) => Buffer.from(s || "", "utf16le").toString("base64");
-
-  const attachLines = (attachments || [])
-    .map((p) => `  $mail.Attachments.Add('${p.replace(/'/g, "''")}') | Out-Null`)
-    .join("\n");
-
-  // The activation script runs as a grandchild process (spawned via Start-Process
-  // from inside the .ps1). Because it is NOT a direct child of Electron it is
-  // allowed to steal foreground focus on Windows.
-  const activatePs = [
-    "Start-Sleep -Milliseconds 900",
-    "try {",
-    "  $ol  = New-Object -ComObject Outlook.Application",
-    "  $ins = $ol.ActiveInspector()",
-    "  if ($ins) { $ins.WindowState = 1; $ins.Activate() }",
-    "} catch {}",
-    "try { (New-Object -ComObject WScript.Shell).AppActivate((Get-Process outlook -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowTitle) | Out-Null } catch {}",
-  ].join("\n");
-  const encodedActivate = encCmd(activatePs);
-
-  return `
-try {
-  $outlook = New-Object -ComObject Outlook.Application
-  $mail = $outlook.CreateItem(0)
-  $mail.To       = ${decodeExpr(enc(to))}
-  $mail.Subject  = ${decodeExpr(enc(subject))}
-  $mail.HTMLBody = ${decodeExpr(enc(htmlBody))}
-${attachLines}
-  $mail.Display($false)
-
-  # Spawn an independent grandchild to bring Outlook to the foreground.
-  # Start-Process creates a process outside Electron's parent chain, so
-  # Windows permits it to call SetForegroundWindow.
-  Start-Process powershell -ArgumentList @("-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", "${encodedActivate}") -WindowStyle Hidden
-
-} catch {
-  exit 1
-}
-`.trim();
-}
-
-ipcMain.handle("email:compose", async (_event, { to, subject, body, attachmentPaths }) => {
-  const hasAttachments = Array.isArray(attachmentPaths) && attachmentPaths.length > 0;
-
-  // ── Always try Outlook COM via PowerShell first (HTML body + attachments) ─
-  // mailto: is plain-text only and cannot render hyperlinks.
-  // The focus-stealing trick is handled INSIDE the .ps1 script itself by
-  // spawning a grandchild process (Start-Process) that is not a child of
-  // Electron and therefore can call SetForegroundWindow freely.
-  {
-    const script = _buildOutlookScript(to, subject, body, attachmentPaths);
-    const tmpFile = path.join(os.tmpdir(), `spaila_email_${Date.now()}.ps1`);
-    try {
-      fs.writeFileSync(tmpFile, script, "utf8");
-      await new Promise((resolve, reject) => {
-        execFile(
-          "powershell",
-          ["-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmpFile],
-          { windowsHide: true },
-          (err) => {
-            try { fs.unlinkSync(tmpFile); } catch (_) { /* ignore */ }
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
-      return { ok: true, method: "outlook" };
-    } catch (_) {
-      try { fs.unlinkSync(tmpFile); } catch (_2) { /* ignore */ }
-      // Outlook not available — fall through to mailto
-    }
+ipcMain.handle("email:resolve-attachments", async (_event, payload = {}) => {
+  return resolveAttachmentPayload(payload);
+});
+ipcMain.handle("email:get-environment", async () => {
+  return getEmailEnvironmentInfo();
+});
+ipcMain.handle("email:test-smtp", async (_event, payload = {}) => {
+  const validation = validateSmtpConfig(payload.config || {});
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+  try {
+    const transport = createSmtpTransport(validation.smtp);
+    await transport.verify();
+    return { ok: true, message: "SMTP connection successful." };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not connect to SMTP server." };
+  }
+});
+ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
+  const smtpValidation = validateSmtpConfig(payload.smtp || {});
+  if (!smtpValidation.ok) {
+    return { ok: false, error: smtpValidation.error };
   }
 
-  // ── mailto fallback ───────────────────────────────────────────────────────
+  const to = String(payload.to || "").trim();
+  const subject = String(payload.subject || "").trim();
+  const body = String(payload.body || "");
+  if (!to) return { ok: false, error: "Recipient is required." };
+  if (!subject) return { ok: false, error: "Subject is required." };
+  if (!body.trim()) return { ok: false, error: "Body is required." };
+
+  const html = convertPlainTextEmailToHtml(body);
+  const attachmentPaths = (Array.isArray(payload.attachmentPaths) ? payload.attachmentPaths : [])
+    .map((value) => String(value || "").trim())
+    .filter((value) => value && path.isAbsolute(value) && fs.existsSync(value));
+
+  try {
+    const transport = createSmtpTransport(smtpValidation.smtp);
+    await transport.sendMail({
+      from: smtpValidation.smtp.emailAddress,
+      to,
+      subject,
+      text: body,
+      html,
+      attachments: attachmentPaths.map((filePath) => ({
+        filename: path.basename(filePath),
+        path: filePath,
+      })),
+    });
+
+    const sentFolder = getSentEmailFolder(payload.orderFolderPath || "");
+    fs.mkdirSync(sentFolder, { recursive: true });
+    fs.writeFileSync(path.join(sentFolder, "email.html"), html, "utf8");
+    copyFilesIntoFolder(attachmentPaths, sentFolder);
+
+    return {
+      ok: true,
+      message: "Email sent.",
+      sentFolder,
+    };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not send email." };
+  }
+});
+ipcMain.handle("email:compose", async (_event, { to, subject, body, attachmentFolderPath }) => {
   const mailto = `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject || "")}&body=${encodeURIComponent(body || "")}`;
   await shell.openExternal(mailto);
-  return {
-    ok: true,
-    method: "mailto",
-    attachmentsFallback: hasAttachments,
-  };
+  const result = { ok: true, method: "mailto" };
+
+  const targetFolder = String(attachmentFolderPath || "").trim();
+  if (targetFolder && path.isAbsolute(targetFolder)) {
+    setTimeout(() => {
+      const stat = safeStat(targetFolder);
+      const folderToOpen = stat?.isDirectory() ? targetFolder : (stat ? path.dirname(targetFolder) : "");
+      if (!folderToOpen) {
+        console.error("[email:compose] attachment folder path missing:", targetFolder);
+        return;
+      }
+      openFolderVisible(folderToOpen, "email:compose").then((openResult) => {
+        if (!openResult?.ok) {
+          console.error("[email:compose] could not open attachment folder:", folderToOpen, openResult?.error);
+        }
+      }).catch((error) => {
+        console.error("[email:compose] unexpected folder open error:", folderToOpen, error);
+      });
+    }, 400);
+  }
+  return result;
 });
 
 app.whenReady().then(() => {
+  getWorkspaceDirs();
+  try { app.setName(getBrandName()); } catch (_) {}
   // Set app icon for taskbar, dock, and native dialogs on all platforms
   if (process.platform === "win32") {
-    app.setAppUserModelId(app.getName());
+    app.setAppUserModelId("spaila-parser-ui");
   }
   try { app.dock?.setIcon(APP_ICON); } catch (_) {} // macOS dock (no-op on Windows)
 
@@ -632,6 +1298,25 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on("child-process-gone", (_event, details) => {
+  console.error("[app child-process-gone]", details);
+});
+
+app.on("render-process-gone", (_event, webContents, details) => {
+  console.error("[app render-process-gone]", {
+    details,
+    url: webContents?.getURL?.(),
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[uncaughtException]", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
 });
 
 function killHelper() {

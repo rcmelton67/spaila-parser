@@ -3,13 +3,14 @@ from datetime import datetime, date
 import uuid
 import os
 import re
-import shutil
 from pathlib import Path
 from .db import get_conn
+from workspace_paths import ensure_workspace_layout
 
-BASE_PATH   = Path.home() / "Spaila"
-INBOX_PATH  = BASE_PATH / "inbox"
-ORDERS_PATH = BASE_PATH / "orders"
+_WORKSPACE_DIRS = ensure_workspace_layout(print)
+BASE_PATH = _WORKSPACE_DIRS["root"]
+INBOX_PATH = _WORKSPACE_DIRS["Inbox"]
+ORDERS_PATH = _WORKSPACE_DIRS["Orders"]
 
 
 # ── Folder creation (mirrors helper/sync_folders.py logic) ───────────────────
@@ -62,20 +63,6 @@ def _make_order_folder(
     except Exception as e:
         print(f"[CREATE] folder creation failed: {e}")
         return None
-
-
-def _queue_eml_for_helper(source_eml_path: str | None) -> None:
-    """Copy source EML into the helper inbox so sync_folders can move it into the order folder."""
-    if not source_eml_path or not os.path.isfile(source_eml_path):
-        return
-    try:
-        INBOX_PATH.mkdir(parents=True, exist_ok=True)
-        dest = INBOX_PATH / Path(source_eml_path).name
-        if not dest.exists():
-            shutil.copy2(source_eml_path, dest)
-            print(f"[CREATE] queued EML for helper: {dest}")
-    except Exception as e:
-        print(f"[CREATE] could not copy EML to inbox: {e}")
 
 router = APIRouter()
 
@@ -158,9 +145,6 @@ async def create_order(payload: dict):
 
     print(f"SAVED TO DB: {order_id} {order_number} -> {order_folder_path}")
 
-    # Queue EML for the helper to move it into the order folder
-    _queue_eml_for_helper(source_eml_path)
-
     return {
         "id": order_id,
         "status": "created",
@@ -229,6 +213,8 @@ def list_orders():
             items.custom_5,
             items.custom_6,
             orders.order_folder_path,
+            orders.source_eml_path,
+            orders.eml_path,
             items.gift_message,
             items.order_notes,
             items.item_index,
@@ -263,11 +249,13 @@ def list_orders():
             "custom_5": r[15],
             "custom_6": r[16],
             "order_folder_path": r[17],
-            "gift_message": r[18],
-            "order_notes": r[19],
-            "item_index": r[20],
-            "platform":    r[21] or "unknown",
-            "item_status": r[22] or None,
+            "source_eml_path": r[18],
+            "eml_path": r[19],
+            "gift_message": r[20],
+            "order_notes": r[21],
+            "item_index": r[22],
+            "platform":    r[23] or "unknown",
+            "item_status": r[24] or None,
         }
         for r in rows
     ]
@@ -328,28 +316,11 @@ def update_full(payload: dict):
 
 @router.post("/orders/requeue-all")
 def requeue_all():
-    """Copy source EML to inbox for every order that has no folder yet.
-    Call this once after upgrading to auto-queue to process existing orders."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, order_number, source_eml_path
-        FROM orders
-        WHERE order_folder_path IS NULL
-          AND source_eml_path IS NOT NULL
-    """)
-    rows = cur.fetchall()
-    conn.close()
-
-    queued, skipped = [], []
-    for order_id, order_number, source_eml_path in rows:
-        if os.path.isfile(source_eml_path):
-            _queue_eml_for_helper(source_eml_path)
-            queued.append(order_number)
-        else:
-            skipped.append({"order_number": order_number, "path": source_eml_path})
-
-    return {"queued": queued, "skipped_missing": skipped}
+    return {
+        "queued": [],
+        "skipped_missing": [],
+        "message": "Deprecated. Helper owns inbox and file movement.",
+    }
 
 
 @router.delete("/orders/{order_id}")

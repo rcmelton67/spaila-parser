@@ -19,16 +19,22 @@ import threading
 import time
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from PIL import Image
 from pystray import Icon, Menu, MenuItem
 import tkinter as tk
 from tkinterdnd2 import DND_FILES, TkinterDnD
+from workspace_paths import ensure_workspace_layout
 
 # Repo root (parent of helper/)
-_ROOT = Path(__file__).resolve().parent.parent
 _SYNC_FOLDERS = Path(__file__).resolve().parent / "sync_folders.py"
-BASE_PATH = Path.home() / "Spaila"
-INBOX_PATH_STR = str(BASE_PATH / "inbox")
+_WORKSPACE_DIRS = ensure_workspace_layout(print)
+BASE_PATH = _WORKSPACE_DIRS["root"]
+INBOX_PATH_STR = str(_WORKSPACE_DIRS["Inbox"])
+DUPLICATES_PATH = _WORKSPACE_DIRS["Duplicates"]
 
 ICON_PATH = r"C:\Users\rcmel\dev\email_extractor\ui_electron\src\assets\branding\spaila-logo.blue.ico"
 _ICON_FALLBACK = _ROOT / "ui_electron" / "src" / "assets" / "branding" / "spaila-logo.blue.ico"
@@ -128,8 +134,8 @@ def read_logs() -> None:
 
 
 def get_counts() -> tuple[int, int]:
-    inbox = BASE_PATH / "inbox"
-    duplicates = BASE_PATH / "duplicates"
+    inbox = _WORKSPACE_DIRS["Inbox"]
+    duplicates = DUPLICATES_PATH
 
     inbox_count = len(list(inbox.glob("*.eml"))) if inbox.exists() else 0
     duplicates_count = len(list(duplicates.glob("*.eml"))) if duplicates.exists() else 0

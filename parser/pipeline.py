@@ -53,6 +53,7 @@ _GIFT_STRONG_WORDS = (
 _GIFT_MEDIUM_WORDS = ("gift message", "customer note", "message:")
 _PERSONALIZATION_WORDS = ("pet name", "heading", "engraving", "custom text")
 _MESSAGE_LABELS = ("customer note", "gift message")
+_GIFT_WRAP_WORDS = ("gift wrap", "gift wrapped", "gift wrapping")
 
 OVERRIDE_THRESHOLDS = {
     "price": 0.85,
@@ -78,6 +79,90 @@ _CONTEXT_MATCH_THRESHOLD = 0.15
 # Context window (chars) used when comparing stored vs actual surroundings.
 # Must match _attach_context's window in extract.py (currently 10 chars).
 _CTX_WINDOW = 10
+
+
+def _line_spans(text: str) -> List[Dict[str, Any]]:
+    spans: List[Dict[str, Any]] = []
+    cursor = 0
+    for raw_line in text.splitlines(keepends=True):
+        line_text = raw_line.rstrip("\r\n")
+        spans.append({
+            "text": line_text,
+            "stripped": line_text.strip(),
+            "start": cursor,
+            "end": cursor + len(line_text),
+        })
+        cursor += len(raw_line)
+    if not spans and text:
+        spans.append({
+            "text": text,
+            "stripped": text.strip(),
+            "start": 0,
+            "end": len(text),
+        })
+    return spans
+
+
+def _merge_attention_ranges(ranges: List[Dict[str, int]]) -> List[Dict[str, int]]:
+    valid = sorted(
+        [r for r in ranges if isinstance(r.get("start"), int) and isinstance(r.get("end"), int) and r["end"] > r["start"]],
+        key=lambda item: (item["start"], item["end"]),
+    )
+    if not valid:
+        return []
+    merged = [dict(valid[0])]
+    for current in valid[1:]:
+        last = merged[-1]
+        if current["start"] <= last["end"]:
+            last["end"] = max(last["end"], current["end"])
+            continue
+        merged.append(dict(current))
+    return merged
+
+
+def _collect_gift_attention_ranges(clean_text: str) -> Dict[str, Any]:
+    line_spans = _line_spans(clean_text)
+    attention_ranges: List[Dict[str, int]] = []
+    gift_message = ""
+
+    for i, line in enumerate(line_spans):
+        lowered = line["stripped"].lower()
+        if lowered not in _MESSAGE_LABELS:
+            continue
+
+        message_lines: List[str] = []
+        block_end = line["end"]
+        for next_line in line_spans[i + 1:]:
+            next_stripped = next_line["stripped"]
+            if not next_stripped:
+                if message_lines:
+                    break
+                continue
+            message_lines.append(next_stripped)
+            block_end = next_line["end"]
+
+        if message_lines:
+            gift_message = " ".join(message_lines)
+            attention_ranges.append({
+                "start": line["start"],
+                "end": block_end,
+            })
+            break
+
+    for line in line_spans:
+        lowered = line["stripped"].lower()
+        if not lowered:
+            continue
+        if any(word in lowered for word in _GIFT_STRONG_WORDS + _GIFT_MEDIUM_WORDS + _GIFT_WRAP_WORDS):
+            attention_ranges.append({
+                "start": line["start"],
+                "end": line["end"],
+            })
+
+    return {
+        "gift_message": gift_message,
+        "gift_attention_ranges": _merge_attention_ranges(attention_ranges),
+    }
 
 # ── Extraction-signature construction ─────────────────────────────────────────
 
@@ -461,22 +546,33 @@ def _inject_assigned_candidates(
         original_start = record.get("start")  # may be None for header/subject candidates
         original_end = record.get("end")
 
-        # Out-of-body candidates (header date, subject ship_by) are stored with
-        # start=None / end=None because they have no position in clean_text.
-        # Preserve them as-is — a position-less DecisionRow is valid.
+        # Out-of-body candidates (header date, subject ship_by) may be stored with
+        # start=None / end=None. They must still resolve against the current email
+        # text before they can be injected; otherwise a stale literal value can leak
+        # into unrelated parses.
         if original_start is None:
-            raw_text = record.get("selected_text", "") or value
-            segment_text = record.get("segment_text", "") or raw_text
+            val_len = len(value)
+            positions = [m.start() for m in re.finditer(re.escape(value), clean_text)]
+            resolved = _resolve_positions(positions, val_len, clean_text, record)
+            if resolved is None:
+                continue
+            start = resolved
+            end = resolved + val_len
+            raw_text = clean_text[start:end]
+            line_start = clean_text.rfind("\n", 0, start) + 1
+            line_end_raw = clean_text.find("\n", start)
+            line_end = line_end_raw if line_end_raw != -1 else len(clean_text)
+            segment_text = clean_text[line_start:line_end]
             return [Candidate(
                 id=f"learned_{field}_{i+1:04d}",
                 field_type=field,
                 value=value,
                 raw_text=raw_text,
-                start=None,
-                end=None,
+                start=start,
+                end=end,
                 segment_id=segment_id,
                 extractor="learning",
-                signals=["assigned_span(authoritative)"],
+                signals=["assigned_span(authoritative)", "resolved_from_context"],
                 penalties=[],
                 score=999,
                 segment_text=segment_text,
@@ -983,24 +1079,11 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
                 )
 
     meta: Dict[str, Any] = {}
-    lines = clean_text.splitlines()
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.lower() not in _MESSAGE_LABELS:
-            continue
-
-        message_lines = []
-        for next_line in lines[i + 1:]:
-            next_stripped = next_line.strip()
-            if not next_stripped:
-                if message_lines:
-                    break
-                continue
-            message_lines.append(next_stripped)
-
-        if message_lines:
-            meta["gift_message"] = " ".join(message_lines)
-            break
+    gift_attention = _collect_gift_attention_ranges(clean_text)
+    if gift_attention["gift_message"]:
+        meta["gift_message"] = gift_attention["gift_message"]
+    if gift_attention["gift_attention_ranges"]:
+        meta["gift_attention_ranges"] = gift_attention["gift_attention_ranges"]
 
     lower_text = clean_text.lower()
     normalized_text = re.sub(r"\s+", " ", lower_text).strip()

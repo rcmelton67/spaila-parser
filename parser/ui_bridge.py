@@ -8,11 +8,17 @@ from .pipeline import parse_eml, build_extraction_signature, build_quantity_sign
 from .replay.fingerprint import compute_template_family_id
 
 
+def _normalize_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
 def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
     decisions = [
         {
             "field": decision.field,
-            "value": decision.value,
+            "value": _normalize_value(decision.value),
             "decision": decision.decision,
             "decision_source": decision.decision_source,
             "confidence": decision.confidence,
@@ -155,7 +161,7 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
     context = {**context, "source": result.get("learning_source", "unknown")}
 
     field = action["field"]
-    value = action["value"]
+    value = _normalize_value(action["value"])
 
     if action_name == "save_assignment":
         learned_sig = context.get("learned_signature", "")
