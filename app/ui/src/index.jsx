@@ -9,17 +9,16 @@ import "./features/parser/styles.css";
 
 function getCurrentRoute() {
   const hash = window.location.hash.replace(/^#/, "");
-  if (hash === "/parser" || hash === "/settings" || hash === "/workspace") {
+  if (hash === "/" || hash === "/parser" || hash === "/settings" || hash === "/workspace") {
     return hash;
   }
-  return "/";
+  return "/workspace";
 }
 
 function Shell() {
   const [route, setRoute] = React.useState(() => getCurrentRoute());
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [columnOrder, setColumnOrder] = React.useState(() => loadColumnOrder());
-  const [parserImportRequestKey, setParserImportRequestKey] = React.useState(0);
   const [parserFileRequest, setParserFileRequest] = React.useState({ key: 0, filePath: "" });
   const [ordersTab, setOrdersTab] = React.useState("active");
   const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0 });
@@ -47,21 +46,16 @@ function Shell() {
 
   function navigate(nextRoute) {
     const nextHash = nextRoute === "/" ? "#/" : `#${nextRoute}`;
+    if (nextRoute !== "/parser") {
+      setParserFileRequest((current) => (
+        current.filePath ? { ...current, filePath: "" } : current
+      ));
+    }
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash;
       return;
     }
     setRoute(nextRoute);
-  }
-
-  function requestParserImport() {
-    setParserImportRequestKey((key) => key + 1);
-    setParserFileRequest((current) => ({ key: current.key + 1, filePath: "" }));
-  }
-
-  function goToParser() {
-    requestParserImport();
-    navigate("/parser");
   }
 
   function openParserFile(filePath) {
@@ -98,35 +92,11 @@ function Shell() {
     saveColumnOrder(next);
   }
 
-  React.useEffect(() => {
-    function handleGlobalImportShortcut(event) {
-      const target = event.target;
-      const tag = target?.tagName?.toLowerCase?.() || "";
-      const isTyping = tag === "input"
-        || tag === "textarea"
-        || tag === "select"
-        || target?.isContentEditable;
-
-      if (isTyping || event.repeat) {
-        return;
-      }
-
-      if (event.ctrlKey && event.key.toLowerCase() === "i") {
-        event.preventDefault();
-        goToParser();
-      }
-    }
-
-    window.addEventListener("keydown", handleGlobalImportShortcut);
-    return () => window.removeEventListener("keydown", handleGlobalImportShortcut);
-  }, []);
-
   return (
     <>
       {/* Orders page is always mounted so its state is preserved */}
       <div style={{ display: route === "/" ? "flex" : "none", flexDirection: "column", height: "100vh" }}>
         <OrdersPage
-          onImport={goToParser}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
           refreshKey={refreshKey}
@@ -146,12 +116,10 @@ function Shell() {
             onCreated={handleCreated}
             onOrderCreated={handleOrderCreated}
             onBack={goToOrders}
-            onImport={goToParser}
             onWorkspace={goToWorkspace}
             onSettings={goToSettings}
             ordersTab={ordersTab}
             onOrdersTabChange={setOrdersTab}
-            importRequestKey={parserImportRequestKey}
             selectedFilePath={parserFileRequest.filePath}
             selectedFileRequestKey={parserFileRequest.key}
           />
@@ -161,7 +129,6 @@ function Shell() {
       {route === "/workspace" && (
         <WorkspacePage
           onOpenFile={openParserFile}
-          onImport={goToParser}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
           onOrders={goToOrders}
@@ -175,7 +142,6 @@ function Shell() {
       {route === "/settings" && (
         <SettingsPage
           onOrders={goToOrders}
-          onImport={goToParser}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
           ordersTab={ordersTab}

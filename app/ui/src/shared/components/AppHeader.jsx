@@ -23,7 +23,6 @@ export default function AppHeader({
   saveTitle = "Nothing to save yet",
   onSettings,
   documentsConfig = {},
-  onImport,
   onWorkspace,
   activeTab = "active",
   onSelectTab,
@@ -174,7 +173,6 @@ export default function AppHeader({
         <div style={{ width: 1, height: 28, background: "#d1d5db", margin: "0 4px", flexShrink: 0 }} />
 
         <button onClick={onWorkspace} style={navButtonStyle("workspace")}>Workspace</button>
-        <button onClick={onImport} style={navButtonStyle("import")}>+ Import Order</button>
         <button style={navButtonStyle("active")} onClick={() => onSelectTab?.("active")}>
           {showCounts ? `Active (${activeCount})` : "Active"}
           {tabCounts && (

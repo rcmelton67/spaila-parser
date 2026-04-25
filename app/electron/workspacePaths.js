@@ -14,6 +14,9 @@ function getWorkspacePaths() {
   return {
     root,
     Inbox: path.join(root, "Inbox"),
+    InboxModule: path.join(root, "inbox"),
+    InboxNew: path.join(root, "inbox"),
+    InboxCur: path.join(root, "inbox"),
     Orders: path.join(root, "Orders"),
     Duplicates: path.join(root, "Duplicates"),
     Archive: path.join(root, "Archive"),
@@ -26,7 +29,6 @@ function ensureWorkspaceLayout(log = () => {}) {
   fs.mkdirSync(paths.root, { recursive: true });
 
   const legacyPairs = {
-    inbox: "Inbox",
     orders: "Orders",
     duplicates: "Duplicates",
     archive: "Archive",

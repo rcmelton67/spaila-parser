@@ -143,6 +143,7 @@ def _deactivate_matching_assignments(
 
 
 def save_assignment(template_id: str, field: str, value: str, context=None) -> None:
+    raw_value = "" if value is None else str(value)
     value = _normalize_value(value)
     source = ""
     segment_id = getattr(context, "segment_id", "")
@@ -168,6 +169,7 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
         candidate_id = context.get("candidate_id", "")
         extractor = context.get("extractor", "")
         learned_signature = context.get("learned_signature", "")
+    selected_text_exact = selected_text if selected_text else raw_value
     store = load_store()
     _deactivate_field_rejections(store, template_id, field, source)
     save_store(store)
@@ -179,7 +181,7 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
         "segment_id": segment_id,
         "start": start,
         "end": end,
-        "selected_text": selected_text,
+        "selected_text": selected_text_exact,
         "segment_text": segment_text,
         "left_context": left_context,
         "right_context": right_context,

@@ -20,6 +20,9 @@ def get_workspace_dirs() -> WorkspaceMap:
     return {
         "root": root,
         "Inbox": root / "Inbox",
+        "InboxModule": root / "inbox",
+        "InboxNew": root / "inbox",
+        "InboxCur": root / "inbox",
         "Orders": root / "Orders",
         "Duplicates": root / "Duplicates",
         "Archive": root / "Archive",
@@ -34,7 +37,6 @@ def ensure_workspace_layout(log: Logger | None = None) -> WorkspaceMap:
     root.mkdir(parents=True, exist_ok=True)
 
     legacy_pairs = {
-        "inbox": "Inbox",
         "orders": "Orders",
         "duplicates": "Duplicates",
         "archive": "Archive",

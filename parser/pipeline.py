@@ -1,4 +1,6 @@
 from typing import List, Dict, Any, Optional as _Opt
+import hashlib
+import json
 import re
 import sys
 from difflib import SequenceMatcher
@@ -252,6 +254,110 @@ _GENERIC_QUANTITY_SIGS: frozenset = frozenset({
 })
 
 
+def _selected_body_part(ingested: Dict[str, Any]) -> str:
+    if ingested.get("html"):
+        return "text/html"
+    if ingested.get("plain"):
+        return "text/plain"
+    return "none"
+
+
+def _log_canon_compare(path: str, ingested: Dict[str, Any], clean_text: str, segments: List[Any]) -> None:
+    canonical_hash = hashlib.sha256(clean_text.encode("utf-8", errors="ignore")).hexdigest()
+    payload = {
+        "source_file": path,
+        "raw_size": ingested.get("_raw_size", 0),
+        "parsed_text_length": len(clean_text),
+        "html_text_length": len(ingested.get("html") or ""),
+        "plain_text_length": len(ingested.get("plain") or ""),
+        "selected_body_part": _selected_body_part(ingested),
+        "canonical_text_hash": canonical_hash,
+        "segment_count": len(segments),
+        "first_1000_chars_of_parser_text": clean_text[:1000],
+    }
+    print(f"[CANON_COMPARE_INPUT] {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+
+    normalized_path = path.replace("/", "\\").lower()
+    normalized_payload = {
+        "source_file": path,
+        "canonical_text_hash": canonical_hash,
+        "segment_count": len(segments),
+        "first_500_chars": clean_text[:500],
+    }
+    if "orders\\" in normalized_path:
+        print(f"[BASELINE_NORMALIZED] {json.dumps(normalized_payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+    elif "inbox\\" in normalized_path:
+        print(f"[IMAP_NORMALIZED] {json.dumps(normalized_payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+
+
+def _log_decision_rows_diff(path: str, decision_rows: List[DecisionRow]) -> None:
+    interesting_fields = {
+        "order_number",
+        "buyer_name",
+        "buyer_email",
+        "shipping_address",
+        "quantity",
+        "price",
+        "ship_by",
+        "order_date",
+    }
+    payload = {
+        "source_file": path,
+        "rows": [
+            {
+                "field": row.field,
+                "value": row.value,
+                "decision": row.decision,
+                "confidence": row.confidence,
+                "start": row.start,
+                "end": row.end,
+                "source": row.decision_source,
+                "snippet": row.provenance.get("snippet", ""),
+            }
+            for row in decision_rows
+            if row.field in interesting_fields
+        ],
+    }
+    print(f"[DECISION_ROWS_DIFF] {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+
+
+def _log_field_decision_proof(
+    path: str,
+    field: str,
+    candidates: List[Candidate],
+    decision: _Opt[DecisionRow],
+    scale: float,
+) -> None:
+    ranked = sorted(
+        candidates,
+        key=lambda c: (-getattr(c, "score", 0.0), c.start if c.start is not None else 0),
+    )
+    payload = {
+        "source_file": path,
+        "field": field,
+        "selected_value": decision.value if decision else None,
+        "selected_candidate_id": decision.candidate_id if decision else None,
+        "selected_confidence": decision.confidence if decision else 0.0,
+        "why_winner_won": decision.provenance.get("signals", []) if decision else [],
+        "candidates": [
+            {
+                "candidate_id": cand.id,
+                "value": cand.value,
+                "extractor": cand.extractor,
+                "source": getattr(cand, "source", ""),
+                "snippet": (cand.segment_text or cand.raw_text or "")[:240],
+                "score": round(getattr(cand, "score", 0.0), 4),
+                "confidence": min(1.0, max(0.0, getattr(cand, "score", 0.0)) / scale),
+                "signals": getattr(cand, "signals", []),
+                "penalties": getattr(cand, "penalties", []),
+                "winner": bool(decision and cand.id == decision.candidate_id),
+            }
+            for cand in ranked
+        ],
+    }
+    print(f"[FIELD_DECISION_PROOF] {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+
+
 def _detect_learning_source(ingested: Dict[str, Any], clean_text: str) -> str:
     subject = (ingested.get("subject") or "").lower()
     body = clean_text.lower()
@@ -443,6 +549,37 @@ def _resolve_positions(
     return best_pos if best_score >= _CONTEXT_MATCH_THRESHOLD else None
 
 
+def _learned_replay_candidate(
+    field: str,
+    index: int,
+    value: str,
+    raw_text: str,
+    start: int,
+    end: int,
+    segment_id: str,
+    segment_text: str,
+    record: Dict,
+    signals: List[str] | None = None,
+) -> Candidate:
+    return Candidate(
+        id=f"learned_{field}_{index + 1:04d}",
+        field_type=field,
+        value=value,
+        raw_text=raw_text,
+        start=start,
+        end=end,
+        segment_id=segment_id,
+        extractor="learning",
+        signals=signals or ["assigned_span(authoritative)"],
+        penalties=[],
+        score=999,
+        segment_text=segment_text,
+        left_context=record.get("left_context", ""),
+        right_context=record.get("right_context", ""),
+        source="learned",
+    )
+
+
 def _inject_assigned_candidates(
     template_id: str,
     field: str,
@@ -541,10 +678,54 @@ def _inject_assigned_candidates(
 
     for i, record in enumerate(assigned_records):
         value = record["value"]
+        preferred_text = record.get("selected_text") or value
         segment_id = record.get("segment_id", "")
 
         original_start = record.get("start")  # may be None for header/subject candidates
         original_end = record.get("end")
+
+        print(
+            f"[LEARNED_REPLAY_ATTEMPT] field={field!r} start={original_start!r} end={original_end!r} "
+            f"has_selected_text={bool(record.get('selected_text'))!r} value={value!r} "
+            f"selected_text_preview={preferred_text[:120]!r}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+        if (
+            isinstance(original_start, int)
+            and isinstance(original_end, int)
+            and 0 <= original_start <= original_end <= len(clean_text)
+        ):
+            if clean_text[original_start:original_end] == preferred_text:
+                print(
+                    f"[LEARNED_REPLAY_EXACT_SUCCESS] field={field!r} value={preferred_text!r} "
+                    f"start={original_start} end={original_end}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return [_learned_replay_candidate(
+                    field,
+                    i,
+                    preferred_text,
+                    preferred_text,
+                    original_start,
+                    original_end,
+                    segment_id,
+                    record.get("segment_text", "") or preferred_text,
+                    record,
+                )]
+            print(
+                f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='stored_range_mismatch'",
+                file=sys.stderr,
+                flush=True,
+            )
+        elif original_start is not None or original_end is not None:
+            print(
+                f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='invalid_stored_range'",
+                file=sys.stderr,
+                flush=True,
+            )
 
         # Out-of-body candidates (header date, subject ship_by) may be stored with
         # start=None / end=None. They must still resolve against the current email
@@ -563,22 +744,17 @@ def _inject_assigned_candidates(
             line_end_raw = clean_text.find("\n", start)
             line_end = line_end_raw if line_end_raw != -1 else len(clean_text)
             segment_text = clean_text[line_start:line_end]
-            return [Candidate(
-                id=f"learned_{field}_{i+1:04d}",
-                field_type=field,
-                value=value,
-                raw_text=raw_text,
-                start=start,
-                end=end,
-                segment_id=segment_id,
-                extractor="learning",
+            return [_learned_replay_candidate(
+                field,
+                i,
+                value,
+                raw_text,
+                start,
+                end,
+                segment_id,
+                segment_text,
+                record,
                 signals=["assigned_span(authoritative)", "resolved_from_context"],
-                penalties=[],
-                score=999,
-                segment_text=segment_text,
-                left_context=record.get("left_context", ""),
-                right_context=record.get("right_context", ""),
-                source="learned",
             )]
 
         segment_obj = segment_map.get(segment_id)
@@ -594,15 +770,85 @@ def _inject_assigned_candidates(
             start, end = stored_start, stored_end
 
         # 2. Multi-line value — must search full text; segments can't contain it.
-        elif "\n" in value:
-            positions = [m.start() for m in re.finditer(re.escape(value), clean_text)]
+        elif "\n" in preferred_text:
+            val_len = len(preferred_text)
+            positions = [m.start() for m in re.finditer(re.escape(preferred_text), clean_text)]
             resolved = _resolve_positions(positions, val_len, clean_text, record)
             if resolved is None:
+                print(
+                    f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='selected_text_not_found'",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 continue
             start, end = resolved, resolved + val_len
+            value = preferred_text
 
-        # 3. Single-line, original segment still exists — try segment-scoped
-        #    search first to reduce false positives, then fall back to full text.
+        # 3. Single-line selected text — try exact selected text before the
+        # normalized fallback value.
+        elif preferred_text != value:
+            val_len = len(preferred_text)
+            if segment_obj:
+                seg_text = segment_obj.text
+                first = seg_text.find(preferred_text)
+                if first != -1 and seg_text.find(preferred_text, first + 1) == -1:
+                    start = segment_obj.start + first
+                    end = start + val_len
+                    value = preferred_text
+                else:
+                    positions = [m.start() for m in re.finditer(re.escape(preferred_text), clean_text)]
+                    resolved = _resolve_positions(positions, val_len, clean_text, record)
+                    if resolved is None:
+                        print(
+                            f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='selected_text_not_found'",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        val_len = len(value)
+                        first = seg_text.find(value)
+                        if first != -1 and seg_text.find(value, first + 1) == -1:
+                            start = segment_obj.start + first
+                            end = start + val_len
+                        else:
+                            positions = [m.start() for m in re.finditer(re.escape(value), clean_text)]
+                            resolved = _resolve_positions(positions, val_len, clean_text, record)
+                            if resolved is None:
+                                print(
+                                    f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='normalized_value_not_found'",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                continue
+                            start, end = resolved, resolved + val_len
+                    else:
+                        start, end = resolved, resolved + val_len
+                        value = preferred_text
+            else:
+                positions = [m.start() for m in re.finditer(re.escape(preferred_text), clean_text)]
+                resolved = _resolve_positions(positions, val_len, clean_text, record)
+                if resolved is None:
+                    print(
+                        f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='selected_text_not_found'",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    val_len = len(value)
+                    positions = [m.start() for m in re.finditer(re.escape(value), clean_text)]
+                    resolved = _resolve_positions(positions, val_len, clean_text, record)
+                    if resolved is None:
+                        print(
+                            f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='normalized_value_not_found'",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        continue
+                    start, end = resolved, resolved + val_len
+                else:
+                    start, end = resolved, resolved + val_len
+                    value = preferred_text
+
+        # 4. Single-line normalized fallback, original segment still exists —
+        #    try segment-scoped search first to reduce false positives.
         elif segment_obj:
             seg_text = segment_obj.text
             first = seg_text.find(value)
@@ -618,34 +864,33 @@ def _inject_assigned_candidates(
                     continue
                 start, end = resolved, resolved + val_len
 
-        # 4. No segment hint — search full clean_text with context scoring.
+        # 5. No segment hint — search full clean_text with context scoring.
         else:
             positions = [m.start() for m in re.finditer(re.escape(value), clean_text)]
             resolved = _resolve_positions(positions, val_len, clean_text, record)
             if resolved is None:
+                print(
+                    f"[LEARNED_REPLAY_EXACT_FAIL] field={field!r} reason='normalized_value_not_found'",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 continue
             start, end = resolved, resolved + val_len
 
-        raw_text = record.get("selected_text", "") or value
+        raw_text = preferred_text
         segment_text = record.get("segment_text", "") or raw_text
 
         # Span resolved — return it as the sole authoritative candidate.
-        return [Candidate(
-            id=f"learned_{field}_{i+1:04d}",
-            field_type=field,
-            value=value,
-            raw_text=raw_text,
-            start=start,
-            end=end,
-            segment_id=segment_id,
-            extractor="learning",
-            signals=["assigned_span(authoritative)"],
-            penalties=[],
-            score=999,
-            segment_text=segment_text,
-            left_context=record.get("left_context", ""),
-            right_context=record.get("right_context", ""),
-            source="learned",
+        return [_learned_replay_candidate(
+            field,
+            i,
+            value,
+            raw_text,
+            start,
+            end,
+            segment_id,
+            segment_text,
+            record,
         )]
 
     # Assignment exists but no position reached the confidence threshold.
@@ -714,6 +959,7 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     replay_data = load_replay(template_family_id)
 
     segments = segment(clean_text)
+    _log_canon_compare(path, ingested, clean_text, segments)
 
     # Segment lookup used by signature construction and injection helpers.
     segment_map: Dict[str, Any] = {seg.id: seg for seg in segments}
@@ -893,6 +1139,15 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
         addr_candidates = apply_anchor_scoring(template_family_id, "shipping_address", addr_candidates)
         addr_candidates = _apply_signature_scoring(addr_candidates, template_family_id, "shipping_address", segment_map)
     addr_decision = None if _field_is_rejected(template_family_id, "shipping_address") else decide_shipping_address(addr_candidates)
+
+    _log_field_decision_proof(path, "quantity", quantity_candidates, quantity_decision, 5.0)
+    _log_field_decision_proof(path, "price", price_candidates, price_decision, 8.0)
+    _log_field_decision_proof(path, "order_number", order_candidates, order_decision, 10.0)
+    _log_field_decision_proof(path, "order_date", date_candidates, date_decision, 10.0)
+    _log_field_decision_proof(path, "buyer_email", email_candidates, email_decision, 6.5)
+    _log_field_decision_proof(path, "ship_by", ship_by_candidates, ship_by_decision, 8.0)
+    _log_field_decision_proof(path, "buyer_name", name_candidates, name_decision, 8.0)
+    _log_field_decision_proof(path, "shipping_address", addr_candidates, addr_decision, 7.0)
 
     # Deduplicated candidate list (last scorer wins on id collision)
     all_candidates: List = list({
@@ -1110,6 +1365,8 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
             validated_decisions.append(row)
         elif clean_text[row.start:row.end] == row.value:
             validated_decisions.append(row)
+
+    _log_decision_rows_diff(path, validated_decisions)
 
     return {
         "subject": ingested.get("subject", ""),

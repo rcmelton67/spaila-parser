@@ -505,30 +505,76 @@ export function saveDocumentsConfig(config) {
 // ── Shop / identity config ─────────────────────────────────────────────────
 
 const SHOP_CONFIG_KEY = "spaila_shop_config";
+export const DEFAULT_SAVE_FOLDER = "C:\\Spaila\\Backup";
 
 export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
-  saveFolder:    "",   // absolute path chosen by user for manual saves/exports
+  saveFolder:    DEFAULT_SAVE_FOLDER,
   showEmailIcon: true, // show ✉ icon in buyer_name cells
+  sender_name: "",
   smtpEmailAddress: "",
   smtpHost: "",
-  smtpPort: "587",
+  smtpPort: "",
   smtpUsername: "",
   smtpPassword: "",
+  imapHost: "",
+  imapPort: "993",
+  imapUsername: "",
+  imapPassword: "",
+  imapUseSsl: true,
+  imapFetchLimit: "20",
 };
+
+function persistEmailSettings(config) {
+  try {
+    if (typeof window === "undefined" || !window.parserApp?.saveJson) {
+      return;
+    }
+    const payload = {
+      sender_name: String(config?.sender_name || "").trim(),
+      smtpEmailAddress: String(config?.smtpEmailAddress || "").trim(),
+      smtpHost: String(config?.smtpHost || "").trim(),
+      smtpPort: String(config?.smtpPort || "").trim(),
+      smtpUsername: String(config?.smtpUsername || "").trim(),
+      smtpPassword: String(config?.smtpPassword || ""),
+      imapHost: String(config?.imapHost || "").trim(),
+      imapPort: String(config?.imapPort || "").trim() || "993",
+      imapUsername: String(config?.imapUsername || "").trim(),
+      imapPassword: String(config?.imapPassword || ""),
+      imapUseSsl: config?.imapUseSsl !== false,
+      imapFetchLimit: String(config?.imapFetchLimit || "").trim() || "20",
+    };
+    window.parserApp.saveJson({
+      folderPath: "C:\\Spaila",
+      filename: "email_settings.json",
+      data: payload,
+    }).catch(() => {});
+  } catch {
+    // LocalStorage remains the source of truth in the UI if disk sync fails.
+  }
+}
 
 export function loadShopConfig() {
   try {
     const raw = localStorage.getItem(SHOP_CONFIG_KEY);
     if (!raw) return { ...DEFAULT_SHOP_CONFIG };
-    return { ...DEFAULT_SHOP_CONFIG, ...JSON.parse(raw) };
+    const saved = JSON.parse(raw);
+    return {
+      ...DEFAULT_SHOP_CONFIG,
+      ...saved,
+      saveFolder: DEFAULT_SAVE_FOLDER,
+    };
   } catch {
     return { ...DEFAULT_SHOP_CONFIG };
   }
 }
 
 export function saveShopConfig(config) {
-  localStorage.setItem(SHOP_CONFIG_KEY, JSON.stringify(config));
+  localStorage.setItem(SHOP_CONFIG_KEY, JSON.stringify({
+    ...config,
+    saveFolder: DEFAULT_SAVE_FOLDER,
+  }));
+  persistEmailSettings(config);
   window.dispatchEvent(new CustomEvent("spaila:shopconfig"));
 }
 

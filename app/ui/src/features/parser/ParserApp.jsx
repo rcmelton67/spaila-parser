@@ -45,7 +45,13 @@ function textLength(node) {
   if (!node) {
     return 0;
   }
+  if (node.nodeType === Node.ELEMENT_NODE && node.getAttribute?.("data-noncontent") === "true") {
+    return 0;
+  }
   if (node.nodeType === Node.TEXT_NODE) {
+    if (node.parentElement?.closest?.('[data-noncontent="true"]')) {
+      return 0;
+    }
     return node.textContent?.length || 0;
   }
 
@@ -61,6 +67,40 @@ function computeSelectionOffset(container, targetNode, targetOffset) {
     return 0;
   }
 
+  const targetElement = targetNode.nodeType === Node.ELEMENT_NODE
+    ? targetNode
+    : targetNode.parentElement;
+  const lineElement = targetElement?.closest?.("[data-line-start]");
+  if (lineElement) {
+    const lineStart = Number.parseInt(lineElement.getAttribute("data-line-start") || "0", 10);
+    const walker = document.createTreeWalker(
+      lineElement,
+      NodeFilter.SHOW_TEXT,
+    );
+    let lineOffset = 0;
+    let current = walker.nextNode();
+    while (current) {
+      if (current === targetNode) {
+        return lineStart + lineOffset + targetOffset;
+      }
+      if (targetNode.nodeType === Node.ELEMENT_NODE && targetNode.contains(current)) {
+        const childNodes = Array.from(targetNode.childNodes);
+        const childIndex = childNodes.indexOf(current.parentNode);
+        if (childIndex >= 0 && childIndex < targetOffset) {
+          lineOffset += current.textContent?.length || 0;
+          current = walker.nextNode();
+          continue;
+        }
+        if (childIndex >= targetOffset) {
+          return lineStart + lineOffset;
+        }
+      }
+      lineOffset += current.textContent?.length || 0;
+      current = walker.nextNode();
+    }
+    return lineStart + lineOffset;
+  }
+
   const walker = document.createTreeWalker(
     container,
     NodeFilter.SHOW_TEXT,
@@ -70,6 +110,10 @@ function computeSelectionOffset(container, targetNode, targetOffset) {
   let current = walker.nextNode();
 
   while (current) {
+    if (current.parentElement?.closest?.('[data-noncontent="true"]')) {
+      current = walker.nextNode();
+      continue;
+    }
     if (current === targetNode) {
       return total + targetOffset;
     }
@@ -164,6 +208,434 @@ function renderHighlightedText(text, ranges, showDetectedFields = false, pulseAt
   }
 
   return elements;
+}
+
+function classifyLine(line) {
+  const trimmed = String(line || "").trim();
+  const lower = trimmed.toLowerCase();
+
+  if (!trimmed) {
+    return "default";
+  }
+  if (lower.includes("order number")) {
+    return "order_info";
+  }
+  if (lower.includes("shipping address")) {
+    return "section_header";
+  }
+  if (
+    trimmed.includes("$")
+    || lower.includes("total")
+    || /^shipping:/i.test(trimmed)
+    || /^sales tax:/i.test(trimmed)
+  ) {
+    return "pricing";
+  }
+  if (
+    trimmed.length > 80
+    || lower.includes("learn more")
+    || lower.includes("sell with confidence")
+    || lower.includes("shipping internationally")
+  ) {
+    return "noise";
+  }
+  if (
+    /^(size|personalization|shop|transaction id|quantity|processing time|item total|item price|heading|note from buyer|product|listing|pet name|enter type)/i.test(trimmed)
+  ) {
+    return "item";
+  }
+  return "default";
+}
+
+const HIDDEN_EMAIL_PATTERNS_KEY = "spaila:hidden-email-line-patterns";
+const HIDDEN_PATTERN_FILLER_WORDS = new Set([
+  "about", "the", "a", "an", "this", "that", "to", "for", "with", "and", "or",
+  "learn", "more", "click", "here",
+]);
+
+function normalizeHiddenLinePattern(line) {
+  return String(line || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function generalizeHiddenLinePattern(line) {
+  const words = normalizeHiddenLinePattern(line)
+    .split(" ")
+    .filter((word) => word && !HIDDEN_PATTERN_FILLER_WORDS.has(word));
+  return words.slice(0, 6).join(" ");
+}
+
+function patternMatch(normalizedLine, storedPattern) {
+  const pattern = normalizeHiddenLinePattern(storedPattern);
+  if (!normalizedLine || !pattern) {
+    return false;
+  }
+  if (normalizedLine.includes(pattern)) {
+    return true;
+  }
+  const patternWords = pattern.split(" ").filter(Boolean);
+  if (!patternWords.length) {
+    return false;
+  }
+  const lineWords = new Set(normalizedLine.split(" ").filter(Boolean));
+  const overlap = patternWords.filter((word) => lineWords.has(word)).length;
+  return overlap / patternWords.length >= 0.7;
+}
+
+function lineMatchesHiddenPattern(line, hiddenPatterns, hiddenExactLines) {
+  const normalizedLine = normalizeHiddenLinePattern(line);
+  if (!normalizedLine) {
+    return false;
+  }
+  if (hiddenExactLines?.has(normalizedLine)) {
+    return true;
+  }
+  return hiddenPatterns.some((pattern) => patternMatch(normalizedLine, pattern));
+}
+
+function trimSelectionToExactText(displayText, start, end) {
+  let nextStart = start;
+  let nextEnd = end;
+  while (nextStart < nextEnd && /\s/.test(displayText[nextStart])) {
+    nextStart += 1;
+  }
+  while (nextEnd > nextStart && /\s/.test(displayText[nextEnd - 1])) {
+    nextEnd -= 1;
+  }
+  return {
+    start: nextStart,
+    end: nextEnd,
+    selectedText: displayText.slice(nextStart, nextEnd),
+  };
+}
+
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  if (
+    typeof aStart !== "number"
+    || typeof aEnd !== "number"
+    || typeof bStart !== "number"
+    || typeof bEnd !== "number"
+  ) {
+    return false;
+  }
+  return aStart < bEnd && bStart < aEnd;
+}
+
+function isAddressBreakLine(line) {
+  const lower = String(line || "").trim().toLowerCase();
+  return (
+    !lower
+    || lower.includes("purchase shipping label")
+    || lower.includes("shipping internationally")
+    || lower.includes("learn")
+    || lower.includes("sell")
+  );
+}
+const ADDRESS_SECTION_KEY = "shipping";
+
+function getSectionMeta(sectionKey) {
+  switch (sectionKey) {
+    case "order":
+      return { key: "order", title: "Order Information", type: "order_info" };
+    case "shipping":
+      return { key: "shipping", title: "📍 Shipping Address", type: "address" };
+    case "item":
+      return { key: "item", title: "📦 Item Details", type: "item" };
+    case "pricing":
+      return { key: "pricing", title: "💲 Pricing", type: "pricing" };
+    case "noise":
+      return { key: "noise", title: "", type: "additional_info" };
+    default:
+      return { key: "default", title: "", type: "additional_info" };
+  }
+}
+
+function deriveSectionKey(type, context) {
+  if (type === "order_info") {
+    return "order";
+  }
+  if (type === "section_header" || type === "address") {
+    return "shipping";
+  }
+  if (type === "pricing") {
+    return "pricing";
+  }
+  if (type === "noise") {
+    return "noise";
+  }
+  if (type === "item") {
+    return "item";
+  }
+  if (!context.seenShippingHeader) {
+    return "order";
+  }
+  if (context.seenPricing) {
+    return "noise";
+  }
+  return "item";
+}
+
+function shouldStartOrderSection(line) {
+  const lower = String(line || "").toLowerCase();
+  return lower.includes("your order number") || lower.includes("congratulations");
+}
+
+function shouldStartAddressSection(line) {
+  return String(line || "").toLowerCase().includes("shipping address");
+}
+
+function shouldStartPricingSection(line) {
+  const trimmed = String(line || "").trim();
+  return /^(?:price|order total|shipping):/i.test(trimmed) || /^order total\b/i.test(trimmed);
+}
+
+function isAdditionalInfoLine(line) {
+  const lower = String(line || "").trim().toLowerCase();
+  return (
+    lower.startsWith("learn")
+    || lower.startsWith("sell")
+    || lower.includes("purchase shipping label")
+    || lower.includes("shipping internationally")
+    || lower.startsWith("choose")
+    || lower.startsWith("double check")
+  );
+}
+
+function shouldStartItemSection(line) {
+  return /^(?:size|personalization|shop|transaction id|quantity|heading|note from buyer|product|listing|pet name|enter type|processing time)/i
+    .test(String(line || "").trim());
+}
+
+function mergeAdjacentSections(sections) {
+  return sections.reduce((merged, section) => {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.key === section.key) {
+      previous.lines.push(...section.lines);
+      return merged;
+    }
+    merged.push(section);
+    return merged;
+  }, []);
+}
+
+function mergeAndOrderSections(sections) {
+  const order = ["order", "shipping", "item", "pricing", "noise"];
+  const buckets = new Map();
+
+  sections.forEach((section) => {
+    const key = section.key === "default" ? "noise" : section.key;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.lines.push(...section.lines);
+      return;
+    }
+    buckets.set(key, {
+      ...getSectionMeta(key),
+      lines: [...section.lines],
+    });
+  });
+
+  return order
+    .map((key) => buckets.get(key))
+    .filter(Boolean);
+}
+
+function sliceRangesForLine(ranges, lineStart, lineEnd) {
+  return ranges
+    .filter((range) => range.start < lineEnd && range.end > lineStart)
+    .map((range) => ({
+      ...range,
+      start: Math.max(range.start, lineStart) - lineStart,
+      end: Math.min(range.end, lineEnd) - lineStart,
+    }))
+    .filter((range) => range.end > range.start);
+}
+
+function buildStructuredEmailSections(text) {
+  const sections = [];
+  let offset = 0;
+  let currentSection = null;
+  let currentSectionKey = null;
+  let addressBlockClosed = false;
+  const rawLines = String(text || "").split("\n");
+
+  function ensureSection(sectionKey) {
+    if (currentSection && currentSectionKey === sectionKey) {
+      return currentSection;
+    }
+    currentSectionKey = sectionKey;
+    currentSection = {
+      ...getSectionMeta(sectionKey),
+      lines: [],
+    };
+    sections.push(currentSection);
+    return currentSection;
+  }
+
+  rawLines.forEach((line, index) => {
+    const trimmed = line.trim();
+    const isBlank = trimmed.length === 0;
+    let type = classifyLine(line);
+    let nextSectionKey = currentSectionKey;
+
+    if (currentSectionKey === ADDRESS_SECTION_KEY) {
+      if (isAddressBreakLine(line)) {
+        addressBlockClosed = true;
+        nextSectionKey = "noise";
+        type = isBlank ? "default" : "noise";
+      } else {
+        nextSectionKey = ADDRESS_SECTION_KEY;
+        type = "address";
+      }
+    } else if (shouldStartAddressSection(line)) {
+      nextSectionKey = ADDRESS_SECTION_KEY;
+      type = "section_header";
+      addressBlockClosed = false;
+    } else if (shouldStartOrderSection(line)) {
+      nextSectionKey = "order";
+      type = "order_info";
+    } else if (shouldStartPricingSection(line)) {
+      nextSectionKey = "pricing";
+      type = "pricing";
+    } else if (isAdditionalInfoLine(line)) {
+      nextSectionKey = "noise";
+      type = "noise";
+    } else if (shouldStartItemSection(line) || (addressBlockClosed && !isBlank && type !== "noise")) {
+      nextSectionKey = "item";
+      addressBlockClosed = false;
+      if (type === "default") {
+        type = "item";
+      }
+    } else if (!nextSectionKey) {
+      nextSectionKey = "order";
+    }
+
+    ensureSection(nextSectionKey).lines.push({
+      id: `line-${index}`,
+      text: line,
+      type,
+      start: offset,
+      end: offset + line.length,
+      hasTrailingNewline: index < rawLines.length - 1,
+    });
+
+    offset += line.length + 1;
+  });
+
+  return mergeAndOrderSections(mergeAdjacentSections(sections));
+}
+
+function renderStructuredEmail(
+  text,
+  ranges,
+  showDetectedFields = false,
+  pulseAttention = false,
+  showFullEmail = false,
+  hiddenPatterns = [],
+  hiddenExactLines = new Set(),
+  showHiddenContent = false,
+  onLineContextMenu = null,
+) {
+  const sections = buildStructuredEmailSections(text);
+  function renderLine(line) {
+    const hiddenByUser = lineMatchesHiddenPattern(line.text, hiddenPatterns, hiddenExactLines);
+    if (hiddenByUser && !showHiddenContent) {
+      return null;
+    }
+    const lineRanges = sliceRangesForLine(ranges, line.start, line.end);
+    const emphasize = /order number|\$/i.test(line.text);
+    const renderTextPart = (partText, partStart = 0) => {
+      const partRanges = lineRanges
+        .filter((range) => range.start < partStart + partText.length && range.end > partStart)
+        .map((range) => ({
+          ...range,
+          start: Math.max(range.start, partStart) - partStart,
+          end: Math.min(range.end, partStart + partText.length) - partStart,
+        }));
+      const rendered = partRanges.length
+        ? renderHighlightedText(partText, partRanges, showDetectedFields, pulseAttention)
+        : partText;
+      return emphasize ? <strong>{rendered}</strong> : rendered;
+    };
+
+    let lineBody;
+    const priceMatch = line.type === "pricing" ? line.text.match(/^([^:]+:)(.*)$/) : null;
+    if (priceMatch) {
+      const labelText = priceMatch[1];
+      const valueText = priceMatch[2];
+      lineBody = (
+        <span className="price-row">
+          <span className="label">{renderTextPart(labelText, 0)}</span>
+          <span className="value">{renderTextPart(valueText, labelText.length)}</span>
+        </span>
+      );
+    } else {
+      lineBody = renderTextPart(line.text, 0);
+    }
+
+    return (
+      <React.Fragment key={line.id}>
+        <span
+          data-line-start={line.start}
+          data-line-end={line.end}
+          onContextMenu={(event) => {
+            if (!line.text.trim()) {
+              return;
+            }
+            onLineContextMenu?.(event, line.text);
+          }}
+          className={[
+            "email-line",
+            `email-line-${line.type}`,
+            line.type === "noise" ? "email-noise" : "",
+            hiddenByUser ? "email-hidden-line-visible" : "",
+          ].filter(Boolean).join(" ")}
+        >
+          {lineBody}
+        </span>
+        {line.hasTrailingNewline ? "\n" : null}
+      </React.Fragment>
+    );
+  }
+
+  return sections.map((section) => {
+    const isFooterSection = section.type === "additional_info";
+    const sectionClassName = [
+      "email-section",
+      `email-section-${section.type}`,
+      isFooterSection ? "email-footer-info" : "",
+      isFooterSection && !showFullEmail ? "email-section-collapsed" : "",
+    ].filter(Boolean).join(" ");
+
+    const headerLines = section.key === ADDRESS_SECTION_KEY
+      ? section.lines.filter((line) => line.type === "section_header")
+      : [];
+    const addressLines = section.key === ADDRESS_SECTION_KEY
+      ? section.lines.filter((line) => line.type !== "section_header")
+      : [];
+    const content = section.key === ADDRESS_SECTION_KEY
+      ? (
+        <>
+          {headerLines.map(renderLine)}
+          <div className="address-box">
+            {addressLines.map(renderLine)}
+          </div>
+        </>
+      )
+      : section.lines.map(renderLine);
+
+    return (
+      <div key={section.lines[0]?.id || section.key} className={sectionClassName}>
+        {!isFooterSection && section.title ? (
+          <div className="section-header" data-noncontent="true">{section.title}</div>
+        ) : null}
+        {content}
+      </div>
+    );
+  });
 }
 
 function buildHighlights(decisions, suppressedFields) {
@@ -558,6 +1030,32 @@ function FieldTooltip({ lines, anchorRect }) {
   );
 }
 
+function formatAddressForDisplay(value) {
+  let display = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!display) {
+    return "";
+  }
+
+  display = display.replace(
+    /\s+([A-Z][A-Z\s]+,\s?[A-Z]{2}\s?\d{5}(?:-\d{4})?)/g,
+    "\n$1",
+  );
+  display = display.replace(
+    /\s+(\d{3,6}\s[A-Za-z])/g,
+    "\n$1",
+  );
+  display = display.replace(/\s+(United States)\b/gi, "\n$1");
+
+  return display
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function FieldRow({
   label,
   fieldKey,
@@ -573,6 +1071,8 @@ function FieldRow({
   navKey,
 }) {
   const value = normalizeFieldValue(decision?.value ?? "");
+  const isAddressField = fieldKey === "shipping_address";
+  const displayValue = isAddressField ? formatAddressForDisplay(value) : value;
   const canAccept = !!decision && !loading && !actionAlreadyApplied("save_assignment", decision);
   const canReject = !!decision && !loading && !actionAlreadyApplied("save_rejection", decision);
   const inputState = decision?.decision === "assigned"
@@ -581,9 +1081,19 @@ function FieldRow({
       ? "suggested-state"
       : "";
 
-  const lineCount = value ? value.split("\n").length : 1;
+  const lineCount = displayValue ? displayValue.split("\n").length : 1;
+  const addressFieldRef = React.useRef(null);
   const tooltip = useTooltip();
   const tooltipLines = buildTooltipLines(decision, fieldKey, priceCandidateCount);
+
+  React.useEffect(() => {
+    if (!isAddressField || !addressFieldRef.current) {
+      return;
+    }
+    const node = addressFieldRef.current;
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }, [displayValue, isAddressField]);
 
   console.log("UI_RENDER_DECISION", { field: fieldKey, decision: decision?.decision ?? null, inputState });
 
@@ -607,11 +1117,17 @@ function FieldRow({
       <label className="compact-label" htmlFor={`field-${fieldKey}`}>{label}</label>
       {multiline ? (
         <textarea
+          ref={isAddressField ? addressFieldRef : null}
           id={`field-${fieldKey}`}
-          className={`field-input field-textarea ${inputState}`}
-          value={value}
+          className={[
+            "field-input",
+            "field-textarea",
+            isAddressField ? "field-address" : "",
+            inputState,
+          ].filter(Boolean).join(" ")}
+          value={displayValue}
           placeholder="(empty)"
-          rows={lineCount}
+          rows={isAddressField ? Math.max(3, Math.min(lineCount, 4)) : lineCount}
           readOnly
           onClick={(event) => {
             event.stopPropagation();
@@ -790,12 +1306,10 @@ export default function App({
   onCreated,
   onOrderCreated,
   onBack,
-  onImport,
   onWorkspace,
   onSettings,
   ordersTab = "active",
   onOrdersTabChange,
-  importRequestKey = 0,
   selectedFilePath = "",
   selectedFileRequestKey = 0,
 }) {
@@ -865,11 +1379,53 @@ export default function App({
   const [activeKeyField, setActiveKeyField] = React.useState(null);
   const [createToast, setCreateToast] = React.useState("");
   const [showDetectedFields, setShowDetectedFields] = React.useState(false);
+  const [showFullEmail, setShowFullEmail] = React.useState(false);
+  const [showHiddenContent, setShowHiddenContent] = React.useState(false);
+  const [userHiddenPatterns, setUserHiddenPatterns] = React.useState(() => {
+    try {
+      const raw = localStorage.getItem(HIDDEN_EMAIL_PATTERNS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [hiddenExactLines, setHiddenExactLines] = React.useState(() => new Set());
+  const [lineContextMenu, setLineContextMenu] = React.useState(null);
   const [pulseGiftAttention, setPulseGiftAttention] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(HIDDEN_EMAIL_PATTERNS_KEY, JSON.stringify(userHiddenPatterns));
+    } catch {
+      // UI-only preference; ignore storage failures.
+    }
+  }, [userHiddenPatterns]);
+  React.useEffect(() => {
+    if (!lineContextMenu) {
+      return undefined;
+    }
+    function closeMenu() {
+      setLineContextMenu(null);
+    }
+    function closeOnEscape(event) {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    }
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [lineContextMenu]);
   const actionLockRef = React.useRef("");
   const debounceRef = React.useRef(null);
   const textRef = React.useRef(null);
-  const importEmlRef = React.useRef(null);
+  const applyResultRef = React.useRef(null);
+  const clearSelectionRef = React.useRef(null);
+  const resetParserUiRef = React.useRef(null);
+  const latestSelectedFileLoadRef = React.useRef(0);
   const activeKeyFieldRef = React.useRef(null);
   const giftPulseTimerRef = React.useRef(null);
   const lastGiftPulseFileRef = React.useRef("");
@@ -1108,7 +1664,7 @@ export default function App({
     return () => clearTimeout(timer);
   }, [createToast]);
 
-  async function createOrder({ importAnother = false } = {}) {
+  async function createOrder() {
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
       const payload = buildOrderPayload();
@@ -1125,10 +1681,6 @@ export default function App({
       console.log("ORDER CREATED:", data);
       setCreateToast("Order created");
       onOrderCreated?.();
-      if (importAnother) {
-        await importEmlRef.current?.({ resetBeforeOpen: true });
-        return;
-      }
       setState((current) => ({ ...current, loading: false }));
       if (onCreated) onCreated();
     } catch (err) {
@@ -1139,7 +1691,7 @@ export default function App({
   }
 
   async function handleCreateOrder() {
-    await createOrder({ importAnother: true });
+    await createOrder();
   }
 
   React.useEffect(() => {
@@ -1286,6 +1838,10 @@ export default function App({
     });
   }, [clearSelection]);
 
+  applyResultRef.current = applyResult;
+  clearSelectionRef.current = clearSelection;
+  resetParserUiRef.current = resetParserUi;
+
   const captureSelection = React.useCallback(() => {
     const container = textRef.current;
     const browserSelection = window.getSelection();
@@ -1320,18 +1876,31 @@ export default function App({
       return;
     }
 
+    const trimmed = trimSelectionToExactText(displayText, displayStart, displayEnd);
+    if (!trimmed.selectedText || displayText.slice(trimmed.start, trimmed.end) !== trimmed.selectedText) {
+      lastSelectionRef.current = null;
+      setSelection(null);
+      return;
+    }
+
     // Convert back to original (backend) coordinates by adding the trim offset.
-    const start = displayStart + trimOffset;
-    const end   = displayEnd   + trimOffset;
+    const start = trimmed.start + trimOffset;
+    const end   = trimmed.end   + trimOffset;
 
     const segment = segments.find((seg) => start >= seg.start && end <= seg.end);
 
     const captured = {
       start,
       end,
-      selected_text: selectedText,
+      selected_text: trimmed.selectedText,
       segment_id: segment?.id || "",
     };
+    console.log("[SELECTION_CAPTURE]", {
+      value: captured.selected_text,
+      start: captured.start,
+      end: captured.end,
+      length: captured.selected_text.length,
+    });
     lastSelectionRef.current = captured; // synchronous — always read by click handlers
     setSelection(captured);             // async — drives the UI indicator
   }, [segments, state.text]);
@@ -1342,12 +1911,28 @@ export default function App({
     if (!state.filePath || !sel?.selected_text) {
       return;
     }
-    const normalizedValue = normalizeFieldValue(sel.selected_text);
-    if (!normalizedValue) {
+    const exactValue = sel.selected_text;
+    if (!exactValue) {
       return;
     }
-    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
-    const actionKey = `manual:${field}:${sel.start}:${sel.end}:${normalizedValue}`;
+    const counterpart = field === "buyer_name"
+      ? decisionMap.shipping_address
+      : field === "shipping_address"
+        ? decisionMap.buyer_name
+        : null;
+    if (
+      counterpart
+      && rangesOverlap(sel.start, sel.end, counterpart.start, counterpart.end)
+    ) {
+      setState((current) => ({
+        ...current,
+        error: `${field === "buyer_name" ? "Buyer name" : "Shipping address"} selection overlaps ${field === "buyer_name" ? "shipping address" : "buyer name"}. Select only the exact text for this field.`,
+      }));
+      return;
+    }
+    console.log("ASSIGNED VALUE:", `"${exactValue}"`);
+    console.log("[ASSIGNMENT_APPLIED]", { field, value: exactValue, start: sel.start, end: sel.end });
+    const actionKey = `manual:${field}:${sel.start}:${sel.end}:${exactValue}`;
     if (actionLockRef.current === actionKey) {
       return;
     }
@@ -1362,7 +1947,7 @@ export default function App({
         orderNumber: currentOrderNumber,
         decision: {
           field,
-          value: normalizedValue,
+          value: exactValue,
           segment_id: sel.segment_id,
           start: sel.start,
           end: sel.end,
@@ -1384,7 +1969,7 @@ export default function App({
         }
         : {
           field,
-          value: normalizedValue,
+          value: exactValue,
           start: sel.start,
           end: sel.end,
           decision: null,
@@ -1401,18 +1986,19 @@ export default function App({
         error: error.message || "Failed to save assignment",
       }));
     }
-  }, [applyResult, clearSelection, currentOrderNumber, resolveCurrentParserPath, selection, suppressedFields]);
+  }, [applyResult, clearSelection, currentOrderNumber, decisionMap.buyer_name, decisionMap.shipping_address, resolveCurrentParserPath, selection, suppressedFields]);
 
   const assignSelectionToItemField = React.useCallback((field, itemIndex) => {
     const sel = lastSelectionRef.current || selection;
     if (!sel?.selected_text) {
       return;
     }
-    const normalizedValue = normalizeFieldValue(sel.selected_text);
-    if (!normalizedValue) {
+    const exactValue = sel.selected_text;
+    if (!exactValue) {
       return;
     }
-    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
+    console.log("ASSIGNED VALUE:", `"${exactValue}"`);
+    console.log("[ASSIGNMENT_APPLIED]", { field, value: exactValue, start: sel.start, end: sel.end });
 
     setState((current) => ({
       ...current,
@@ -1423,7 +2009,7 @@ export default function App({
         return {
           ...item,
           [field]: {
-            value: normalizedValue,
+            value: exactValue,
             start: sel.start,
             end: sel.end,
           },
@@ -1441,7 +2027,7 @@ export default function App({
           decision: "assigned",
           start: sel.start,
           end: sel.end,
-          value: normalizedValue,
+          value: exactValue,
         },
       };
     }));
@@ -1449,7 +2035,7 @@ export default function App({
     console.log("HIGHLIGHTS:", highlights);
     console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", {
       field,
-      value: normalizedValue,
+      value: exactValue,
       start: sel.start,
       end: sel.end,
       decision: "assigned",
@@ -1503,11 +2089,12 @@ export default function App({
   const assignGiftMessage = React.useCallback(() => {
     const sel = lastSelectionRef.current || selection;
     if (!sel?.selected_text) return;
-    const normalizedValue = normalizeFieldValue(sel.selected_text);
-    if (!normalizedValue) return;
-    console.log("ASSIGNED VALUE:", `"${normalizedValue}"`);
-    setGiftMessage({ value: normalizedValue, start: sel.start, end: sel.end });
-    setGiftMessageMeta({ decision: "assigned", source: "manual", value: normalizedValue });
+    const exactValue = sel.selected_text;
+    if (!exactValue) return;
+    console.log("ASSIGNED VALUE:", `"${exactValue}"`);
+    console.log("[ASSIGNMENT_APPLIED]", { field: "gift_message", value: exactValue, start: sel.start, end: sel.end });
+    setGiftMessage({ value: exactValue, start: sel.start, end: sel.end });
+    setGiftMessageMeta({ decision: "assigned", source: "manual", value: exactValue });
     setSelectedField("gift_message");
     clearSelection();
   }, [clearSelection, selection]);
@@ -1531,61 +2118,28 @@ export default function App({
     }
   }, [assignSelectionToItemField, itemMeta, scrollToDecisionRange, selection, state.items]);
 
-  const importEml = async ({ resetBeforeOpen = false } = {}) => {
-    if (resetBeforeOpen) {
-      resetParserUi({ loading: true });
-    } else {
-      setState((current) => ({ ...current, loading: true, error: "" }));
-    }
-    try {
-      const result = await window.parserApp.importEml();
-      if (!result) {
-        setState((current) => ({ ...current, loading: false }));
-        return;
-      }
-      setSuppressedFields([]);
-      setActiveItemIndex(0);
-      setGiftMessage(null);
-      setGiftMessageMeta(null);
-      setActiveKeyField(null);
-      clearSelection();
-      applyResult(result);
-    } catch (error) {
-      setState((current) => ({
-        ...current,
-        loading: false,
-        error: error.message || "Failed to import EML",
-      }));
-    }
-  };
-
-  // Keep ref up to date so import requests always call the latest version.
-  importEmlRef.current = importEml;
-
-  React.useEffect(() => {
-    importEmlRef.current?.();
-  }, [importRequestKey]);
-
   React.useEffect(() => {
     if (!selectedFilePath) {
       return;
     }
+    const loadId = latestSelectedFileLoadRef.current + 1;
+    latestSelectedFileLoadRef.current = loadId;
     let cancelled = false;
     async function openSelectedFile() {
-      resetParserUi({ loading: true });
+      resetParserUiRef.current?.({ loading: true });
       try {
         const result = await window.parserApp?.parseFile?.({ filePath: selectedFilePath });
-        if (!cancelled) {
+        if (!cancelled && latestSelectedFileLoadRef.current === loadId) {
           setSuppressedFields([]);
           setActiveItemIndex(0);
           setGiftMessage(null);
           setGiftMessageMeta(null);
           setActiveKeyField(null);
-          clearSelection();
-          applyResult(result);
+          clearSelectionRef.current?.();
+          applyResultRef.current?.(result);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && latestSelectedFileLoadRef.current === loadId) {
           setState((current) => ({
             ...current,
             loading: false,
@@ -1598,7 +2152,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [applyResult, clearSelection, resetParserUi, selectedFilePath, selectedFileRequestKey]);
+  }, [selectedFilePath, selectedFileRequestKey]);
 
 
   const teach = async (action, decision) => {
@@ -1707,6 +2261,48 @@ export default function App({
     rejectGiftMessage,
   };
 
+  const openLineContextMenu = React.useCallback((event, lineText) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setLineContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      lineText,
+    });
+  }, []);
+
+  const hideLineOnce = React.useCallback((lineText) => {
+    const normalized = normalizeHiddenLinePattern(lineText);
+    if (!normalized) {
+      setLineContextMenu(null);
+      return;
+    }
+    setHiddenExactLines((current) => {
+      const next = new Set(current);
+      next.add(normalized);
+      return next;
+    });
+    setLineContextMenu(null);
+  }, []);
+
+  const alwaysHideSimilarLine = React.useCallback((lineText) => {
+    const pattern = generalizeHiddenLinePattern(lineText) || normalizeHiddenLinePattern(lineText);
+    if (!pattern) {
+      setLineContextMenu(null);
+      return;
+    }
+    setUserHiddenPatterns((current) => (
+      current.includes(pattern) ? current : [...current, pattern]
+    ));
+    setLineContextMenu(null);
+  }, []);
+
+  const resetHiddenPatterns = React.useCallback(() => {
+    setUserHiddenPatterns([]);
+    setHiddenExactLines(new Set());
+    setLineContextMenu(null);
+  }, []);
+
   // Compute trim offset once per render so both the JSX and captureSelection
   // use exactly the same value. The ref keeps captureSelection in sync without
   // needing it in that callback's dependency array.
@@ -1732,6 +2328,7 @@ export default function App({
         }))),
     [_displayEmail.length, _emailTrimOffset, attentionHighlights, highlights]
   );
+  const isOpeningSelectedEmail = Boolean(selectedFilePath) && !state.filePath && !state.error;
 
   return (
     <div className="app-shell">
@@ -1741,9 +2338,8 @@ export default function App({
         onSettings={onSettings}
         onWorkspace={onWorkspace}
         documentsConfig={documentsConfig}
-        onImport={onImport}
         activeTab={ordersTab}
-        selectedNav="import"
+        selectedNav=""
         onSelectTab={(nextTab) => {
           onOrdersTabChange?.(nextTab);
           onBack?.(nextTab);
@@ -1751,31 +2347,38 @@ export default function App({
         showCounts={false}
       />
 
-      <div className="parser-context-bar">
-        <button
-          className="parser-secondary-action"
-          onClick={importEml}
-          disabled={state.loading}
-        >
-          {state.loading ? "Loading…" : state.filePath ? "Change File" : "Import EML"}
-        </button>
-        {state.filePath && (
+      {state.filePath && (
+        <div className="parser-context-bar">
           <div className="parser-subject-meta" title={state.subject || "(no subject)"}>
             <span className="subject-label">Subject:</span>{" "}
             <span>{state.subject || "(no subject)"}</span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {state.error ? <div className="error-banner">{state.error}</div> : null}
       {createToast ? <div className="create-feedback-toast">{createToast}</div> : null}
 
       {/* ── Empty state — shown when no file is loaded ── */}
-      {!state.filePath && !state.loading && (
-        <div className="eml-empty-state" onClick={importEml}>
+      {!state.filePath && isOpeningSelectedEmail && (
+        <div className="eml-empty-state">
+          <div className="eml-empty-icon">⏳</div>
+          <div className="eml-empty-title">Opening selected email</div>
+          <div className="eml-empty-hint">Loading the message from Workspace…</div>
+        </div>
+      )}
+      {!state.filePath && !state.loading && !isOpeningSelectedEmail && (
+        <div className="eml-empty-state">
           <div className="eml-empty-icon">📧</div>
-          <div className="eml-empty-title">Click to import email</div>
-          <div className="eml-empty-hint">Supports .eml files</div>
+          <div className="eml-empty-title">No email selected</div>
+          <div className="eml-empty-hint">Choose an Inbox item from Workspace to open it here.</div>
+          <button
+            type="button"
+            className="parser-secondary-action"
+            onClick={() => onWorkspace?.()}
+          >
+            Go to Workspace
+          </button>
         </div>
       )}
 
@@ -1783,31 +2386,63 @@ export default function App({
         <section className="panel text-panel">
           <div className="panel-title panel-title-row">
             <span>Email Content</span>
-            <label className="email-visibility-toggle">
-              <input
-                type="checkbox"
-                checked={showDetectedFields}
-                onChange={(event) => setShowDetectedFields(event.target.checked)}
-              />
-              <span>Show detected fields</span>
-            </label>
+            <div className="email-panel-toggles">
+              <label className="email-visibility-toggle">
+                <input
+                  type="checkbox"
+                  checked={showDetectedFields}
+                  onChange={(event) => setShowDetectedFields(event.target.checked)}
+                />
+                <span>Show detected fields</span>
+              </label>
+              <label className="email-visibility-toggle">
+                <input
+                  type="checkbox"
+                  checked={showFullEmail}
+                  onChange={(event) => setShowFullEmail(event.target.checked)}
+                />
+                <span>Show full email</span>
+              </label>
+              <label className="email-visibility-toggle">
+                <input
+                  type="checkbox"
+                  checked={showHiddenContent}
+                  onChange={(event) => setShowHiddenContent(event.target.checked)}
+                />
+                <span>Show hidden content</span>
+              </label>
+              <button
+                type="button"
+                className="email-reset-hidden"
+                onClick={resetHiddenPatterns}
+                disabled={!userHiddenPatterns.length && !hiddenExactLines.size}
+                title="Clear hidden email line patterns"
+              >
+                Reset hidden patterns
+              </button>
+            </div>
           </div>
-          <pre
+          <div
             ref={textRef}
             className="email-content"
             onMouseUp={captureSelection}
             onKeyUp={captureSelection}
           >
             {_displayEmail
-              ? renderHighlightedText(
+              ? renderStructuredEmail(
                   _displayEmail,
                   displayHighlights,
                   showDetectedFields,
                   pulseGiftAttention,
+                  showFullEmail,
+                  userHiddenPatterns,
+                  hiddenExactLines,
+                  showHiddenContent,
+                  openLineContextMenu,
                 )
               : "(import an .eml file to view content)"
             }
-          </pre>
+          </div>
         </section>
 
         <aside className="panel fields-panel">
@@ -1977,6 +2612,30 @@ export default function App({
           </div>
         </aside>
       </main>
+
+      {lineContextMenu ? (
+        <div
+          className="email-line-context-menu"
+          style={{ left: lineContextMenu.x, top: lineContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          role="menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => hideLineOnce(lineContextMenu.lineText)}
+          >
+            Hide this line
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => alwaysHideSimilarLine(lineContextMenu.lineText)}
+          >
+            Always hide similar lines
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

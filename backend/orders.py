@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from datetime import datetime, date
 import uuid
 import os
@@ -153,6 +153,83 @@ async def create_order(payload: dict):
     }
 
 
+@router.post("/orders/create-manual")
+def create_manual_order(payload: dict):
+    order_number = str(payload.get("order_number") or "").strip()
+    if not order_number:
+        raise HTTPException(status_code=400, detail="Order number is required.")
+
+    order_id = str(uuid.uuid4())
+    item_id = str(uuid.uuid4())
+    created_at = datetime.utcnow().isoformat()
+    buyer_name = payload.get("buyer_name") or ""
+    order_date = payload.get("order_date")
+    status = payload.get("status") or "active"
+    order_folder_path = _make_order_folder(buyer_name, order_number, order_date)
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO orders (
+            id, order_number, order_date, buyer_name,
+            buyer_email, shipping_address, ship_by,
+            status, created_at,
+            source_eml_path, eml_path, order_folder_path,
+            platform
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        order_id,
+        order_number,
+        order_date,
+        buyer_name,
+        payload.get("buyer_email") or None,
+        payload.get("shipping_address") or None,
+        payload.get("ship_by") or None,
+        status,
+        created_at,
+        None,
+        None,
+        order_folder_path,
+        "unknown",
+    ))
+
+    cur.execute("""
+        INSERT INTO items (
+            id, order_id, item_index, quantity, price,
+            custom_1, custom_2, custom_3,
+            custom_4, custom_5, custom_6,
+            order_notes, gift_message, item_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        item_id,
+        order_id,
+        0,
+        payload.get("quantity") or None,
+        payload.get("price") or None,
+        payload.get("custom_1") or None,
+        payload.get("custom_2") or None,
+        payload.get("custom_3") or None,
+        payload.get("custom_4") or None,
+        payload.get("custom_5") or None,
+        payload.get("custom_6") or None,
+        payload.get("order_notes") or None,
+        payload.get("gift_message") or None,
+        None,
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "created",
+        "id": item_id,
+        "order_id": order_id,
+        "created_at": created_at,
+        "order_folder_path": order_folder_path,
+    }
+
+
 @router.get("/orders")
 def get_orders():
     """Orders-only data for helper (folder creation, EML matching, PATCH-back). No JOIN."""
@@ -269,11 +346,19 @@ def update_full(payload: dict):
     # Order-level fields — shared across all items of this order
     cur.execute("""
         UPDATE orders SET
-            order_date = ?,
-            ship_by    = ?,
-            status     = ?
+            order_number      = ?,
+            buyer_name        = ?,
+            buyer_email       = ?,
+            shipping_address  = ?,
+            order_date        = ?,
+            ship_by           = ?,
+            status            = ?
         WHERE id = ?
     """, (
+        payload.get("order_number"),
+        payload.get("buyer_name") or None,
+        payload.get("buyer_email") or None,
+        payload.get("shipping_address") or None,
         payload.get("order_date"),
         payload.get("ship_by"),
         payload.get("status", "active"),

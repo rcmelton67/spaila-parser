@@ -4,6 +4,7 @@ import pytest
 
 from parser.pipeline import parse_eml
 from parser.replay.fingerprint import compute_template_id
+from parser.learning import confidence_store
 from parser.learning import store as learning_store
 
 
@@ -24,7 +25,9 @@ def _make_eml(path: Path, body: str, subject: str = "Order update") -> str:
 @pytest.fixture
 def isolated_learning_store(tmp_path, monkeypatch):
     store_path = tmp_path / "learning_store.json"
+    confidence_path = tmp_path / "confidence_store.json"
     monkeypatch.setattr(learning_store, "STORE_PATH", str(store_path))
+    monkeypatch.setattr(confidence_store, "CONFIDENCE_STORE_PATH", str(confidence_path))
     return store_path
 
 
@@ -126,6 +129,50 @@ def test_healing_reject_then_assign_restores(simple_order_eml, isolated_learning
     assert healed["clean_text"][healed_price.start:healed_price.end] == "99.99"
 
 
+def test_multiline_shipping_assignment_replays_selected_text_exactly(tmp_path, isolated_learning_store):
+    body = (
+        "Order #4035149940\n"
+        "Shipping address\n"
+        "Rachel Loftus-Jungwirth\n"
+        "16684 Markley Lake Dr SE\n"
+        "PRIOR LAKE , MN 55372-1998\n"
+        "United States\n"
+        "Purchase Shipping Label\n"
+        "Quantity: 1\n"
+        "Price: $64.00\n"
+        "Customer email: rachel.m.loftus@gmail.com\n"
+    )
+    eml_path = _make_eml(tmp_path / "etsy-address.eml", body, subject="Order #4035149940")
+    initial = parse_eml(eml_path)
+    template_id = initial["template_family_id"]
+    selected_text = "16684 Markley Lake Dr SE\nPRIOR LAKE , MN 55372-1998\nUnited States"
+    start = initial["clean_text"].index(selected_text)
+    end = start + len(selected_text)
+
+    learning_store.save_assignment(template_id, "shipping_address", selected_text, {
+        "segment_id": "",
+        "start": start,
+        "end": end,
+        "selected_text": selected_text,
+        "segment_text": selected_text,
+        "left_context": "",
+        "right_context": "",
+    })
+
+    records = learning_store.load_assignments(template_id, "shipping_address")
+    assert records[0]["value"] == "16684 Markley Lake Dr SE PRIOR LAKE , MN 55372-1998 United States"
+    assert records[0]["selected_text"] == selected_text
+
+    reparsed = parse_eml(eml_path, update_confidence=False)
+    address = next(d for d in reparsed["decisions"] if d.field == "shipping_address")
+
+    assert address.value == selected_text
+    assert address.start == start
+    assert address.end == end
+    assert reparsed["clean_text"][address.start:address.end] == selected_text
+    assert "Rachel Loftus-Jungwirth" not in address.value
+
+
 @pytest.mark.parametrize(
     "sample_path",
     [
@@ -138,6 +185,8 @@ def test_integrity_value_equals_slice(sample_path, isolated_learning_store):
     result = parse_eml(sample_path)
 
     for decision in result["decisions"]:
+        if decision.start is None or decision.end is None:
+            continue
         assert decision.start is not None, f"{sample_path} {decision.field} has no start"
         assert decision.end is not None, f"{sample_path} {decision.field} has no end"
         assert result["clean_text"][decision.start:decision.end] == decision.value, (

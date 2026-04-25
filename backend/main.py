@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from .orders import router as orders_router
 from .db import init_db
+from server.inbox.inbox_routes import router as inbox_router
+from workspace_paths import ensure_workspace_layout
 import json as _json
 import os as _os
 
@@ -20,11 +22,13 @@ app.add_middleware(
 )
 
 app.include_router(orders_router)
+app.include_router(inbox_router)
 
 
 @app.on_event("startup")
 def startup():
     init_db()
+    ensure_workspace_layout()
 
     # ── Count every learning store precisely (absolute paths; no cwd drift) ───
     def _load_json(path: str) -> dict:

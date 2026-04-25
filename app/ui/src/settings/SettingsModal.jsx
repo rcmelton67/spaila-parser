@@ -14,7 +14,7 @@ import {
   loadArchiveConfig, saveArchiveConfig,
   loadEmailTemplates, saveEmailTemplates, DEFAULT_EMAIL_TEMPLATES, EMAIL_VARIABLE_KEYS,
   evalEmailCondition,
-  loadShopConfig, saveShopConfig,
+  loadShopConfig, saveShopConfig, DEFAULT_SAVE_FOLDER,
   loadDocumentsConfig, saveDocumentsConfig,
   loadPrintConfig, savePrintConfig,
 } from "../shared/utils/fieldConfig.js";
@@ -1249,6 +1249,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
   const [editingId, setEditingId] = React.useState(null);
   const [smtpState, setSmtpState] = React.useState({ testing: false, message: "", error: "" });
   const [smtpProvider, setSmtpProvider] = React.useState("other");
+  const [activeEmailSubtab, setActiveEmailSubtab] = React.useState("sending");
 
   // Track last-focused subject/body field so variable pills know where to insert
   const focusRef = React.useRef({ field: null, el: null, start: 0, end: 0 });
@@ -1485,7 +1486,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
     try {
       const result = await window.parserApp?.testSmtpConnection?.({
         config: {
-          emailAddress: shopConfig?.smtpEmailAddress || "",
+          emailAddress: shopConfig?.smtpEmailAddress || shopConfig?.smtpUsername || "",
           host: shopConfig?.smtpHost || "",
           port: shopConfig?.smtpPort || "",
           username: shopConfig?.smtpUsername || "",
@@ -1508,41 +1509,128 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
       steps: [
         "Enable 2-Step Verification on your Google account",
         "Generate an App Password: Google Account -> Security -> App Passwords",
-        "Use this App Password below (not your Gmail password)",
+        "Use this App Password below (NOT your Gmail password)",
       ],
       settings: [
         "SMTP Host: smtp.gmail.com",
         "Port: 587 (or 465)",
         "Username: your full Gmail address",
       ],
+      host: "smtp.gmail.com",
+      port: "587",
+      usernameHint: "your@gmail.com",
+      usernameMode: "email",
+      passwordHint: "App Password (Google)",
     },
     outlook: {
       title: "Outlook Setup",
       steps: [
         "Use your Outlook email and password",
-        "If you have issues, create an App Password in Microsoft account security",
+        "If needed, create an App Password in your Microsoft account",
       ],
       settings: [
         "SMTP Host: smtp.office365.com",
         "Port: 587",
         "Username: your full email address",
       ],
+      host: "smtp.office365.com",
+      port: "587",
+      usernameHint: "your@outlook.com",
+      usernameMode: "email",
+      passwordHint: "App Password (if required)",
     },
     other: {
       title: "Other Provider Setup",
       steps: [
-        "Use your email provider's SMTP settings",
-        "Most providers support Port 587 (TLS) or 465 (SSL)",
-        "Contact your provider if you are unsure",
+        "Using a custom or domain email?",
+        "Check your provider's SMTP settings (Namecheap, GoDaddy, etc.)",
+        "If connection fails, try port 465.",
       ],
-      settings: [],
+      settings: [
+        "Host: mail.yourdomain.com",
+        "Port: 465 (SSL) or 587 (TLS)",
+      ],
+      host: "mail.yourdomain.com",
+      port: "465",
+      usernameHint: "your@email.com",
+      usernameMode: "custom",
+      passwordHint: "Your email password or app password",
     },
   };
   const selectedProviderHelp = providerHelp[smtpProvider] || providerHelp.other;
+  const smtpEmailAddress = String(shopConfig?.smtpEmailAddress || "").trim();
+  const smtpHost = String(shopConfig?.smtpHost || "").trim().toLowerCase();
+  const smtpPort = String(shopConfig?.smtpPort || "").trim();
+  const smtpUsername = String(shopConfig?.smtpUsername || "").trim();
+  const matchesGmailDefaults = smtpHost === providerHelp.gmail.host
+    && smtpPort === providerHelp.gmail.port
+    && (!smtpUsername || !smtpEmailAddress || smtpUsername.toLowerCase() === smtpEmailAddress.toLowerCase());
+  const matchesOutlookDefaults = smtpHost === providerHelp.outlook.host
+    && smtpPort === providerHelp.outlook.port
+    && (!smtpUsername || !smtpEmailAddress || smtpUsername.toLowerCase() === smtpEmailAddress.toLowerCase());
+  const providerIndicator = matchesGmailDefaults
+    ? "Using: Gmail defaults"
+    : matchesOutlookDefaults
+      ? "Using: Outlook defaults"
+      : "Using: Custom settings";
+  const selectedProviderMismatch = (
+    (smtpProvider === "gmail" && smtpHost && !matchesGmailDefaults)
+    || (smtpProvider === "outlook" && smtpHost && !matchesOutlookDefaults)
+  );
+
+  function handleSelectSmtpProvider(providerId) {
+    setSmtpProvider(providerHelp[providerId] ? providerId : "other");
+  }
+
+  function handleApplySmtpDefaults() {
+    if (smtpProvider === "other") {
+      return;
+    }
+    setShopConfig?.((prev) => ({
+      ...prev,
+      smtpHost: selectedProviderHelp.host,
+      smtpPort: selectedProviderHelp.port,
+      smtpUsername: (
+        !String(prev?.smtpUsername || "").trim()
+        || (String(prev?.smtpEmailAddress || "").trim()
+          && String(prev?.smtpUsername || "").trim().toLowerCase() === String(prev?.smtpEmailAddress || "").trim().toLowerCase())
+        || String(prev?.smtpUsername || "").trim() === providerHelp.gmail.usernameHint
+        || String(prev?.smtpUsername || "").trim() === providerHelp.outlook.usernameHint
+      )
+        ? String(prev?.smtpEmailAddress || "").trim()
+        : (prev?.smtpUsername || ""),
+    }));
+  }
 
   return (
     <div style={{ padding: "4px 0" }}>
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {[
+          { id: "sending", label: "Sending" },
+          { id: "templates", label: "Templates" },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveEmailSubtab(tab.id)}
+            style={{
+              padding: "7px 14px",
+              border: `1px solid ${activeEmailSubtab === tab.id ? "#93c5fd" : "#d1d5db"}`,
+              borderRadius: 999,
+              background: activeEmailSubtab === tab.id ? "#eff6ff" : "#fff",
+              color: "#111827",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeEmailSubtab === "sending" ? (
       <div style={{
         background: "#f9fafb", border: "1px solid #e5e7eb",
         borderRadius: "10px", padding: "14px 18px", marginBottom: "16px",
@@ -1564,7 +1652,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             <button
               key={provider.id}
               type="button"
-              onClick={() => setSmtpProvider(provider.id)}
+              onClick={() => handleSelectSmtpProvider(provider.id)}
               style={{
                 padding: "6px 12px",
                 border: `1px solid ${smtpProvider === provider.id ? "#93c5fd" : "#d1d5db"}`,
@@ -1580,6 +1668,14 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             </button>
           ))}
         </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>
+          {providerIndicator}
+        </div>
+        {selectedProviderMismatch ? (
+          <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>
+            Fields do not match {smtpProvider === "gmail" ? "Gmail" : "Outlook"} defaults
+          </div>
+        ) : null}
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 6 }}>
             {selectedProviderHelp.title}
@@ -1593,7 +1689,26 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             ))}
           </div>
         </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={handleApplySmtpDefaults}
+            disabled={smtpProvider === "other"}
+            style={{ padding: "6px 12px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+          >
+            Apply Defaults
+          </button>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+          <label>
+            <span style={labelStyle}>Sender Name</span>
+            <input
+              value={shopConfig?.sender_name ?? ""}
+              onChange={(e) => setShopConfig?.((prev) => ({ ...prev, sender_name: e.target.value }))}
+              placeholder="Your Shop Name"
+              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+            />
+          </label>
           <label>
             <span style={labelStyle}>Email Address</span>
             <input
@@ -1608,7 +1723,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             <input
               value={shopConfig?.smtpHost ?? ""}
               onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpHost: e.target.value }))}
-              placeholder="smtp.gmail.com"
+              placeholder={selectedProviderHelp.host}
               style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
             />
           </label>
@@ -1617,7 +1732,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             <input
               value={shopConfig?.smtpPort ?? ""}
               onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpPort: e.target.value }))}
-              placeholder="587"
+              placeholder={selectedProviderHelp.port}
               style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
             />
           </label>
@@ -1626,7 +1741,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             <input
               value={shopConfig?.smtpUsername ?? ""}
               onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpUsername: e.target.value }))}
-              placeholder="usually same as email"
+              placeholder={selectedProviderHelp.usernameHint}
               style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
             />
           </label>
@@ -1636,10 +1751,73 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
               type="password"
               value={shopConfig?.smtpPassword ?? ""}
               onChange={(e) => setShopConfig?.((prev) => ({ ...prev, smtpPassword: e.target.value }))}
-              placeholder="App Password (recommended)"
+              placeholder={selectedProviderHelp.passwordHint}
               style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
             />
           </label>
+        </div>
+        <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 12px 10px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 10 }}>
+            Inbox (IMAP)
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+            <label>
+              <span style={labelStyle}>IMAP Host</span>
+              <input
+                value={shopConfig?.imapHost ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapHost: e.target.value }))}
+                placeholder="imap.yourprovider.com"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Port</span>
+              <input
+                type="number"
+                value={shopConfig?.imapPort ?? "993"}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPort: e.target.value }))}
+                placeholder="993"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Username</span>
+              <input
+                value={shopConfig?.imapUsername ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUsername: e.target.value }))}
+                placeholder="you@example.com"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Password</span>
+              <input
+                type="password"
+                value={shopConfig?.imapPassword ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPassword: e.target.value }))}
+                placeholder="Mailbox password"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+              <input
+                type="checkbox"
+                checked={shopConfig?.imapUseSsl !== false}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUseSsl: e.target.checked }))}
+              />
+              <span style={{ fontSize: 12, color: "#374151" }}>Use SSL</span>
+            </label>
+            <label>
+              <span style={labelStyle}>Fetch Limit</span>
+              <input
+                type="number"
+                value={shopConfig?.imapFetchLimit ?? "20"}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapFetchLimit: e.target.value }))}
+                placeholder="20"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
           <button
@@ -1657,7 +1835,10 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
           Some networks (work or public WiFi) may block email sending.
         </div>
       </div>
+      ) : null}
 
+      {activeEmailSubtab === "templates" ? (
+      <>
       {/* ── Email icon visibility ── */}
       <div style={{
         background: "#f9fafb", border: "1px solid #e5e7eb",
@@ -1880,6 +2061,8 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
         border: "1px dashed #9ca3af", borderRadius: "6px",
         background: "none", color: "#6b7280", fontSize: "13px", cursor: "pointer",
       }}>+ Add Template</button>
+      </>
+      ) : null}
     </div>
   );
 }
@@ -2416,7 +2599,7 @@ function DocumentsTab({ config, setConfig }) {
 }
 
 /* ── main component ─────────────────────────────────────────────────────── */
-export default function SettingsPage({ onOrders, onImport, onWorkspace, onSettings, ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
+export default function SettingsPage({ onOrders, onWorkspace, onSettings, ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
   const [activeTab, setActiveTab] = React.useState("orders");
   const [fields, setFields] = React.useState(() => loadFieldConfig());
   const [localOrder, setLocalOrder] = React.useState(() => externalColumnOrder ? [...externalColumnOrder] : defaultColumnOrder());
@@ -2553,7 +2736,6 @@ export default function SettingsPage({ onOrders, onImport, onWorkspace, onSettin
         onSettings={onSettings}
         onWorkspace={onWorkspace}
         documentsConfig={localDocumentsConfig}
-        onImport={onImport}
         activeTab={ordersTab}
         selectedNav="settings"
         onSelectTab={(nextTab) => {
@@ -2663,47 +2845,20 @@ export default function SettingsPage({ onOrders, onImport, onWorkspace, onSettin
                   <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
                     Save folder
                   </label>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", maxWidth: "480px" }}>
+                  <div style={{ maxWidth: "480px" }}>
                     <div style={{
-                      flex: 1, padding: "8px 11px",
+                      padding: "8px 11px",
                       border: "1px solid #d1d5db", borderRadius: "6px",
-                      fontSize: "13px", color: localShopConfig.saveFolder ? "#111" : "#9ca3af",
-                      fontStyle: localShopConfig.saveFolder ? "normal" : "italic",
+                      fontSize: "13px", color: "#111",
                       background: "#f9fafb", overflow: "hidden",
                       textOverflow: "ellipsis", whiteSpace: "nowrap",
                       minWidth: 0,
                     }}>
-                      {localShopConfig.saveFolder || "No folder selected"}
+                      {DEFAULT_SAVE_FOLDER}
                     </div>
-                    <button
-                      onClick={async () => {
-                        const result = await window.parserApp?.pickFolder?.();
-                        if (result && !result.canceled) {
-                          setLocalShopConfig((p) => ({ ...p, saveFolder: result.path }));
-                        }
-                      }}
-                      style={{
-                        flexShrink: 0, padding: "8px 14px",
-                        background: "#2563eb", color: "#fff",
-                        border: "none", borderRadius: "6px",
-                        fontSize: "12px", fontWeight: 600, cursor: "pointer",
-                      }}
-                    >Browse…</button>
-                    {localShopConfig.saveFolder && (
-                      <button
-                        onClick={() => setLocalShopConfig((p) => ({ ...p, saveFolder: "" }))}
-                        style={{
-                          flexShrink: 0, padding: "8px 10px",
-                          background: "none", color: "#9ca3af",
-                          border: "1px solid #e5e7eb", borderRadius: "6px",
-                          fontSize: "12px", cursor: "pointer",
-                        }}
-                        title="Clear"
-                      >✕</button>
-                    )}
                   </div>
                   <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af" }}>
-                    Files saved via the save button will be written to this folder.
+                    Files saved via the save button will always be written to this folder.
                   </div>
                 </div>
 

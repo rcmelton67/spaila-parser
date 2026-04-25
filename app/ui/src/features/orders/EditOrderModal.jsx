@@ -99,9 +99,15 @@ function FieldRow({ label, children }) {
 
 // ── Modal ───────────────────────────────────────────────────────────────────
 export default function EditOrderModal({ order, onClose, onSaved }) {
+  const isNewOrder = !!order.__isNew;
   const [form, setForm] = React.useState({ ...order });
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
+  React.useEffect(() => {
+    setForm({ ...order });
+    setSaving(false);
+    setError("");
+  }, [order]);
 
   // ── Reactive field labels from Settings ──────────────────────────────────
   const [labels, setLabels] = React.useState(() => buildLabelMap(loadFieldConfig()));
@@ -132,12 +138,20 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(`${API}/orders/update-full`, {
+      const endpoint = isNewOrder ? "/orders/create-manual" : "/orders/update-full";
+      const res = await fetch(`${API}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      if (!res.ok) {
+        let detail = `Server error ${res.status}`;
+        try {
+          const payload = await res.json();
+          detail = payload?.detail || payload?.error || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -186,30 +200,32 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
           gap: "12px",
         }}>
           <span style={{ fontWeight: 700, fontSize: "17px", flex: 1, color: "#111" }}>
-            Editing Order {order.order_number}
+            {isNewOrder ? "New Manual Order" : `Editing Order ${order.order_number}`}
           </span>
-          <button
-            onClick={() => {
-              const folder = order.order_folder_path;
-              if (!folder) {
-                alert("No order folder assigned yet. The helper creates this folder once the order is matched.");
-                return;
-              }
-              window.parserApp?.openFolder(folder);
-            }}
-            title={order.order_folder_path || "No folder assigned yet"}
-            style={{
-              padding: "5px 12px",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              background: order.order_folder_path ? "#fff" : "#f3f4f6",
-              fontSize: "12px",
-              cursor: order.order_folder_path ? "pointer" : "default",
-              color: order.order_folder_path ? "#333" : "#999",
-            }}
-          >
-            Show Folder
-          </button>
+          {!isNewOrder && (
+            <button
+              onClick={() => {
+                const folder = order.order_folder_path;
+                if (!folder) {
+                  alert("No order folder assigned yet. The helper creates this folder once the order is matched.");
+                  return;
+                }
+                window.parserApp?.openFolder(folder);
+              }}
+              title={order.order_folder_path || "No folder assigned yet"}
+              style={{
+                padding: "5px 12px",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                background: order.order_folder_path ? "#fff" : "#f3f4f6",
+                fontSize: "12px",
+                cursor: order.order_folder_path ? "pointer" : "default",
+                color: order.order_folder_path ? "#333" : "#999",
+              }}
+            >
+              Show Folder
+            </button>
+          )}
           <select
             value={form.status || "active"}
             onChange={(e) => set("status", e.target.value)}
@@ -255,8 +271,16 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
 
               {/* ── Order Summary ── */}
               <Panel title="Order Summary">
+                <FieldRow label={L("order_number", "Order Number") + ":"}>
+                  <input
+                    autoFocus={isNewOrder}
+                    style={input}
+                    value={form.order_number || ""}
+                    onChange={(e) => set("order_number", e.target.value)}
+                  />
+                </FieldRow>
                 <FieldRow label={L("order_date", "Order Date") + ":"}>
-                  <input autoFocus style={input} value={form.order_date || ""} onChange={(e) => set("order_date", e.target.value)} />
+                  <input autoFocus={!isNewOrder} style={input} value={form.order_date || ""} onChange={(e) => set("order_date", e.target.value)} />
                   <div style={hint}>{dateFormatHint}</div>
                 </FieldRow>
                 <FieldRow label={L("ship_by", "Ship By") + ":"}>
@@ -293,18 +317,19 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
 
               {/* ── Customer Info ── */}
               <Panel title="Customer Info">
-                <label style={readLabel}>{L("buyer_name", "Name")}</label>
-                <div style={{ ...readValue, marginBottom: "12px" }}>{order.buyer_name || "—"}</div>
-
-                <label style={readLabel}>{L("buyer_email", "Buyer Email")}</label>
-                <div style={{ ...readValue, color: "#2563eb", marginBottom: "12px" }}>{order.buyer_email || "—"}</div>
-
-                <label style={readLabel}>{L("shipping_address", "Address")}</label>
-                <textarea
-                  readOnly
-                  style={{ ...textarea, background: "#f0f0f0", color: "#333", resize: "none", minHeight: "72px" }}
-                  value={order.shipping_address || ""}
-                />
+                <FieldRow label={L("buyer_name", "Name") + ":"}>
+                  <input style={input} value={form.buyer_name || ""} onChange={(e) => set("buyer_name", e.target.value)} />
+                </FieldRow>
+                <FieldRow label={L("buyer_email", "Buyer Email") + ":"}>
+                  <input style={input} value={form.buyer_email || ""} onChange={(e) => set("buyer_email", e.target.value)} />
+                </FieldRow>
+                <FieldRow label={L("shipping_address", "Address") + ":"}>
+                  <textarea
+                    style={{ ...textarea, minHeight: "72px" }}
+                    value={form.shipping_address || ""}
+                    onChange={(e) => set("shipping_address", e.target.value)}
+                  />
+                </FieldRow>
               </Panel>
 
               {/* ── Product Info ── */}
@@ -366,7 +391,7 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
                 fontWeight: 600,
               }}
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? "Saving…" : isNewOrder ? "Create Order" : "Save"}
             </button>
           </div>
         </div>

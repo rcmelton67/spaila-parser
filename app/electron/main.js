@@ -220,11 +220,14 @@ function convertPlainTextEmailToHtml(text) {
 }
 
 function normalizeSmtpConfig(config = {}) {
+  const username = String(config.username || "").trim();
+  const emailAddress = String(config.emailAddress || "").trim() || username;
   return {
-    emailAddress: String(config.emailAddress || "").trim(),
+    senderName: String(config.senderName || config.sender_name || "").trim(),
+    emailAddress,
     host: String(config.host || "").trim(),
     port: Number.parseInt(String(config.port || "").trim(), 10) || 587,
-    username: String(config.username || "").trim(),
+    username,
     password: String(config.password || ""),
   };
 }
@@ -250,6 +253,16 @@ function createSmtpTransport(config) {
       pass: smtp.password,
     },
   });
+}
+
+function formatFromHeader(smtp) {
+  const emailAddress = String(smtp?.emailAddress || "").trim();
+  const senderName = String(smtp?.senderName || "").trim();
+  if (!senderName) {
+    return emailAddress;
+  }
+  const safeName = senderName.replace(/[\\"]/g, "\\$&").replace(/[\r\n]+/g, " ").trim();
+  return `"${safeName}" <${emailAddress}>`;
 }
 
 function getSentEmailFolder(orderFolderPath = "") {
@@ -279,38 +292,87 @@ function decodeHeaderValue(value) {
   return String(value || "").replace(/\r?\n[\t ]+/g, " ").trim();
 }
 
+function readEmailHeadersOnly(filePath) {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const chunks = [];
+    const buffer = Buffer.alloc(4096);
+    let totalLength = 0;
+    let headerEnd = -1;
+
+    while (headerEnd < 0 && totalLength < 65536) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      totalLength += bytesRead;
+      const text = Buffer.concat(chunks, totalLength).toString("utf8");
+      headerEnd = text.search(/\r?\n\r?\n/);
+      if (headerEnd >= 0) {
+        return text.slice(0, headerEnd);
+      }
+    }
+
+    return Buffer.concat(chunks, totalLength).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function parseEmailHeaders(headers) {
+  const parsed = {};
+  let currentKey = "";
+  for (const line of String(headers || "").split(/\r?\n/)) {
+    if (/^[\t ]/.test(line) && currentKey) {
+      parsed[currentKey] = `${parsed[currentKey] || ""} ${line.trim()}`.trim();
+      continue;
+    }
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (!match) {
+      currentKey = "";
+      continue;
+    }
+    currentKey = match[1].trim().toLowerCase();
+    parsed[currentKey] = match[2].trim();
+  }
+  return parsed;
+}
+
+function formatHeaderSender(fromHeader) {
+  const value = decodeHeaderValue(fromHeader);
+  if (!value) {
+    return "(Unknown sender)";
+  }
+  const nameMatch = value.match(/^"?([^"<]+?)"?\s*<[^>]+>/);
+  if (nameMatch?.[1]?.trim()) {
+    return nameMatch[1].trim();
+  }
+  const emailMatch = value.match(/<([^>]+)>/);
+  return (emailMatch?.[1] || value).trim() || "(Unknown sender)";
+}
+
 function extractEmailMetadata(filePath) {
   const stat = safeStat(filePath);
   let subject = "";
+  let sender = "";
   let timestamp = stat ? new Date(stat.mtimeMs).toISOString() : "";
-  let preview = "";
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const headerEnd = raw.search(/\r?\n\r?\n/);
-    const headers = headerEnd >= 0 ? raw.slice(0, headerEnd) : raw;
-    const body = headerEnd >= 0 ? raw.slice(headerEnd) : "";
-    const subjectMatch = headers.match(/^Subject:\s*(.+)$/im);
-    const dateMatch = headers.match(/^Date:\s*(.+)$/im);
-    subject = decodeHeaderValue(subjectMatch?.[1] || "");
-    const parsedDate = Date.parse(decodeHeaderValue(dateMatch?.[1] || ""));
+    const headers = parseEmailHeaders(readEmailHeadersOnly(filePath));
+    subject = decodeHeaderValue(headers.subject || "");
+    sender = formatHeaderSender(headers.from || "");
+    const parsedDate = Date.parse(decodeHeaderValue(headers.date || ""));
     if (Number.isFinite(parsedDate)) {
       timestamp = new Date(parsedDate).toISOString();
     }
-    preview = body
-      .replace(/<[^>]+>/g, " ")
-      .replace(/=\r?\n/g, "")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\r?\n+/g, " ")
-      .trim()
-      .slice(0, 160);
   } catch (_error) {
-    // Fall back to filename and mtime only.
+    // Fall back to header-free defaults below.
   }
 
   return {
     name: path.basename(filePath),
-    subject: subject || path.basename(filePath),
-    preview,
+    subject: subject || "(No subject)",
+    sender: sender || "(Unknown sender)",
     timestamp,
   };
 }
@@ -440,6 +502,43 @@ function listInboxItems(inboxPath) {
       };
     })
     .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+}
+
+function getWorkspaceBucketPath(dirs, bucket) {
+  if (bucket === "Inbox") {
+    return dirs.InboxModule;
+  }
+  return dirs[bucket];
+}
+
+function makeUniqueFilePath(targetPath) {
+  const ext = path.extname(targetPath);
+  const base = path.basename(targetPath, ext);
+  const dir = path.dirname(targetPath);
+  let candidate = targetPath;
+  let suffix = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `${base}_${suffix}${ext}`);
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function moveInboxItemToCurrent(filePath) {
+  const dirs = getWorkspaceDirs();
+  const sourcePath = String(filePath || "").trim();
+  if (!sourcePath || !path.isAbsolute(sourcePath)) {
+    throw new Error("Inbox file path is required.");
+  }
+  const normalizedInboxDir = path.normalize(dirs.InboxModule);
+  const normalizedSource = path.normalize(sourcePath);
+  if (!normalizedSource.startsWith(normalizedInboxDir)) {
+    throw new Error("Inbox file is outside the managed inbox.");
+  }
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error("Inbox file no longer exists.");
+  }
+  return sourcePath;
 }
 
 function filterAttachmentFiles(files, mode, extensions) {
@@ -594,6 +693,15 @@ function runBridge(argsObj) {
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try { child.kill(); } catch (_error) {}
+      reject(new Error("Parser timed out while opening the email."));
+    }, 15000);
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -606,10 +714,20 @@ function runBridge(argsObj) {
     });
 
     child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       reject(error);
     });
 
     child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(stderr || `Parser exited with code ${code}`));
         return;
@@ -622,6 +740,41 @@ function runBridge(argsObj) {
       }
     });
   });
+}
+
+function findWorkspaceFileByName(filePath) {
+  const targetName = path.basename(String(filePath || "").trim()).toLowerCase();
+  if (!targetName) {
+    return null;
+  }
+  const dirs = getWorkspaceDirs();
+  const roots = [dirs.Orders, dirs.Duplicates, dirs.Archive, dirs.Backup].filter(Boolean);
+  for (const root of roots) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+    const stack = [root];
+    while (stack.length) {
+      const current = stack.pop();
+      let entries = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch (_error) {
+        continue;
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (entry.name.toLowerCase() === targetName) {
+          return fullPath;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 async function fetchOrderPathCandidates(orderNumber) {
@@ -694,11 +847,12 @@ function findOriginalEmlInOrders(orderNumber) {
 async function resolveParserPath(payload) {
   const originalPath = payload.filePath;
   const orderNumber = payload.orderNumber || payload.decision?.order_number || payload.orderNumberValue;
-  const candidates = [
-    ...(await fetchOrderPathCandidates(orderNumber)),
+  const candidates = Array.from(new Set([
     originalPath,
+    ...(await fetchOrderPathCandidates(orderNumber)),
     findOriginalEmlInOrders(orderNumber),
-  ].filter(Boolean);
+    findWorkspaceFileByName(originalPath),
+  ].filter(Boolean)));
 
   const resolvedPath = candidates.find((candidate) => fs.existsSync(candidate));
   if (!resolvedPath) {
@@ -708,34 +862,12 @@ async function resolveParserPath(payload) {
   return resolvedPath;
 }
 
-ipcMain.handle("parser:import-eml", async () => {
-  const result = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], {
-    title: withBrandTitle("Import Order"),
-    defaultPath: getWorkspaceDirs().Inbox,
-    properties: ["openFile"],
-    filters: [{ name: "EML Files", extensions: ["eml"] }],
-  });
-
-  if (result.canceled || result.filePaths.length === 0) {
-    return null;
-  }
-
-  const filePath = result.filePaths[0];
-  const parsed = await runBridge({ action: "parse", path: filePath });
-  if (parsed.error) {
-    throw new Error(parsed.error);
-  }
-  return {
-    filePath,
-    ...parsed,
-  };
-});
-
 ipcMain.handle("parser:parse-file", async (_event, { filePath }) => {
   if (!filePath) throw new Error("No file path provided.");
-  const parsed = await runBridge({ action: "parse", path: filePath });
+  const resolvedPath = await resolveParserPath({ filePath });
+  const parsed = await runBridge({ action: "parse", path: resolvedPath });
   if (parsed.error) throw new Error(parsed.error);
-  return { filePath, ...parsed };
+  return { filePath: resolvedPath, ...parsed };
 });
 
 
@@ -1002,15 +1134,24 @@ const BACKUP_VERSION = 1;
 
 ipcMain.handle("backup:save", async (_event, { folderPath, localStorageData }) => {
   try {
+    console.log("[backup:save] requested", { folderPath });
     if (!fs.existsSync(DB_PATH)) {
+      console.error("[backup:save] database file missing", DB_PATH);
       return { ok: false, error: "Database file not found." };
     }
+    const targetFolder = String(folderPath || "").trim() || getWorkspaceDirs().Backup;
+    if (!path.isAbsolute(targetFolder)) {
+      console.error("[backup:save] folder path not absolute", targetFolder);
+      return { ok: false, error: "Backup folder path must be absolute." };
+    }
+    fs.mkdirSync(targetFolder, { recursive: true });
+
     const dbBytes  = fs.readFileSync(DB_PATH);
     const dbBase64 = dbBytes.toString("base64");
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const filename  = `spaila-backup-${timestamp}.spailabackup`;
-    const dest      = path.join(folderPath, filename);
+    const dest      = path.join(targetFolder, filename);
 
     const payload = JSON.stringify({
       version:    BACKUP_VERSION,
@@ -1020,23 +1161,25 @@ ipcMain.handle("backup:save", async (_event, { folderPath, localStorageData }) =
     });
 
     fs.writeFileSync(dest, payload, "utf8");
+    console.log("[backup:save] wrote backup", dest);
 
     // Keep only the 10 most recent .spailabackup files in the folder
     try {
       const MAX_BACKUPS = 10;
-      const allFiles = fs.readdirSync(folderPath)
+      const allFiles = fs.readdirSync(targetFolder)
         .filter((f) => f.endsWith(".spailabackup"))
-        .map((f) => ({ name: f, mtime: fs.statSync(path.join(folderPath, f)).mtimeMs }))
+        .map((f) => ({ name: f, mtime: fs.statSync(path.join(targetFolder, f)).mtimeMs }))
         .sort((a, b) => a.mtime - b.mtime); // oldest first
 
       const excess = allFiles.length - MAX_BACKUPS;
       for (let i = 0; i < excess; i++) {
-        try { fs.unlinkSync(path.join(folderPath, allFiles[i].name)); } catch (_) {}
+        try { fs.unlinkSync(path.join(targetFolder, allFiles[i].name)); } catch (_) {}
       }
     } catch (_) {}
 
     return { ok: true, path: dest, filename };
   } catch (err) {
+    console.error("[backup:save] failed", err);
     return { ok: false, error: err.message };
   }
 });
@@ -1107,7 +1250,7 @@ ipcMain.handle("dialog:pick-folder", async () => {
 ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
   const dirs = getWorkspaceDirs();
   const bucket = dirs[payload.bucket] ? payload.bucket : "Inbox";
-  const selectedRoot = dirs[bucket];
+  const selectedRoot = getWorkspaceBucketPath(dirs, bucket);
   const requestedRelativePath = String(payload.relativePath || "").trim();
   const requestedPath = requestedRelativePath
     ? path.join(dirs.root, requestedRelativePath.split("/").join(path.sep))
@@ -1120,15 +1263,18 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
 
   return {
     root: dirs.root,
-    buckets: Object.entries(dirs)
-      .filter(([key]) => key !== "root")
-      .map(([key, folderPath]) => ({
+    inboxPath: dirs.InboxModule,
+    buckets: ["Inbox", "Orders", "Duplicates", "Archive", "Backup"]
+      .map((key) => {
+        const folderPath = getWorkspaceBucketPath(dirs, key);
+        return {
         key,
         path: folderPath,
         relativePath: relativeWorkspacePath(folderPath),
         count: key === "Orders" ? countOrderFolders(folderPath) : countFolderEntries(folderPath),
-      })),
-    inboxItems: listInboxItems(dirs.Inbox),
+        };
+      }),
+    inboxItems: listInboxItems(dirs.InboxModule),
     currentBucket: bucket,
     currentPath,
     currentRelativePath: relativeWorkspacePath(currentPath),
@@ -1139,7 +1285,7 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
 
 ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
   const dirs = getWorkspaceDirs();
-  const inboxPath = dirs.Inbox;
+  const inboxPath = dirs.InboxModule;
   const incomingPaths = Array.isArray(payload.filePaths) ? payload.filePaths : [];
   const added = [];
   const skipped = [];
@@ -1154,15 +1300,13 @@ ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
       skipped.push({ path: sourcePath, reason: "not_a_file" });
       continue;
     }
+    if (!/\.eml$/i.test(sourcePath)) {
+      skipped.push({ path: sourcePath, reason: "not_eml" });
+      continue;
+    }
 
     const ext = path.extname(sourcePath);
-    const base = path.basename(sourcePath, ext);
-    let targetPath = path.join(inboxPath, path.basename(sourcePath));
-    let suffix = 1;
-    while (fs.existsSync(targetPath)) {
-      targetPath = path.join(inboxPath, `${base}_${suffix}${ext}`);
-      suffix += 1;
-    }
+    const targetPath = makeUniqueFilePath(path.join(inboxPath, path.basename(sourcePath, ext) + ext));
 
     try {
       fs.copyFileSync(sourcePath, targetPath);
@@ -1173,6 +1317,15 @@ ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
   }
 
   return { ok: true, added, skipped };
+});
+
+ipcMain.handle("workspace:open-inbox-item", async (_event, payload = {}) => {
+  try {
+    const pathToOpen = moveInboxItemToCurrent(payload.filePath);
+    return { ok: true, path: pathToOpen, relativePath: relativeWorkspacePath(pathToOpen) };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not open inbox email." };
+  }
 });
 
 // ── Email compose ────────────────────────────────────────────────────────────
@@ -1230,7 +1383,7 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
   try {
     const transport = createSmtpTransport(smtpValidation.smtp);
     await transport.sendMail({
-      from: smtpValidation.smtp.emailAddress,
+      from: formatFromHeader(smtpValidation.smtp),
       to,
       subject,
       text: body,

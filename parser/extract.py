@@ -195,6 +195,27 @@ _BUYER_LABEL_RE = re.compile(
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'\- ]+$")
 _STREET_RE = re.compile(r"^\d[\d\-]*\s+\S")
+_PHONE_RE = re.compile(r"^\+?\d[\d\s().-]{6,}\d$")
+_CITY_STATE_RE = re.compile(r"^[A-Za-z .'\-]+,\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?$")
+_COUNTRY_RE = re.compile(r"^[A-Za-z .'\-]{3,40}$")
+_ADDRESS_STOP_RE = re.compile(
+    r"^(?:"
+    r"purchase\s+shipping\s+label"
+    r"|shipping\s+internationally\??"
+    r"|sell\s+with\s+confidence"
+    r"|order\s+details"
+    r"|payment\s+method"
+    r"|order\s+total"
+    r"|item\s+total"
+    r"|questions"
+    r"|shop\s+policies"
+    r"|transaction\s+id"
+    r"|processing\s+time"
+    r"|returns?\s*&\s*exchanges?"
+    r"|cancellations?"
+    r")(?::|\b)",
+    re.IGNORECASE,
+)
 
 
 def _label_source(text: str) -> str:
@@ -210,69 +231,100 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().title()
 
 
-def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
-    """Name candidates from all shipping/address label variants.
+def _is_address_stop(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return True
+    if _BUYER_LABEL_RE.search(normalized):
+        return True
+    return bool(_ADDRESS_STOP_RE.match(normalized))
 
-    Sources (in order of priority):
-      1. address_label_name   — first valid name line after the label
-      2. address_label_next   — fallback next line when the immediate first
-                                line is empty or not a valid name
-      3. normalized_variant   — Title-Case normalised copy of a raw candidate
-                                when it differs from the original
 
-    Candidates are deduplicated by normalised value before return;
-    the first occurrence (highest positional priority) wins.
-    """
-    seen_seg_ids: set = set()
-    raw_candidates: List[Candidate] = []
-    counter = 1
+def _is_addressish_line(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip()
+    lower = normalized.lower()
+    if not normalized:
+        return False
+    if _EMAIL_RE.fullmatch(normalized):
+        return False
+    if _PHONE_RE.fullmatch(normalized):
+        return False
+    if _STREET_RE.match(normalized):
+        return True
+    if _CITY_STATE_RE.match(normalized):
+        return True
+    if lower in {"united states", "usa", "canada", "australia"}:
+        return True
+    if any(token in lower for token in ("apt", "apartment", "suite", "ste", "unit", "po box", "p.o. box")):
+        return True
+    if _is_valid_name(normalized):
+        return True
+    if _COUNTRY_RE.match(normalized) and len(normalized.split()) <= 3:
+        return True
+    return False
+
+
+def _collect_address_blocks(segments: List[Segment]) -> List[tuple[str, List[Segment]]]:
+    blocks: List[tuple[str, List[Segment]]] = []
 
     for i, seg in enumerate(segments):
         if not _BUYER_LABEL_RE.search(seg.text):
             continue
-        source = _label_source(seg.text)
 
-        first_name_found = False
-        for j in range(i + 1, min(i + 6, len(segments))):
+        source = _label_source(seg.text)
+        block: List[Segment] = []
+        started = False
+
+        for j in range(i + 1, len(segments)):
             seg_j = segments[j]
-            text = seg_j.text
+            text = seg_j.text.strip()
 
             if not text:
-                continue
-            if seg_j.id in seen_seg_ids:
-                continue
-
-            # Skip obvious street / address lines — they are not names.
-            if _STREET_RE.match(text):
-                break
-
-            if _is_valid_name(text):
-                extractor = "address_label_name" if not first_name_found else "address_label_next"
-                cand = Candidate(
-                    id=f"name_{counter:04d}",
-                    field_type="buyer_name",
-                    value=text,
-                    raw_text=text,
-                    start=seg_j.start,
-                    end=seg_j.end,
-                    segment_id=seg_j.id,
-                    extractor=extractor,
-                    source=source,
-                )
-                _attach_context(cand, seg_j.text, 0, len(text))
-                raw_candidates.append(cand)
-                seen_seg_ids.add(seg_j.id)
-                counter += 1
-
-                if not first_name_found:
-                    first_name_found = True
-                    # Only look one extra line for "address_label_next" variant;
-                    # stop after two name candidates per label block.
-                else:
+                if started:
                     break
-            elif first_name_found:
-                # Hit a non-name line after the first name → stop this block.
+                continue
+
+            if _is_address_stop(text):
+                if started:
+                    break
+                continue
+
+            if started and block and not _is_addressish_line(text):
                 break
+
+            started = True
+            block.append(seg_j)
+
+        if block:
+            blocks.append((source, block))
+
+    return blocks
+
+
+def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
+    """Name candidates from the first line of cleaned address blocks."""
+    raw_candidates: List[Candidate] = []
+    counter = 1
+
+    for source, block in _collect_address_blocks(segments):
+        first_seg = block[0]
+        text = first_seg.text
+        if not _is_valid_name(text):
+            continue
+        cand = Candidate(
+            id=f"name_{counter:04d}",
+            field_type="buyer_name",
+            value=text,
+            raw_text=text,
+            start=first_seg.start,
+            end=first_seg.end,
+            segment_id=first_seg.id,
+            extractor="address_block_first_line",
+            source=source,
+        )
+        _attach_context(cand, first_seg.text, 0, len(text))
+        raw_candidates.append(cand)
+        counter += 1
 
     # ── Normalized variants ───────────────────────────────────────────────────
     # Add a Title-Case copy if the raw value differs (e.g. "JANE SMITH" → "Jane Smith").
@@ -327,47 +379,45 @@ def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
 
 
 def extract_shipping_address(segments: List[Segment]) -> List[Candidate]:
-    """Full address block (all lines after buyer name) under a 'Shipping address' label.
+    """Address block candidates under a shipping/billing label.
 
-    Collects every consecutive non-empty line after the name line until the first
-    blank line.  The value is the multi-line block joined with '\\n', and the
-    offsets span from the first collected segment to the last — satisfying
-    clean_text[start:end] == value because adjacent segments are separated by
-    exactly one newline character.
+    Produces a street-forward candidate for all cleaned blocks. When the first
+    line looks like a recipient name and the second line looks like a street,
+    also produces a full recipient+address variant so downstream scoring can
+    prefer the richer block when appropriate.
     """
     candidates: List[Candidate] = []
     counter = 1
 
-    for i, seg in enumerate(segments):
-        if "shipping address" not in seg.text.lower():
+    for source, block in _collect_address_blocks(segments):
+        if not block:
+            continue
+        primary_block = block[1:] if len(block) > 1 and _is_valid_name(block[0].text) else block
+        if len(block) >= 2 and _is_valid_name(block[0].text) and _STREET_RE.match(block[1].text):
+            value = "\n".join(seg.text for seg in block)
+            first_seg = block[0]
+            last_seg = block[-1]
+            cand = Candidate(
+                id=f"addr_{counter:04d}",
+                field_type="shipping_address",
+                value=value,
+                raw_text=value,
+                start=first_seg.start,
+                end=last_seg.end,
+                segment_id=first_seg.id,
+                extractor="address_block_with_recipient",
+                source=source,
+            )
+            _attach_context(cand, first_seg.text, 0, len(first_seg.text))
+            candidates.append(cand)
+            counter += 1
+
+        if not primary_block:
             continue
 
-        # Find the buyer-name line (first non-empty segment after the label)
-        name_idx = None
-        for j in range(i + 1, min(i + 5, len(segments))):
-            if segments[j].text:
-                name_idx = j
-                break
-        if name_idx is None:
-            continue
-
-        # Collect address lines (everything after the name until a blank line)
-        addr_segs: List[Segment] = []
-        for k in range(name_idx + 1, len(segments)):
-            if not segments[k].text:
-                break
-            addr_segs.append(segments[k])
-
-        if not addr_segs:
-            continue
-
-        # Build value from the exact text of each segment joined with a newline.
-        # Because offset = end + 1 in the segmenter, clean_text[first.start:last.end]
-        # equals '\n'.join(s.text for s in addr_segs) — guaranteed by construction.
-        value = "\n".join(s.text for s in addr_segs)
-        first_seg = addr_segs[0]
-        last_seg = addr_segs[-1]
-
+        value = "\n".join(seg.text for seg in primary_block)
+        first_seg = primary_block[0]
+        last_seg = primary_block[-1]
         cand = Candidate(
             id=f"addr_{counter:04d}",
             field_type="shipping_address",
@@ -376,8 +426,8 @@ def extract_shipping_address(segments: List[Segment]) -> List[Candidate]:
             start=first_seg.start,
             end=last_seg.end,
             segment_id=first_seg.id,
-            extractor="address_label_block",
-            source="shipping",
+            extractor="address_block_street_forward",
+            source=source,
         )
         _attach_context(cand, first_seg.text, 0, len(first_seg.text))
         candidates.append(cand)

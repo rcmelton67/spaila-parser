@@ -18,7 +18,7 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
     decisions = [
         {
             "field": decision.field,
-            "value": _normalize_value(decision.value),
+            "value": "" if decision.value is None else str(decision.value),
             "decision": decision.decision,
             "decision_source": decision.decision_source,
             "confidence": decision.confidence,
@@ -70,6 +70,41 @@ def _find_context(
     segment_id = action.get("segment_id", "")
     value = action.get("value", "")
 
+    if action.get("selected_text"):
+        start = action.get("start", 0)
+        end = action.get("end", 0)
+        selected_text = action.get("selected_text", "")
+        clean_text = result.get("clean_text", "")
+        if (
+            isinstance(start, int)
+            and isinstance(end, int)
+            and 0 <= start <= end <= len(clean_text)
+            and clean_text[start:end] == selected_text
+        ):
+            print(
+                f"[ASSIGNMENT_APPLIED] field={action.get('field', '')!r} value={selected_text!r} start={start} end={end}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return {
+                "segment_id": action.get("segment_id", ""),
+                "start": start,
+                "end": end,
+                "selected_text": selected_text,
+                "segment_text": selected_text,
+                "left_context": action.get("left_context", ""),
+                "right_context": action.get("right_context", ""),
+                "candidate_id": action.get("candidate_id", ""),
+                "extractor": action.get("extractor", ""),
+                "learned_signature": action.get("learned_signature", action.get("extractor", "")),
+            }
+        print(
+            f"[ASSIGNMENT_APPLIED] rejected_mismatch field={action.get('field', '')!r} start={start} end={end}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
     def _sig(candidate) -> str:
         if segment_map:
             return build_extraction_signature(candidate, segment_map)
@@ -104,20 +139,6 @@ def _find_context(
                 "extractor": candidate.extractor,
                 "learned_signature": _sig(candidate),
             }
-
-    if action.get("selected_text"):
-        return {
-            "segment_id": action.get("segment_id", ""),
-            "start": action.get("start", 0),
-            "end": action.get("end", 0),
-            "selected_text": action.get("selected_text", ""),
-            "segment_text": action.get("selected_text", ""),
-            "left_context": action.get("left_context", ""),
-            "right_context": action.get("right_context", ""),
-            "candidate_id": action.get("candidate_id", ""),
-            "extractor": action.get("extractor", ""),
-            "learned_signature": action.get("learned_signature", action.get("extractor", "")),
-        }
 
     return None
 
@@ -158,10 +179,17 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
         "left_context": "",
         "right_context": "",
     }
+    if action.get("selected_text") and not context.get("selected_text"):
+        return {
+            "success": False,
+            "reason": "SELECTION_RANGE_MISMATCH",
+            "error": "SELECTION_RANGE_MISMATCH",
+        }
     context = {**context, "source": result.get("learning_source", "unknown")}
 
     field = action["field"]
-    value = _normalize_value(action["value"])
+    value = action.get("selected_text") or action.get("value", "")
+    value = "" if value is None else str(value)
 
     if action_name == "save_assignment":
         learned_sig = context.get("learned_signature", "")

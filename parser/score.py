@@ -35,6 +35,10 @@ _PRICE_TOTAL_CONTEXT_WORDS: tuple = (
     "order total", "grand total", "order subtotal",
     "cart total", "checkout total",
 )
+_EXPLICIT_ORDER_NUMBER_RE = re.compile(
+    r"\b(?:your\s+)?order(?:\s+number)?\s*(?:is|#|number)?\s*[:#-]?\s*(\d{5,})\b",
+    re.IGNORECASE,
+)
 
 
 def score_quantity(candidates: List[Candidate], segments: List[Segment]) -> List[Candidate]:
@@ -348,6 +352,11 @@ def score_order_number(
 
         # --- POSITIVE SIGNALS ---
 
+        explicit_match = _EXPLICIT_ORDER_NUMBER_RE.search(seg.text)
+        if explicit_match and explicit_match.group(1) == cand.value:
+            score += 12.0
+            signals.append("explicit_order_label(+12.0)")
+
         if any(word in window_text for word in _order_keywords):
             score += 6.0
             signals.append("order_keyword_near(+6.0)")
@@ -393,6 +402,10 @@ def score_order_number(
         if len(cand.value) > 6 and not any(word in window_text for word in _order_keywords):
             score -= 2.0
             penalties.append("no_order_context(−2.0)")
+
+        if "quantity" in text_lower or re.search(r"\bitems?\b", text_lower):
+            score -= 4.0
+            penalties.append("quantity_item_context(−4.0)")
 
         cand.signals = signals
         cand.penalties = penalties
@@ -736,6 +749,10 @@ def score_shipping_address(
         if any(val_lower.endswith(suf) or (suf + " ") in val_lower for suf in _STREET_SUFFIXES):
             score += 2.0
             signals.append("street_suffix(+2.0)")
+
+        if cand.extractor == "address_block_with_recipient":
+            score += 1.5
+            signals.append("recipient_line_included(+1.5)")
 
         cand.signals = signals
         cand.penalties = penalties

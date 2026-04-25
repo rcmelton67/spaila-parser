@@ -32,12 +32,14 @@ import {
   selectEmailTemplate,
   renderEmailTemplate,
   loadShopConfig,
+  DEFAULT_SAVE_FOLDER,
   loadDocumentsConfig,
   loadPrintConfig,
   loadViewConfig,
 } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
+const EMPTY_TRAILING_ROW_COUNT = 6;
 
 const primaryButton = {
   padding: "6px 14px",
@@ -447,6 +449,30 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function createManualOrderDraft(activeTab = "active") {
+  return {
+    __isNew: true,
+    order_number: "",
+    order_date: "",
+    ship_by: "",
+    quantity: "",
+    price: "",
+    order_notes: "",
+    gift_message: "",
+    buyer_name: "",
+    buyer_email: "",
+    shipping_address: "",
+    status: activeTab === "completed" ? "completed" : "active",
+    custom_1: "",
+    custom_2: "",
+    custom_3: "",
+    custom_4: "",
+    custom_5: "",
+    custom_6: "",
+    order_folder_path: "",
+  };
+}
+
 /* ── Draggable column header ────────────────────────────────────────────── */
 function SortableHeader({ col, width, fontSize, onStartResize, activeSort, onOpenMenu }) {
   const {
@@ -526,7 +552,7 @@ function SortableHeader({ col, width, fontSize, onStartResize, activeSort, onOpe
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, isActive, onCountsChange }) {
+export default function OrdersPage({ onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, isActive, onCountsChange }) {
   const [rows, setRows] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
@@ -594,8 +620,11 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
     window.parserApp?.setTitle?.(name);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const smtpSenderAddress = String(
+    shopConfig?.smtpEmailAddress || shopConfig?.smtpUsername || ""
+  ).trim();
   const smtpConfigured = !!(
-    String(shopConfig?.smtpEmailAddress || "").trim()
+    smtpSenderAddress
     && String(shopConfig?.smtpHost || "").trim()
     && String(shopConfig?.smtpPort || "").trim()
     && String(shopConfig?.smtpUsername || "").trim()
@@ -621,9 +650,9 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
   const [saveToast, setSaveToast] = React.useState(null); // { ok, message }
 
   async function handleSaveToFolder() {
-    const folder = shopConfig.saveFolder;
+    const folder = DEFAULT_SAVE_FOLDER;
     if (!folder) {
-      setSaveToast({ ok: false, message: "No save folder set. Go to Settings → General to choose one." });
+      setSaveToast({ ok: false, message: "No save folder available." });
       setTimeout(() => setSaveToast(null), 5000);
       return;
     }
@@ -641,7 +670,7 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
       localStorageData,
     });
     if (result?.ok) {
-      setSaveToast({ ok: true, message: `Saved to ${folder}` });
+      setSaveToast(null);
       setSessionDirty(false); // dim again until next change
     } else {
       setSaveToast({ ok: false, message: `Backup failed: ${result?.error ?? "unknown error"}` });
@@ -868,11 +897,11 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
 
     const fMeta = fieldMap[columnKey];
     const priceRule = matchPriceRule(row.price, priceList);
-    const paletteBg = priceRule && fMeta?.paletteEnabled ? priceRule.color : null;
     const hl = fMeta?.highlight;
     const rawValue = row[columnKey];
-    const highlightBg = !paletteBg && hl?.enabled && hl?.color && rawValue ? hl.color : null;
-    const bg = paletteBg || highlightBg || null;
+    const highlightBg = hl?.enabled && hl?.color && rawValue ? hl.color : null;
+    const paletteBg = priceRule && fMeta?.paletteEnabled ? priceRule.color : null;
+    const bg = highlightBg || paletteBg || null;
     const displayValue = getDisplayedCellValue(row, columnKey);
 
     return {
@@ -1048,7 +1077,8 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
     if (!mailDock) return { ok: false, error: "Mail Dock is not ready." };
     const result = await window.parserApp?.sendDockEmail?.({
       smtp: {
-        emailAddress: shopConfig?.smtpEmailAddress || "",
+        senderName: shopConfig?.sender_name || "",
+        emailAddress: smtpSenderAddress,
         host: shopConfig?.smtpHost || "",
         port: shopConfig?.smtpPort || "",
         username: shopConfig?.smtpUsername || "",
@@ -1242,6 +1272,7 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
   }, [getRowSearchValues, safeOrders, searchQuery]);
 
   const safeDisplayOrders = displayOrders || [];
+  const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall
 
   const handlePrint = React.useCallback(async () => {
     const visiblePrintColumns = visibleColumns.filter(
@@ -1464,17 +1495,15 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
       )}
 
       <AppHeader
-        canSave={sessionDirty && safeOrders.length > 0}
+        canSave={safeOrders.length > 0}
         onSave={handleSaveToFolder}
         saveTitle={
-          !(sessionDirty && safeOrders.length > 0) ? "Nothing to save yet"
-          : shopConfig.saveFolder ? `Save to ${shopConfig.saveFolder}`
-          : "Save (set folder in Settings -> General)"
+          !safeOrders.length ? "No orders to back up"
+          : `Save to ${DEFAULT_SAVE_FOLDER}`
         }
         onSettings={onSettings}
         onWorkspace={onWorkspace}
         documentsConfig={documentsConfig}
-        onImport={onImport}
         activeTab={activeTab}
         selectedNav={activeTab}
         onSelectTab={onActiveTabChange}
@@ -1660,31 +1689,45 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
           </div>
         ) : (!rows || loading) ? (
           <div style={{ color: "#888", padding: "12px", fontSize: "13px" }}>Loading orders…</div>
-        ) : safeDisplayOrders.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "60px 20px" }}>
-            <div style={{ color: "#888", fontSize: "14px", marginBottom: "14px" }}>
-              {searchQuery.trim()
-                ? "No orders match your search."
-                : activeTab === "completed"
-                  ? "No completed orders yet."
-                  : "No active orders yet."}
-            </div>
-            {!searchQuery.trim() && activeTab === "active" && <button onClick={onImport} style={primaryButton}>+ Import your first order</button>}
-          </div>
         ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <table style={{
-              borderCollapse: "collapse",
-              fontSize: `${tableFontSize}px`,
-              tableLayout: "fixed",
-              border: "1px solid #ddd",
-              width: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
-              minWidth: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
-            }}>
+          <>
+            {safeDisplayOrders.length === 0 && (
+              <div style={{
+                marginBottom: "12px",
+                padding: "10px 12px",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                color: "#475569",
+                fontSize: "13px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+              }}>
+                <span>
+                  {searchQuery.trim()
+                    ? "No orders match your search. Double-click a blank row below to add a manual order."
+                    : activeTab === "completed"
+                      ? "No completed orders yet. Double-click a blank row below to add a manual order."
+                      : "Double-click a blank row below to add a manual order."}
+                </span>
+                {!searchQuery.trim() && activeTab === "active" && <button onClick={onWorkspace} style={primaryButton}>Go to Workspace</button>}
+              </div>
+            )}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <table style={{
+                borderCollapse: "collapse",
+                fontSize: `${tableFontSize}px`,
+                tableLayout: "fixed",
+                border: "1px solid #ddd",
+                width: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
+                minWidth: 30 + visibleColumns.reduce((sum, c) => sum + (colWidths[c.key] ?? c.defaultWidth), 0),
+              }}>
               <colgroup>
                 <col style={{ width: 30, minWidth: 30, maxWidth: 30 }} />
                 {visibleColumns.map((c) => {
@@ -1733,7 +1776,6 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
               <tbody>
                 {(safeDisplayOrders || []).map((r, i) => {
                   const isSelected = selectedIds.has(r.id);
-                  const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall
                   // Price-list lookup: find matching rule for this row's price
                   const priceRule = matchPriceRule(r.price, priceList);
 
@@ -1838,13 +1880,13 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
                         // ── Regular data cell ────────────────────────────────
                         const fMeta = fieldMap[c.key];
 
-                        // Priority: price palette > field highlight > none
+                        // Priority: field highlight > price palette > none
+                        const hl = fMeta?.highlight;
+                        const highlightBg = hl?.enabled && hl?.color && r[c.key]
+                          ? hl.color : null;
                         const paletteBg = !isSelected && priceRule && fMeta?.paletteEnabled
                           ? priceRule.color : null;
-                        const hl = fMeta?.highlight;
-                        const highlightBg = !paletteBg && hl?.enabled && hl?.color && r[c.key]
-                          ? hl.color : null;
-                        const cellBg = paletteBg || highlightBg || undefined;
+                        const cellBg = highlightBg || paletteBg || undefined;
 
                         let displayValue = DATE_FIELD_KEYS.has(c.key)
                           ? formatDate(r[c.key], dateConfig)
@@ -1950,9 +1992,52 @@ export default function OrdersPage({ onImport, onWorkspace, onSettings, refreshK
                     </tr>
                   );
                 })}
+                {Array.from({ length: EMPTY_TRAILING_ROW_COUNT }).map((_, index) => {
+                  const rowIndex = safeDisplayOrders.length + index;
+                  return (
+                    <tr
+                      key={`empty-row-${index}`}
+                      onDoubleClick={() => setEditingOrder(createManualOrderDraft(activeTab))}
+                      style={{
+                        cursor: "cell",
+                        background: rowIndex % 2 === 0 ? "#fff" : "#fafafa",
+                      }}
+                    >
+                      <td style={{
+                        width: 30, minWidth: 30, maxWidth: 30,
+                        height: rowH,
+                        padding: 0,
+                        border: "1px solid #f1f5f9",
+                        boxSizing: "border-box",
+                        verticalAlign: "middle",
+                      }} />
+                      {visibleColumns.map((c, columnIndex) => {
+                        const w = colWidths[c.key] ?? c.defaultWidth;
+                        const showHint = index === 0 && columnIndex === 0;
+                        return (
+                          <td key={`${c.key}-empty-${index}`} style={{
+                            width: w,
+                            minWidth: w,
+                            maxWidth: w,
+                            height: rowH,
+                            padding: "5px 7px",
+                            border: "1px solid #f1f5f9",
+                            color: "#cbd5e1",
+                            boxSizing: "border-box",
+                            verticalAlign: "middle",
+                            background: "transparent",
+                          }}>
+                            {showHint ? "Double-click to add manual order" : ""}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
-            </table>
-          </DndContext>
+              </table>
+            </DndContext>
+          </>
         )}
       </div>
 

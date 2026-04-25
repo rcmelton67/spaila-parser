@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("parserApp", {
-  importEml:  ()        => ipcRenderer.invoke("parser:import-eml"),
   parseFile:  (payload) => ipcRenderer.invoke("parser:parse-file", payload),
   resolvePath: (payload) => ipcRenderer.invoke("parser:resolve-path", payload),
   saveAssignment: (payload) => ipcRenderer.invoke("parser:save-assignment", payload),
@@ -9,6 +8,7 @@ contextBridge.exposeInMainWorld("parserApp", {
   teach: (payload) => ipcRenderer.invoke("parser:teach", payload),
   getWorkspaceState: (payload) => ipcRenderer.invoke("workspace:get-state", payload || {}),
   addFilesToInbox: (payload) => ipcRenderer.invoke("workspace:add-to-inbox", payload || {}),
+  openInboxItem: (payload) => ipcRenderer.invoke("workspace:open-inbox-item", payload || {}),
   openFolder:       (folderPath)  => ipcRenderer.invoke("shell:open-folder", folderPath),
   pickFile:         (opts)        => ipcRenderer.invoke("dialog:pick-file", opts || {}),
   pickFolder:       ()            => ipcRenderer.invoke("dialog:pick-folder"),

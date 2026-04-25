@@ -268,13 +268,13 @@ def _order_id_from_dict(row):
         return None
     for k in ("id", "order_id"):
         v = row.get(k)
-        if v is not None and str(v).strip().isdigit():
-            return int(v)
+        if v is not None and str(v).strip():
+            return str(v).strip()
     inner = row.get("order")
     if inner and isinstance(inner, dict):
         v = inner.get("id")
-        if v is not None and str(v).strip().isdigit():
-            return int(v)
+        if v is not None and str(v).strip():
+            return str(v).strip()
     return None
 
 
@@ -420,9 +420,8 @@ def _try_patch_order_folder_path(row, folder_path: str) -> None:
     oid = row.get("id")
     if oid is None:
         return
-    try:
-        order_id = int(oid)
-    except (TypeError, ValueError):
+    order_id = str(oid).strip()
+    if not order_id:
         return
     url = f"{ORDERS_API_URL}/{order_id}"
     try:
