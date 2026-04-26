@@ -368,6 +368,10 @@ function isCompletedOrder(row) {
     : row.status === "completed" || row.status === "done";
 }
 
+function isArchivedOrder(row) {
+  return String(row?.status || "").toLowerCase() === "archived";
+}
+
 function parseNumericValue(value) {
   const normalized = String(value ?? "").replace(/[^0-9.-]/g, "");
   const parsed = Number.parseFloat(normalized);
@@ -559,6 +563,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const [viewConfig, setViewConfig] = React.useState(() => loadViewConfig());
   const [activeSort, setActiveSort] = React.useState(() => normalizeSortConfig(loadViewConfig().defaultSort));
   const [editingOrder, setEditingOrder] = React.useState(null);
+  const [editOrderLaunchContext, setEditOrderLaunchContext] = React.useState(null);
 
   // Dirty flag — false on startup, true only after something changes this session
   const [sessionDirty, setSessionDirty] = React.useState(false);
@@ -1081,6 +1086,24 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     }
   }
 
+  function handleOpenEmailInOrderModal(row) {
+    const labelMap = Object.fromEntries(fieldConfig.map((f) => [f.key, f.label]));
+    const template = selectEmailTemplate(emailTemplates, row);
+    const { text: subject } = renderEmailTemplate(template.subject_template, row, labelMap);
+    const { text: body } = renderEmailTemplate(template.body_template, row, labelMap);
+    setEditOrderLaunchContext({
+      orderId: String(row?.order_id || row?.id || ""),
+      action: "email",
+      template: {
+        id: template?.id || "default",
+        name: template?.name || "Default",
+      },
+      draftSubject: subject,
+      draftBody: body,
+    });
+    setEditingOrder(row);
+  }
+
   async function handleLaunchMailDock(draft = {}) {
     if (!mailDock) return;
     try {
@@ -1190,6 +1213,24 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     setSessionDirty(true);
   }
 
+  async function handleRestoreFromArchive() {
+    const targets = getTargetRows();
+    closeContextMenu();
+    if (!targets.length) return;
+    const orderIds = [...new Set(targets.map((r) => r.order_id).filter(Boolean))];
+    await Promise.all(
+      orderIds.map((oid) =>
+        fetch(`${API}/orders/${encodeURIComponent(oid)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "active" }),
+        })
+      )
+    );
+    loadOrders();
+    setSessionDirty(true);
+  }
+
   function handleDelete() {
     const targets = getTargetRows();
     closeContextMenu();
@@ -1288,7 +1329,46 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     }
   }
 
-  React.useEffect(() => { loadOrders(); }, [refreshKey]);
+  const tryAutoArchive = React.useCallback(async () => {
+    const raw = loadShopConfig().autoArchiveDays;
+    const days = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : null;
+    if (days == null) return 0;
+    try {
+      const res = await fetch(`${API}/orders/auto-archive/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          days,
+          archive_root: String(loadShopConfig().orderArchiveRoot || "").trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return 0;
+      return Number(data?.archived_count) || 0;
+    } catch {
+      return 0;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await loadOrders();
+      if (cancelled) return;
+      const n = await tryAutoArchive();
+      if (cancelled) return;
+      if (n > 0) await loadOrders({ retries: 1, delayMs: 300 });
+    })();
+    return () => { cancelled = true; };
+  }, [refreshKey, tryAutoArchive]);
+
+  React.useEffect(() => {
+    const id = window.setInterval(async () => {
+      const n = await tryAutoArchive();
+      if (n > 0) await loadOrders({ retries: 1, delayMs: 300 });
+    }, 60 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [tryAutoArchive]);
 
   React.useEffect(() => {
     const orderNumber = String(focusOrderRequest?.orderNumber || "").trim();
@@ -1298,7 +1378,14 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   }, [focusOrderRequest?.key, focusOrderRequest?.orderNumber]);
 
   const filteredOrders = React.useMemo(() => {
-    let base = safeOrders.filter((row) => activeTab === "completed" ? isCompletedOrder(row) : !isCompletedOrder(row));
+    let base;
+    if (activeTab === "archived") {
+      base = safeOrders.filter((row) => isArchivedOrder(row));
+    } else if (activeTab === "completed") {
+      base = safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row));
+    } else {
+      base = safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row));
+    }
 
     const normalizedQuery = searchQuery.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -1323,8 +1410,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   }, [activeSort, filteredOrders, orderStatuses, statusConfig]);
 
   const totalCounts = React.useMemo(() => ({
-    active: safeOrders.filter((row) => !isCompletedOrder(row)).length,
-    completed: safeOrders.filter((row) => isCompletedOrder(row)).length,
+    active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row)).length,
+    completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row)).length,
+    archived: safeOrders.filter((row) => isArchivedOrder(row)).length,
   }), [safeOrders]);
 
   React.useEffect(() => {
@@ -1336,8 +1424,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     const normalizedQuery = searchQuery.trim().toLowerCase();
     const matches = (row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery));
     return {
-      active: safeOrders.filter((row) => !isCompletedOrder(row) && matches(row)).length,
-      completed: safeOrders.filter((row) => isCompletedOrder(row) && matches(row)).length,
+      active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row) && matches(row)).length,
+      completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row) && matches(row)).length,
+      archived: safeOrders.filter((row) => isArchivedOrder(row) && matches(row)).length,
     };
   }, [getRowSearchValues, safeOrders, searchQuery]);
 
@@ -1589,6 +1678,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         onSelectTab={onActiveTabChange}
         activeCount={totalCounts.active}
         completedCount={totalCounts.completed}
+        archivedCount={totalCounts.archived}
         tabCounts={tabCounts}
         rightContent={
           <>
@@ -1788,9 +1878,11 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                 <span>
                   {searchQuery.trim()
                     ? "No orders match your search. Double-click a blank row below to add a manual order."
-                    : activeTab === "completed"
-                      ? "No completed orders yet. Double-click a blank row below to add a manual order."
-                      : "Double-click a blank row below to add a manual order."}
+                    : activeTab === "archived"
+                      ? "No archived orders. Orders auto-archive after the inactivity period set in Settings → General (when enabled)."
+                      : activeTab === "completed"
+                        ? "No completed orders yet. Double-click a blank row below to add a manual order."
+                        : "Double-click a blank row below to add a manual order."}
                 </span>
                 {!searchQuery.trim() && activeTab === "active" && <button onClick={onWorkspace} style={primaryButton}>Go to Workspace</button>}
               </div>
@@ -1923,7 +2015,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                   return (
                     <tr
                       key={r.id}
-                      onDoubleClick={() => setEditingOrder(r)}
+                      onDoubleClick={() => { setEditOrderLaunchContext(null); setEditingOrder(r); }}
                       onContextMenu={(e) => handleContextMenu(e, r)}
                       style={{
                         cursor: "pointer",
@@ -2094,7 +2186,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                               return (
                                 <button
                                   title="Compose email"
-                                  onClick={(e) => { e.stopPropagation(); handleComposeEmail(r); }}
+                                  onClick={(e) => { e.stopPropagation(); handleOpenEmailInOrderModal(r); }}
                                   className="email-btn"
                                   disabled={mailDockLoadingId === r.id}
                                   style={{
@@ -2138,7 +2230,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                   return (
                     <tr
                       key={`empty-row-${index}`}
-                      onDoubleClick={() => setEditingOrder(createManualOrderDraft(activeTab))}
+                  onDoubleClick={() => { setEditOrderLaunchContext(null); setEditingOrder(createManualOrderDraft(activeTab)); }}
                       style={{
                         cursor: "cell",
                         background: rowIndex % 2 === 0 ? "#fff" : "#fafafa",
@@ -2185,8 +2277,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       {editingOrder && (
         <EditOrderModal
           order={editingOrder}
-          onClose={() => setEditingOrder(null)}
-          onSaved={() => { setEditingOrder(null); loadOrders(); setSessionDirty(true); }}
+          launchContext={editOrderLaunchContext}
+          onClose={() => { setEditOrderLaunchContext(null); setEditingOrder(null); }}
+          onSaved={() => { setEditOrderLaunchContext(null); setEditingOrder(null); loadOrders(); setSessionDirty(true); }}
         />
       )}
 
@@ -2256,15 +2349,20 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         >
           {(() => {
             const n = contextMenu.row && selectedIds.has(contextMenu.row.id) && selectedIds.size > 1 ? selectedIds.size : 1;
-            const menuItems = activeTab === "completed"
+            const menuItems = activeTab === "archived"
               ? [
-                  { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
-                  { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
+                  { label: n > 1 ? `Restore ${n} from archive` : "Restore from archive", action: handleRestoreFromArchive, color: "#111" },
+                  { label: n > 1 ? `Delete ${n} Orders` : "Delete Order", action: handleDelete, color: "#dc2626" },
                 ]
-              : [
-                  { label: n > 1 ? `Move ${n} to Completed` : "Move to Completed", action: handleMoveToCompleted, color: "#111" },
-                  { label: n > 1 ? `Delete ${n} Orders`     : "Delete Order",       action: handleDelete,          color: "#dc2626" },
-                ];
+              : activeTab === "completed"
+                ? [
+                    { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
+                    { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
+                  ]
+                : [
+                    { label: n > 1 ? `Move ${n} to Completed` : "Move to Completed", action: handleMoveToCompleted, color: "#111" },
+                    { label: n > 1 ? `Delete ${n} Orders`     : "Delete Order",       action: handleDelete,          color: "#dc2626" },
+                  ];
             return menuItems;
           })().map(({ label, action, color }) => (
             <div

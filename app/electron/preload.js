@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("parserApp", {
   parseFile:  (payload) => ipcRenderer.invoke("parser:parse-file", payload),
@@ -11,10 +11,13 @@ contextBridge.exposeInMainWorld("parserApp", {
   getWorkspaceState: (payload) => ipcRenderer.invoke("workspace:get-state", payload || {}),
   addFilesToInbox: (payload) => ipcRenderer.invoke("workspace:add-to-inbox", payload || {}),
   openInboxItem: (payload) => ipcRenderer.invoke("workspace:open-inbox-item", payload || {}),
+  openAttachment: (payload) => ipcRenderer.invoke("workspace:open-attachment", payload || {}),
   hideInboxItem: (payload) => ipcRenderer.invoke("workspace:hide-inbox-item", payload || {}),
+  hideInboxWorkspaceOnly: (payload) => ipcRenderer.invoke("workspace:hide-inbox-workspace-only", payload || {}),
   markInboxOrder: (payload) => ipcRenderer.invoke("workspace:mark-inbox-order", payload || {}),
   markInboxNotOrder: (payload) => ipcRenderer.invoke("workspace:mark-inbox-not-order", payload || {}),
   undoInboxOrderMark: (payload) => ipcRenderer.invoke("workspace:undo-inbox-order-mark", payload || {}),
+  setInboxLinkedOrder: (payload) => ipcRenderer.invoke("workspace:set-inbox-linked-order", payload || {}),
   openFolder:       (folderPath)  => ipcRenderer.invoke("shell:open-folder", folderPath),
   pickFile:         (opts)        => ipcRenderer.invoke("dialog:pick-file", opts || {}),
   pickFolder:       ()            => ipcRenderer.invoke("dialog:pick-folder"),
@@ -24,6 +27,7 @@ contextBridge.exposeInMainWorld("parserApp", {
   composeEmail:     (payload)     => ipcRenderer.invoke("email:compose", payload),
   testSmtpConnection: (payload)   => ipcRenderer.invoke("email:test-smtp", payload || {}),
   sendDockEmail:    (payload)     => ipcRenderer.invoke("email:send-smtp", payload || {}),
+  getFilePath:       (file)       => webUtils.getPathForFile(file),
   setTitle:            (title)   => ipcRenderer.invoke("app:set-title", title),
   exportPrintPdf:      (payload) => ipcRenderer.invoke("orders:export-print-pdf", payload),
   generateGiftLetter:  (payload) => ipcRenderer.invoke("documents:generate-gift-letter", payload),

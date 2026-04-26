@@ -3099,6 +3099,107 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                   </div>
                 </div>
 
+                <div style={{ marginTop: "28px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
+                    Auto-archive orders
+                  </div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
+                    Days of inactivity (last activity)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="Disabled"
+                    value={localShopConfig.autoArchiveDays ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      setLocalShopConfig((p) => ({
+                        ...p,
+                        autoArchiveDays: v === "" ? null : Math.max(1, Number.parseInt(v, 10) || 1),
+                      }));
+                    }}
+                    style={{
+                      maxWidth: "200px",
+                      padding: "9px 12px",
+                      border: "1px solid #d1d5db",
+                      borderRadius: "6px",
+                      fontSize: "14px",
+                      color: "#111",
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
+                    onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
+                  />
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "520px", lineHeight: 1.55 }}>
+                    Leave empty to disable. When set, orders whose last activity (messages or edits) is older than this many days are marked archived on load and about every hour. Message history is never removed.
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "28px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
+                    Archived order folders (disk)
+                  </div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
+                    Archive root
+                  </label>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", maxWidth: "560px" }}>
+                    <div style={{
+                      flex: "1 1 220px",
+                      minWidth: 0,
+                      padding: "8px 11px",
+                      border: "1px solid #d1d5db",
+                      borderRadius: "6px",
+                      fontSize: "13px",
+                      color: "#111",
+                      background: "#f9fafb",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }} title={localShopConfig.orderArchiveRoot || "Default: C:/Spaila/archive"}>
+                      {localShopConfig.orderArchiveRoot || <span style={{ color: "#9ca3af" }}>Default: C:/Spaila/archive</span>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const result = await window.parserApp?.pickFolder?.();
+                        if (!result || result.canceled || !result.path) return;
+                        setLocalShopConfig((p) => ({ ...p, orderArchiveRoot: result.path }));
+                      }}
+                      style={{
+                        padding: "8px 14px",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: "6px",
+                        background: "#fff",
+                        cursor: "pointer",
+                        fontSize: "13px",
+                        fontWeight: 600,
+                        color: "#1e293b",
+                      }}
+                    >Browse…</button>
+                    {localShopConfig.orderArchiveRoot ? (
+                      <button
+                        type="button"
+                        onClick={() => setLocalShopConfig((p) => ({ ...p, orderArchiveRoot: "" }))}
+                        style={{
+                          padding: "8px 12px",
+                          border: "none",
+                          borderRadius: "6px",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          color: "#64748b",
+                          textDecoration: "underline",
+                        }}
+                      >Use default</button>
+                    ) : null}
+                  </div>
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "520px", lineHeight: 1.55 }}>
+                    When an order is archived, its folder under Orders is moved here, keeping year/month/name structure (e.g. <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>…/archive/2026/april/…</code>). Save settings to sync this path for the backend.
+                  </div>
+                </div>
+
                 {/* Save location */}
                 <div style={{ marginTop: "28px" }}>
                   <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>

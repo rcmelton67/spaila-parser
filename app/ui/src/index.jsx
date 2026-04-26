@@ -22,7 +22,7 @@ function Shell() {
   const [parserFileRequest, setParserFileRequest] = React.useState({ key: 0, filePath: "" });
   const [ordersTab, setOrdersTab] = React.useState("active");
   const [orderFocusRequest, setOrderFocusRequest] = React.useState({ key: 0, orderNumber: "" });
-  const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0 });
+  const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0, archived: 0 });
   const [settingsTab, setSettingsTab] = React.useState("orders");
 
   React.useEffect(() => {
@@ -75,8 +75,13 @@ function Shell() {
   function openOrder(order) {
     const orderNumber = String(order?.order_number || "").trim();
     if (!orderNumber) return;
-    const status = String(order?.item_status || order?.status || "").toLowerCase();
-    setOrdersTab(status === "completed" || status === "done" ? "completed" : "active");
+    const orderStatus = String(order?.status || "").toLowerCase();
+    if (orderStatus === "archived") {
+      setOrdersTab("archived");
+    } else {
+      const lineStatus = String(order?.item_status || order?.status || "").toLowerCase();
+      setOrdersTab(lineStatus === "completed" || lineStatus === "done" ? "completed" : "active");
+    }
     setOrderFocusRequest((current) => ({ key: current.key + 1, orderNumber }));
     navigate("/");
   }
@@ -148,8 +153,7 @@ function Shell() {
           onOrders={goToOrders}
           activeCount={orderCounts.active}
           completedCount={orderCounts.completed}
-          ordersTab={ordersTab}
-          onOrdersTabChange={setOrdersTab}
+          archivedCount={orderCounts.archived}
         />
       )}
 

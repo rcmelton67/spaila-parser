@@ -661,6 +661,45 @@ function saveHiddenEmailIds(hiddenIds) {
   }, null, 2), "utf8");
 }
 
+function getWorkspaceInboxHiddenPath() {
+  return path.join(getWorkspaceDirs().root, "workspace_inbox_hidden.json");
+}
+
+function loadWorkspaceInboxHiddenIds() {
+  try {
+    const hiddenPath = getWorkspaceInboxHiddenPath();
+    if (!fs.existsSync(hiddenPath)) {
+      return new Set();
+    }
+    const parsed = JSON.parse(fs.readFileSync(hiddenPath, "utf8"));
+    const ids = Array.isArray(parsed?.hidden_ids) ? parsed.hidden_ids : [];
+    return new Set((Array.isArray(ids) ? ids : []).map((value) => String(value || "").trim()).filter(Boolean));
+  } catch (_error) {
+    return new Set();
+  }
+}
+
+function saveWorkspaceInboxHiddenIds(hiddenIds) {
+  const hiddenPath = getWorkspaceInboxHiddenPath();
+  fs.mkdirSync(path.dirname(hiddenPath), { recursive: true });
+  fs.writeFileSync(hiddenPath, JSON.stringify({
+    hidden_ids: [...hiddenIds].sort(),
+    updated_at: new Date().toISOString(),
+  }, null, 2), "utf8");
+}
+
+function addWorkspaceInboxHiddenIds(emailId, imapUid) {
+  const a = String(emailId || "").trim();
+  const b = String(imapUid || "").trim();
+  if (!a && !b) {
+    throw new Error("Email id is required.");
+  }
+  const hiddenIds = loadWorkspaceInboxHiddenIds();
+  if (a) hiddenIds.add(a);
+  if (b) hiddenIds.add(b);
+  saveWorkspaceInboxHiddenIds(hiddenIds);
+}
+
 function hideEmailId(emailId) {
   const normalized = String(emailId || "").trim();
   if (!normalized) {
@@ -685,6 +724,7 @@ function getOrderLearningPath() {
 function createEmptyOrderLearning() {
   return {
     order_flags: {},
+    linked_order_ids: {},
     order_patterns: {
       subject_tokens: {},
       sender_tokens: {},
@@ -697,6 +737,7 @@ function normalizeOrderLearningStore(store) {
   const empty = createEmptyOrderLearning();
   const next = {
     order_flags: { ...(store?.order_flags || {}) },
+    linked_order_ids: { ...(store?.linked_order_ids || {}) },
     order_patterns: {
       subject_tokens: { ...(store?.order_patterns?.subject_tokens || {}) },
       sender_tokens: { ...(store?.order_patterns?.sender_tokens || {}) },
@@ -705,6 +746,7 @@ function normalizeOrderLearningStore(store) {
   };
   return {
     order_flags: next.order_flags || empty.order_flags,
+    linked_order_ids: next.linked_order_ids || empty.linked_order_ids,
     order_patterns: next.order_patterns || empty.order_patterns,
   };
 }
@@ -792,6 +834,9 @@ function markInboxItemAsNotOrder(item) {
   }
   const store = loadOrderLearningStore();
   store.order_flags[emailId] = false;
+  if (store.linked_order_ids) {
+    delete store.linked_order_ids[emailId];
+  }
   saveOrderLearningStore(store);
   return { flagged: false, not_order: true, score: 0 };
 }
@@ -803,8 +848,29 @@ function undoInboxOrderMark(item) {
   }
   const store = loadOrderLearningStore();
   delete store.order_flags[emailId];
+  if (store.linked_order_ids) {
+    delete store.linked_order_ids[emailId];
+  }
   saveOrderLearningStore(store);
   return { flagged: false, not_order: false, score: scoreOrderSuggestion(store, item || {}) };
+}
+
+function setInboxItemLinkedOrderId(item, orderId) {
+  const emailId = String(item?.email_id || item?.emailId || "").trim();
+  if (!emailId) {
+    throw new Error("Email id is required.");
+  }
+  const oid = String(orderId || "").trim();
+  if (!oid) {
+    throw new Error("Order id is required.");
+  }
+  const store = loadOrderLearningStore();
+  if (!store.linked_order_ids) {
+    store.linked_order_ids = {};
+  }
+  store.linked_order_ids[emailId] = oid;
+  saveOrderLearningStore(store);
+  return { linked_order_id: oid };
 }
 
 function loadWorkspaceEmailSettings() {
@@ -926,10 +992,172 @@ function getHeaderParameter(value, name) {
   return String(value || "").match(pattern)?.[1]?.trim() || "";
 }
 
+function getDecodedHeaderParameter(value, name) {
+  const source = String(value || "");
+  const encodedMatch = source.match(new RegExp(`${name}\\*\\s*=\\s*"?([^";\\r\\n]+)"?`, "i"));
+  if (encodedMatch?.[1]) {
+    const raw = encodedMatch[1].trim();
+    const rfc5987 = raw.match(/^([^']*)''(.+)$/);
+    try {
+      return decodeURIComponent(rfc5987 ? rfc5987[2] : raw);
+    } catch (_error) {
+      return rfc5987 ? rfc5987[2] : raw;
+    }
+  }
+  return decodeHeaderValue(getHeaderParameter(source, name));
+}
+
 function decodeBodyPart(bodyRaw, headers) {
   const contentType = headers["content-type"] || "";
   const charset = getHeaderParameter(contentType, "charset") || "utf-8";
   return decodePreviewBody(bodyRaw, headers["content-transfer-encoding"] || "", charset);
+}
+
+function getAttachmentFilename(headers = {}, fallback = "attachment") {
+  const disposition = headers["content-disposition"] || "";
+  const contentType = headers["content-type"] || "";
+  return getDecodedHeaderParameter(disposition, "filename")
+    || getDecodedHeaderParameter(contentType, "name")
+    || fallback;
+}
+
+function getMimeType(headers = {}) {
+  return String(headers["content-type"] || "application/octet-stream").split(";")[0].trim().toLowerCase() || "application/octet-stream";
+}
+
+function splitMimeParts(bodyRaw, boundary) {
+  return String(bodyRaw || "")
+    .split(`--${boundary}`)
+    .map((part) => String(part || "").replace(/--\s*$/, "").trim())
+    .filter(Boolean)
+    .map((part) => {
+      const headerEndMatch = part.match(/\r?\n\r?\n/);
+      if (!headerEndMatch) return null;
+      const headerEnd = headerEndMatch.index;
+      return {
+        headers: parseEmailHeaders(part.slice(0, headerEnd)),
+        body: part.slice(headerEnd + headerEndMatch[0].length),
+      };
+    })
+    .filter(Boolean);
+}
+
+function collectEmailAttachments(bodyRaw, headers, sourcePath, attachments = []) {
+  const contentType = headers["content-type"] || "";
+  const boundary = getHeaderParameter(contentType, "boundary");
+  if (boundary) {
+    for (const part of splitMimeParts(bodyRaw, boundary)) {
+      collectEmailAttachments(part.body, part.headers, sourcePath, attachments);
+    }
+    return attachments;
+  }
+
+  const disposition = String(headers["content-disposition"] || "").toLowerCase();
+  const mimeType = getMimeType(headers);
+  const filename = getAttachmentFilename(headers, "");
+  const isAttachment = !!filename || disposition.includes("attachment");
+  if (!isAttachment) {
+    return attachments;
+  }
+
+  const name = filename || `attachment-${attachments.length + 1}`;
+  attachments.push({
+    name,
+    type: mimeType,
+    path: "",
+    sourcePath,
+    attachmentIndex: attachments.length,
+  });
+  return attachments;
+}
+
+function decodeAttachmentBody(bodyRaw, headers = {}) {
+  const encoding = String(headers["content-transfer-encoding"] || "").trim().toLowerCase();
+  const raw = String(bodyRaw || "");
+  if (encoding.includes("base64")) {
+    return Buffer.from(raw.replace(/\s+/g, ""), "base64");
+  }
+  if (encoding.includes("quoted-printable")) {
+    const bytes = [];
+    const text = raw.replace(/=\r?\n/g, "");
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === "=" && /^[0-9a-f]{2}$/i.test(text.slice(index + 1, index + 3))) {
+        bytes.push(parseInt(text.slice(index + 1, index + 3), 16));
+        index += 2;
+      } else {
+        bytes.push(text.charCodeAt(index) & 0xff);
+      }
+    }
+    return Buffer.from(bytes);
+  }
+  return Buffer.from(raw, "binary");
+}
+
+function findEmailAttachmentPart(bodyRaw, headers, attachmentIndex, cursor = { index: 0 }) {
+  const contentType = headers["content-type"] || "";
+  const boundary = getHeaderParameter(contentType, "boundary");
+  if (boundary) {
+    for (const part of splitMimeParts(bodyRaw, boundary)) {
+      const found = findEmailAttachmentPart(part.body, part.headers, attachmentIndex, cursor);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const disposition = String(headers["content-disposition"] || "").toLowerCase();
+  const filename = getAttachmentFilename(headers, "");
+  const isAttachment = !!filename || disposition.includes("attachment");
+  if (!isAttachment) {
+    return null;
+  }
+
+  const currentIndex = cursor.index;
+  cursor.index += 1;
+  if (currentIndex !== Number(attachmentIndex)) {
+    return null;
+  }
+  return {
+    headers,
+    body: bodyRaw,
+    name: filename || `attachment-${currentIndex + 1}`,
+  };
+}
+
+function extractEmailAttachmentToFile(sourcePath, attachmentIndex, requestedName = "") {
+  if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath)) {
+    throw new Error("Source email file was not found.");
+  }
+  const raw = fs.readFileSync(sourcePath, "utf8");
+  const headerEndMatch = raw.match(/\r?\n\r?\n/);
+  if (!headerEndMatch) {
+    throw new Error("Could not read email attachments.");
+  }
+  const headerEnd = headerEndMatch.index;
+  const headers = parseEmailHeaders(raw.slice(0, headerEnd));
+  const bodyRaw = raw.slice(headerEnd + headerEndMatch[0].length);
+  const part = findEmailAttachmentPart(bodyRaw, headers, attachmentIndex);
+  if (!part) {
+    throw new Error("Attachment was not found.");
+  }
+
+  const folderKey = crypto.createHash("sha1").update(sourcePath).digest("hex").slice(0, 12);
+  const outputDir = path.join(getWorkspaceDirs().root, ".spaila_internal", "attachments", folderKey);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const filename = sanitizeFilenamePart(requestedName || part.name || `attachment-${Number(attachmentIndex) + 1}`, "attachment");
+  const outputPath = path.join(outputDir, `${Number(attachmentIndex) + 1}-${filename}`);
+  fs.writeFileSync(outputPath, decodeAttachmentBody(part.body, part.headers));
+  return outputPath;
+}
+
+function extractEmailAttachmentsFromRaw(raw, sourcePath) {
+  const headerEndMatch = String(raw || "").match(/\r?\n\r?\n/);
+  if (!headerEndMatch) {
+    return [];
+  }
+  const headerEnd = headerEndMatch.index;
+  const headers = parseEmailHeaders(String(raw).slice(0, headerEnd));
+  const bodyRaw = String(raw).slice(headerEnd + headerEndMatch[0].length);
+  return collectEmailAttachments(bodyRaw, headers, sourcePath);
 }
 
 function extractDisplayBody(bodyRaw, headers) {
@@ -1024,6 +1252,7 @@ function extractEmailMetadata(filePath) {
   let preview = "(No preview available)";
   let previewText = "(No preview available)";
   let previewHtml = "";
+  let attachments = [];
   let emailId = `local:${path.basename(filePath)}`;
   try {
     const raw = readEmailMetadataRaw(filePath);
@@ -1045,6 +1274,7 @@ function extractEmailMetadata(filePath) {
     preview = buildEmailPreview(previewText);
     logPreviewTextIntegrity(displayBody, previewText);
     previewHtml = sanitizeEmailHtml(extractDisplayHtml(bodyRaw, headers));
+    attachments = extractEmailAttachmentsFromRaw(fs.readFileSync(filePath, "utf8"), filePath);
   } catch (_error) {
     // Fall back to header-free defaults below.
   }
@@ -1062,6 +1292,7 @@ function extractEmailMetadata(filePath) {
     preview,
     preview_text: previewText,
     preview_html: previewHtml,
+    attachments,
   };
 }
 
@@ -1180,6 +1411,7 @@ function listInboxItems(inboxPath) {
     return [];
   }
   const hiddenIds = loadHiddenEmailIds();
+  const workspaceHiddenIds = loadWorkspaceInboxHiddenIds();
   const orderLearning = loadOrderLearningStore();
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".eml"))
@@ -1195,17 +1427,22 @@ function listInboxItems(inboxPath) {
       const orderFlag = orderLearning.order_flags[itemId] ?? orderLearning.order_flags[savedUid];
       const flagged = orderFlag === true;
       const notOrder = orderFlag === false;
+      const linkedMap = orderLearning.linked_order_ids || {};
+      const linkedOrderId = String(linkedMap[itemId] || linkedMap[savedUid] || "").trim();
       return {
         ...item,
         order_flagged: flagged,
         order_not_order: notOrder,
         order_score: flagged ? 100 : notOrder ? 0 : scoreOrderSuggestion(orderLearning, item),
+        ...(linkedOrderId ? { linked_order_id: linkedOrderId } : {}),
       };
     })
     .filter((item) => {
       const itemId = String(item.email_id || "").trim();
       const savedUid = String(item.imap_uid || "").trim();
-      return !hiddenIds.has(itemId) && !hiddenIds.has(savedUid);
+      const globallyHidden = hiddenIds.has(itemId) || hiddenIds.has(savedUid);
+      const workspaceOnlyHidden = workspaceHiddenIds.has(itemId) || workspaceHiddenIds.has(savedUid);
+      return !globallyHidden && !workspaceOnlyHidden;
     })
     .sort((a, b) => String(b.received_at || "").localeCompare(String(a.received_at || "")));
 }
@@ -2065,12 +2302,51 @@ ipcMain.handle("workspace:open-inbox-item", async (_event, payload = {}) => {
   }
 });
 
+ipcMain.handle("workspace:open-attachment", async (_event, payload = {}) => {
+  try {
+    const attachment = payload.attachment || payload;
+    const url = String(attachment.url || attachment.href || "").trim();
+    if (/^https?:\/\//i.test(url)) {
+      await shell.openExternal(url);
+      return { ok: true };
+    }
+
+    let filePath = String(attachment.path || attachment.filePath || "").trim();
+    if (!filePath && attachment.sourcePath && attachment.attachmentIndex !== undefined) {
+      filePath = extractEmailAttachmentToFile(
+        String(attachment.sourcePath || ""),
+        attachment.attachmentIndex,
+        attachment.name || attachment.filename || ""
+      );
+    }
+    if (!filePath || !path.isAbsolute(filePath) || !fs.existsSync(filePath)) {
+      return { ok: false, error: "Attachment file was not found." };
+    }
+    const err = await shell.openPath(filePath);
+    if (err) return { ok: false, error: err };
+    return { ok: true, path: filePath };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not open attachment." };
+  }
+});
+
 ipcMain.handle("workspace:hide-inbox-item", async (_event, payload = {}) => {
   try {
     hideEmailId(payload.emailId || payload.email_id || "");
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not remove inbox email." };
+  }
+});
+
+ipcMain.handle("workspace:hide-inbox-workspace-only", async (_event, payload = {}) => {
+  try {
+    const emailId = String(payload.emailId || payload.email_id || "").trim();
+    const imapUid = String(payload.imap_uid || payload.imapUid || "").trim();
+    addWorkspaceInboxHiddenIds(emailId, imapUid);
+    return { ok: true, workspace_only: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not hide inbox email in workspace." };
   }
 });
 
@@ -2098,6 +2374,15 @@ ipcMain.handle("workspace:undo-inbox-order-mark", async (_event, payload = {}) =
     return { ok: true, ...result };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not undo inbox order mark." };
+  }
+});
+
+ipcMain.handle("workspace:set-inbox-linked-order", async (_event, payload = {}) => {
+  try {
+    const result = setInboxItemLinkedOrderId(payload.item || payload, payload.order_id || payload.orderId);
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not save inbox order link." };
   }
 });
 
@@ -2146,12 +2431,12 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
   const body = String(payload.body || "");
   if (!to) return { ok: false, error: "Recipient is required." };
   if (!subject) return { ok: false, error: "Subject is required." };
-  if (!body.trim()) return { ok: false, error: "Body is required." };
-
-  const html = convertPlainTextEmailToHtml(body);
   const attachmentPaths = (Array.isArray(payload.attachmentPaths) ? payload.attachmentPaths : [])
     .map((value) => String(value || "").trim())
     .filter((value) => value && path.isAbsolute(value) && fs.existsSync(value));
+  if (!body.trim() && !attachmentPaths.length) return { ok: false, error: "Body or attachment is required." };
+
+  const html = convertPlainTextEmailToHtml(body);
 
   try {
     const sentAt = new Date();

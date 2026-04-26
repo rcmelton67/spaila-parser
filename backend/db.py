@@ -35,6 +35,7 @@ def init_db():
         order_folder_path TEXT,
         source_eml_path TEXT,
         eml_path TEXT,
+        messages TEXT,
         is_gift INTEGER DEFAULT 0,
         gift_wrap INTEGER DEFAULT 0
     )
@@ -62,8 +63,11 @@ def init_db():
         ("source_eml_path",   "TEXT"),
         ("eml_path",          "TEXT"),
         ("platform",          "TEXT"),   # "etsy" | "woo" | "shopify" | "unknown"
+        ("messages",          "TEXT"),   # JSON conversation messages persisted per order
         ("is_gift",           "INTEGER DEFAULT 0"),
         ("gift_wrap",         "INTEGER DEFAULT 0"),
+        ("last_activity_at",  "TEXT"),
+        ("updated_at",        "TEXT"),
         # gift_message intentionally NOT here — it lives in items (per-item)
     ])
     _ensure_columns(cur, "items", [
@@ -71,6 +75,15 @@ def init_db():
         ("gift_message",      "TEXT"),   # per-item, not order-level
         ("item_status",       "TEXT"),   # per-item active/completed — independent of order.status
     ])
+
+    cur.execute(
+        "UPDATE orders SET last_activity_at = created_at "
+        "WHERE last_activity_at IS NULL OR TRIM(last_activity_at) = ''"
+    )
+    cur.execute(
+        "UPDATE orders SET updated_at = created_at "
+        "WHERE updated_at IS NULL OR TRIM(updated_at) = ''"
+    )
 
     conn.commit()
     conn.close()

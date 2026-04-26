@@ -1,5 +1,6 @@
 import React from "react";
 import AppHeader from "../../shared/components/AppHeader.jsx";
+import { loadShopConfig } from "../../shared/utils/fieldConfig.js";
 
 const panelStyle = {
   background: "#fff",
@@ -8,6 +9,10 @@ const panelStyle = {
   boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
 };
 const ORDER_NUMBER_PATTERN = /\b\d{6,12}\b/g;
+const WORKSPACE_SELECTED_EMAIL_ID_KEY = "workspace_selected_email_id";
+const WORKSPACE_SELECTED_THREAD_ID_KEY = "workspace_selected_thread_id";
+const WORKSPACE_SELECTED_SENT_ID_KEY = "workspace_selected_sent_id";
+const WORKSPACE_SCROLL_Y_KEY = "workspace_scroll_y";
 
 function formatTimestamp(value) {
   if (!value) return "Unknown time";
@@ -27,6 +32,33 @@ function getInboxItemId(item) {
   return String(item?.id || item?.email_id || "").trim();
 }
 
+function getFilenameFromPath(filePath) {
+  const value = String(filePath || "").trim();
+  if (!value) return "";
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || value;
+}
+
+function setLocalStorageValue(key, value) {
+  try {
+    if (value === null || value === undefined || value === "") {
+      window.localStorage?.removeItem(key);
+    } else {
+      window.localStorage?.setItem(key, String(value));
+    }
+  } catch (_error) {
+    // Best-effort persistence for UX continuity.
+  }
+}
+
+function getLocalStorageValue(key) {
+  try {
+    return String(window.localStorage?.getItem(key) || "").trim();
+  } catch (_error) {
+    return "";
+  }
+}
+
 function getMessageId(item) {
   return String(item?.id || item?.message_id || item?.email_id || "").trim();
 }
@@ -36,6 +68,13 @@ function normalizeProcessedEmailRef(value) {
     .trim()
     .replace(/\\/g, "/")
     .toLowerCase();
+}
+
+/** Extract the bare IMAP UID from a {timestamp}_{uid}.eml filename or path. */
+function extractEmlUid(filePath) {
+  const name = String(filePath || "").replace(/\\/g, "/").split("/").pop();
+  const m = name.match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
+  return m ? m[1].toLowerCase() : "";
 }
 
 function getProcessedEmailRefVariants(value) {
@@ -79,15 +118,21 @@ function saveProcessedInboxMemory(refs) {
 function buildProcessedEmailRefs(orders = []) {
   const refs = loadProcessedInboxMemory();
   for (const order of orders || []) {
-    for (const value of [
-      order?.email_id,
-      order?.message_id,
-      order?.imap_uid,
-      order?.source_eml_path,
-      order?.eml_path,
-    ]) {
+    for (const value of [order?.source_eml_path, order?.eml_path]) {
       for (const ref of getProcessedEmailRefVariants(value)) {
         refs.add(ref);
+      }
+      const uid = extractEmlUid(value);
+      if (uid) refs.add(uid);
+    }
+    const messages = Array.isArray(order?.messages) ? order.messages : [];
+    for (const msg of messages) {
+      const dir = String(msg?.type || msg?.direction || "").toLowerCase();
+      if (dir !== "inbound") continue;
+      for (const value of [msg?.email_id, msg?.message_id, msg?.id]) {
+        for (const ref of getProcessedEmailRefVariants(value)) {
+          refs.add(ref);
+        }
       }
     }
   }
@@ -135,6 +180,19 @@ async function fetchOrdersForLinking() {
   const response = await fetch("http://127.0.0.1:8055/orders/list");
   const payload = await response.json().catch(() => []);
   return Array.isArray(payload) ? payload : [];
+}
+
+async function persistOrderMessage(orderId, message) {
+  const response = await fetch(`http://127.0.0.1:8055/orders/${encodeURIComponent(orderId)}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.detail || payload?.error || "Could not save reply to order.");
+  }
+  return payload?.message || message;
 }
 
 function mergeInboxItems(previousItems = [], fetchedItems = [], processedRefs = new Set()) {
@@ -305,6 +363,173 @@ function normalizeOutboundMessage(item, orderMetadata) {
   };
 }
 
+function normalizePersistedOrderMessage(message, order) {
+  const timestamp = message?.timestamp || "";
+  const id = String(message?.id || `order-message:${order?.order_id || order?.id || order?.order_number}:${timestamp}:${String(message?.body || "").slice(0, 24)}`);
+  return {
+    ...message,
+    id,
+    message_id: id,
+    direction: message?.direction || message?.type || "outbound",
+    type: message?.type || message?.direction || "outbound",
+    order_number: normalizeOrderNumber(order?.order_number),
+    buyer_name: order?.buyer_name || "",
+    buyer_email: order?.buyer_email || "",
+    body: message?.body || "",
+    preview_text: message?.body || "",
+    preview: buildThreadPreview(message?.body || ""),
+    timestamp,
+    received_at: timestamp,
+    source_item: message,
+  };
+}
+
+function normalizeSelectedMailboxMessage(item, linkedOrder, mode) {
+  const id = mode === "sent" ? getMessageId(item) : getInboxItemId(item);
+  const timestamp = item?.timestamp || item?.received_at || "";
+  const direction = mode === "sent" ? "outbound" : "inbound";
+  return {
+    ...item,
+    id,
+    message_id: String(item?.message_id || item?.email_id || id),
+    direction,
+    type: direction,
+    order_number: normalizeOrderNumber(linkedOrder?.order_number),
+    buyer_name: linkedOrder?.buyer_name || "",
+    buyer_email: linkedOrder?.buyer_email || "",
+    from: item?.sender || item?.from || "",
+    to: item?.to || "",
+    body: item?.preview_text || item?.body || item?.preview || "",
+    preview_text: item?.preview_text || item?.body || item?.preview || "",
+    preview: item?.preview || buildThreadPreview(item?.preview_text || item?.body || ""),
+    timestamp,
+    received_at: timestamp,
+    source_item: item,
+    source_eml_path: item?.source_eml_path || item?.path || "",
+  };
+}
+
+function normalizeSelectedOrderSentMessage(item, linkedOrder) {
+  const messageId = getMessageId(item);
+  return {
+    ...item,
+    id: messageId,
+    message_id: String(item?.message_id || messageId),
+    status: "sent",
+    direction: "outbound",
+    type: "outbound",
+    order_number: normalizeOrderNumber(linkedOrder?.order_number),
+    buyer_name: linkedOrder?.buyer_name || item?.buyer_name || "",
+    buyer_email: linkedOrder?.buyer_email || item?.buyer_email || "",
+    from: item?.from || "Spaila",
+    to: item?.to || linkedOrder?.buyer_email || "",
+    body: item?.body || item?.preview_text || "",
+    preview_text: item?.preview_text || item?.body || item?.preview || "",
+    preview: item?.preview || buildThreadPreview(item?.preview_text || item?.body || ""),
+    timestamp: item?.timestamp || item?.received_at || "",
+    received_at: item?.received_at || item?.timestamp || "",
+    attachments: item?.attachments || [],
+    source_item: item,
+  };
+}
+
+function dedupeMessages(messages = []) {
+  const seen = new Set();
+  return messages.filter((message) => {
+    const key = String(message?.id || message?.message_id || `${message?.timestamp || ""}:${message?.body || ""}`).trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function parseMessageTimeMs(message) {
+  const raw = message?.timestamp || message?.received_at || "";
+  const ms = Date.parse(String(raw || ""));
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function normalizeMessageBodyForMatch(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeRecipientForMatch(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isTemporaryMessage(message) {
+  const id = String(message?.id || "").trim();
+  return id.startsWith("temp_");
+}
+
+function areLikelySameOutboundMessage(a, b) {
+  if ((a?.direction || a?.type) !== "outbound" || (b?.direction || b?.type) !== "outbound") return false;
+  const bodyA = normalizeMessageBodyForMatch(a?.body || a?.preview_text || a?.preview);
+  const bodyB = normalizeMessageBodyForMatch(b?.body || b?.preview_text || b?.preview);
+  if (!bodyA || !bodyB || bodyA !== bodyB) return false;
+  const toA = normalizeRecipientForMatch(a?.to || a?.buyer_email);
+  const toB = normalizeRecipientForMatch(b?.to || b?.buyer_email);
+  if (toA && toB && toA !== toB) return false;
+  const timeA = parseMessageTimeMs(a);
+  const timeB = parseMessageTimeMs(b);
+  if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && Math.abs(timeA - timeB) > 10000) return false;
+  return true;
+}
+
+function messageConfidenceScore(message) {
+  let score = 0;
+  if (!isTemporaryMessage(message)) score += 3;
+  if (String(message?.status || "").toLowerCase() === "sent") score += 2;
+  if (String(message?.message_id || "").trim()) score += 1;
+  if (String(message?.body || message?.preview_text || "").trim()) score += 1;
+  if (Array.isArray(message?.attachments) && message.attachments.length) score += 1;
+  return score;
+}
+
+function mergeMessageRecord(existing, incoming) {
+  const keepIncoming = messageConfidenceScore(incoming) >= messageConfidenceScore(existing);
+  return keepIncoming ? { ...existing, ...incoming } : { ...incoming, ...existing };
+}
+
+function dedupeConversationMessages(messages = []) {
+  const merged = [];
+  for (const candidate of messages) {
+    const candidateId = String(candidate?.id || candidate?.message_id || "").trim();
+    const index = merged.findIndex((existing) => {
+      const existingId = String(existing?.id || existing?.message_id || "").trim();
+      if (candidateId && existingId && candidateId === existingId) return true;
+      return areLikelySameOutboundMessage(existing, candidate);
+    });
+    if (index === -1) {
+      merged.push(candidate);
+      continue;
+    }
+    merged[index] = mergeMessageRecord(merged[index], candidate);
+  }
+  return merged;
+}
+
+function getMailboxParticipantAddress(item, mode) {
+  if (mode === "sent") {
+    return String(item?.to || item?.buyer_email || "").trim().toLowerCase();
+  }
+  return String(item?.reply_to || item?.sender || item?.from || item?.buyer_email || "").trim().toLowerCase();
+}
+
+function getPersistedOrderMessages(orders = []) {
+  const seenOrders = new Set();
+  const messages = [];
+  for (const order of orders || []) {
+    const orderId = String(order?.order_id || order?.id || order?.order_number || "").trim();
+    if (!orderId || seenOrders.has(orderId)) continue;
+    seenOrders.add(orderId);
+    for (const message of Array.isArray(order?.messages) ? order.messages : []) {
+      messages.push(normalizePersistedOrderMessage(message, order));
+    }
+  }
+  return messages;
+}
+
 function buildThreadPreview(value, maxLength = 120) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "(No preview available)";
@@ -315,10 +540,11 @@ function buildThreadsFromMessages(inboxItems, sentMessages, orders) {
   const orderMetadata = buildOrderMetadata(orders);
   const threadsById = new Map();
   const unlinkedMessages = [];
-  const messages = [
+  const messages = dedupeMessages([
     ...(inboxItems || []).map((item) => normalizeInboundMessage(item, orderMetadata)),
     ...(sentMessages || []).map((item) => normalizeOutboundMessage(item, orderMetadata)),
-  ].filter((message) => message.id);
+    ...getPersistedOrderMessages(orders),
+  ]);
 
   for (const message of messages) {
     if (!message.order_number) {
@@ -393,6 +619,50 @@ function normalizeReplySubject(subject) {
   return /^re:/i.test(value) ? value : `Re: ${value}`;
 }
 
+function normalizeConversationSubject(subject) {
+  return String(subject || "")
+    .replace(/^\s*((re|fw|fwd)\s*:\s*)+/i, "")
+    .trim()
+    .toLowerCase();
+}
+
+function extractEmailAddress(value) {
+  const source = String(value || "").trim();
+  const bracketMatch = source.match(/<([^<>\s]+@[^<>\s]+)>/);
+  if (bracketMatch?.[1]) return bracketMatch[1].trim();
+  const emailMatch = source.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  return (emailMatch?.[0] || source).trim();
+}
+
+function getEmailDomain(value) {
+  const email = extractEmailAddress(value).toLowerCase();
+  return email.includes("@") ? email.split("@").pop() : "";
+}
+
+function getReplyTarget({ selectedThread, selectedThreadMessages, selectedMailboxItem }) {
+  if (selectedThread) {
+    const lastInbound = [...(selectedThreadMessages || [])].reverse().find((message) => (
+      (message.direction || message.type) !== "outbound"
+    ));
+    return extractEmailAddress(
+      lastInbound?.reply_to
+      || lastInbound?.buyer_email
+      || selectedThread.buyer_email
+      || lastInbound?.from
+      || lastInbound?.sender
+    );
+  }
+  return extractEmailAddress(selectedMailboxItem?.reply_to || selectedMailboxItem?.from || selectedMailboxItem?.sender || selectedMailboxItem?.to);
+}
+
+function getReplySubject({ selectedThread, selectedThreadMessages, selectedMailboxItem }) {
+  if (selectedThread) {
+    const lastSubject = [...(selectedThreadMessages || [])].reverse().find((message) => message.subject)?.subject;
+    return normalizeReplySubject(lastSubject || `Order ${selectedThread.order_number || ""}`.trim());
+  }
+  return normalizeReplySubject(selectedMailboxItem?.subject || "");
+}
+
 function formatReplyDate(value) {
   if (!value) return "an unknown date";
   const date = new Date(value);
@@ -430,7 +700,166 @@ function buildMailtoLink(item) {
   return `mailto:${target}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+function normalizeMessageIdForLink(value) {
+  return String(value || "").trim().replace(/^<|>$/g, "").toLowerCase();
+}
+
+function isHiddenInWorkspace(item) {
+  const h = item?.hidden_in_workspace;
+  return h === true || h === 1 || String(h).toLowerCase() === "true";
+}
+
+/**
+ * Workspace inbox display only: email is "handled" if hidden, explicitly linked to an order,
+ * or already appears on an order's inbound messages (email_id / message_id).
+ */
+/** Collapse whitespace and lowercase for subject comparison. */
+function normalizeSubjectForMatch(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Parse an ISO / RFC-date string to ms-since-epoch, or NaN on failure. */
+function parseMsForMatch(value) {
+  const s = String(value || "").trim();
+  if (!s) return Number.NaN;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function getInboxItemHandledState(item, orders) {
+  if (isHiddenInWorkspace(item)) {
+    return { handled: true, reason: "hidden" };
+  }
+  if (String(item?.linked_order_id || "").trim()) {
+    return { handled: true, reason: "linked_to_order" };
+  }
+  const itemPath = String(item?.path || "").trim().toLowerCase();
+  if (itemPath) {
+    for (const order of orders || []) {
+      const sp = String(order?.source_eml_path || "").trim().toLowerCase();
+      const ep = String(order?.eml_path || "").trim().toLowerCase();
+      if ((sp && sp === itemPath) || (ep && ep === itemPath)) {
+        return { handled: true, reason: "source_eml_path_match" };
+      }
+    }
+  }
+  const emailId = getInboxItemId(item);
+  // eid = Message-ID header value (preferred by inferInboxEmailId in Electron)
+  const eid = String(emailId || "").trim().toLowerCase();
+  // imapUid = filename-derived IMAP UID token; matches msg.email_id stored by Python inbox_service
+  const imapUid = String(item?.imap_uid || "").trim().toLowerCase();
+  // Pair D: compare item.imap_uid against the UID embedded in order.source_eml_path / eml_path.
+  // Catches re-fetched emails where the timestamp prefix differs but the IMAP UID is stable.
+  if (imapUid) {
+    for (const order of orders || []) {
+      for (const emlPath of [order?.source_eml_path, order?.eml_path]) {
+        if (extractEmlUid(emlPath) === imapUid) {
+          return { handled: true, reason: "eml_path_uid_match" };
+        }
+      }
+    }
+  }
+  // msgId = item.message_id — not set by Electron's extractEmailMetadata, but kept for future sources
+  const msgId = normalizeMessageIdForLink(item?.message_id || "");
+  // Subject + timestamp fallback (used when all ID pairs fail)
+  const itemSubject = normalizeSubjectForMatch(item?.subject);
+  const itemTs = parseMsForMatch(item?.timestamp || item?.received_at);
+  const SUBJECT_TS_WINDOW_MS = 5 * 60 * 1000; // ±5 minutes
+
+  for (const order of orders || []) {
+    const messages = Array.isArray(order?.messages) ? order.messages : [];
+    for (const msg of messages) {
+      const dir = String(msg?.type || msg?.direction || "").toLowerCase();
+      if (dir !== "inbound") continue;
+      // me = msg.email_id = IMAP UID string as stored by Python inbox_service
+      const me = String(msg?.email_id || "").trim().toLowerCase();
+      // Pair A-1: both sides are Message-ID (when Electron falls back to filename token same as UID)
+      if (eid && me && me === eid) {
+        return { handled: true, reason: "already_in_messages" };
+      }
+      // Pair A-2: item.imap_uid (filename token) vs msg.email_id (IMAP UID stored by Python)
+      if (imapUid && me && imapUid === me) {
+        return { handled: true, reason: "already_in_messages" };
+      }
+      // mm = msg.message_id / msg.id = Message-ID header as stored by Python inbox_service
+      const mm = normalizeMessageIdForLink(msg?.message_id || msg?.id);
+      // Pair B-1: item.message_id (future sources) vs msg.message_id/msg.id
+      // Pair B-2: item.email_id (= Message-ID when header present) vs msg.message_id/msg.id
+      if ((msgId && mm && mm === msgId) || (eid && mm && mm === eid)) {
+        return { handled: true, reason: "already_in_messages" };
+      }
+      // Pair C — subject + timestamp proximity fallback (platform-agnostic)
+      // Covers cases where IDs differ between Electron / Python / platform (e.g. Woo).
+      if (itemSubject) {
+        const msgSubject = normalizeSubjectForMatch(msg?.subject);
+        if (msgSubject && msgSubject === itemSubject) {
+          const msgTs = parseMsForMatch(msg?.timestamp);
+          const tsMatch =
+            !Number.isNaN(itemTs) && !Number.isNaN(msgTs) && Math.abs(itemTs - msgTs) <= SUBJECT_TS_WINDOW_MS;
+          const itemSender = String(item?.sender || item?.from || "").trim().toLowerCase();
+          const msgSender = String(msg?.sender || msg?.from || "").trim().toLowerCase();
+          const senderMatch = Boolean(itemSender && msgSender && itemSender === msgSender);
+          if (tsMatch || (Number.isNaN(msgTs) && senderMatch)) {
+            return { handled: true, reason: "already_in_messages" };
+          }
+        }
+      }
+    }
+  }
+  return { handled: false, reason: "" };
+}
+
+function isInboxEmailLinkedToOrder(item, orders) {
+  const linkId = String(item?.linked_order_id || "").trim();
+  if (linkId) {
+    return { linked: true, linked_order_id: linkId };
+  }
+  const state = buildOrderLinkState(item, orders);
+  if (state.linkedOrder) {
+    const oid = String(state.linkedOrder.order_id || state.linkedOrder.id || "").trim();
+    return { linked: true, linked_order_id: oid };
+  }
+  const emailId = getInboxItemId(item);
+  const msgId = String(item?.message_id || "").trim();
+  const eid = String(emailId || "").trim().toLowerCase();
+  const mid = normalizeMessageIdForLink(msgId);
+  for (const order of orders || []) {
+    const messages = Array.isArray(order?.messages) ? order.messages : [];
+    for (const msg of messages) {
+      const dir = String(msg?.type || msg?.direction || "").toLowerCase();
+      if (dir !== "inbound") continue;
+      const me = String(msg?.email_id || "").trim().toLowerCase();
+      if (eid && me === eid) {
+        const oid = String(order?.order_id || order?.id || "").trim();
+        return { linked: true, linked_order_id: oid || "from_messages" };
+      }
+      const mm = normalizeMessageIdForLink(msg?.message_id || msg?.id);
+      if (mid && mm && mm === mid) {
+        const oid = String(order?.order_id || order?.id || "").trim();
+        return { linked: true, linked_order_id: oid || "from_messages" };
+      }
+    }
+  }
+  return { linked: false, linked_order_id: "" };
+}
+
 function buildOrderLinkState(item, orders) {
+  const manualOrderId = String(item?.linked_order_id || "").trim();
+  if (manualOrderId) {
+    const seen = new Set();
+    const matches = [];
+    for (const order of orders || []) {
+      const oid = String(order?.order_id || order?.id || "").trim();
+      if (!oid || oid !== manualOrderId || seen.has(oid)) continue;
+      seen.add(oid);
+      const orderNumber = normalizeOrderNumber(order?.order_number);
+      matches.push({ ...order, order_number: orderNumber });
+    }
+    if (matches.length >= 1) {
+      return { candidates: [], matches, linkedOrder: matches[0] };
+    }
+  }
+
   const candidates = extractOrderNumberCandidates(item?.subject, item?.preview_text, item?.preview);
   if (!candidates.length) {
     return { candidates: [], matches: [], linkedOrder: null };
@@ -554,7 +983,7 @@ function renderPreviewTextWithProof(text, orderLinkState, onOpenOrder) {
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: "#2563eb", textDecoration: "underline" }}
+          style={{ color: "#2563eb", textDecoration: "underline", wordBreak: "break-all", overflowWrap: "anywhere" }}
         >
           {url}
         </a>
@@ -665,7 +1094,7 @@ function renderReadableMessageBody(text, orderLinkState, onOpenOrder) {
   flush();
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
+    <div style={{ display: "grid", gap: 14, minWidth: 0 }}>
       {blocks.map((block, index) => (
         <div
           key={`${block.quoted ? "quote" : "body"}-${index}`}
@@ -677,6 +1106,9 @@ function renderReadableMessageBody(text, orderLinkState, onOpenOrder) {
             fontSize: block.quoted ? 13 : 15,
             lineHeight: block.quoted ? 1.55 : 1.72,
             whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
+            minWidth: 0,
           }}
         >
           {renderPreviewTextWithProof(block.text, orderLinkState, onOpenOrder)}
@@ -686,9 +1118,55 @@ function renderReadableMessageBody(text, orderLinkState, onOpenOrder) {
   );
 }
 
+function getAttachmentDisplayName(attachment) {
+  if (typeof attachment === "string") {
+    return attachment.split(/[/\\]/).pop() || "Attachment";
+  }
+  return String(
+    attachment?.name
+    || attachment?.filename
+    || attachment?.fileName
+    || attachment?.path
+    || attachment?.url
+    || "Attachment"
+  ).split(/[/\\]/).pop();
+}
+
+function getAttachmentType(attachment) {
+  if (typeof attachment === "string") {
+    const extension = attachment.split(".").pop()?.toLowerCase() || "";
+    return extension ? `.${extension}` : "file";
+  }
+  return String(attachment?.type || attachment?.mimeType || attachment?.contentType || "").toLowerCase();
+}
+
+function getAttachmentIcon(attachment) {
+  const name = getAttachmentDisplayName(attachment).toLowerCase();
+  const type = getAttachmentType(attachment);
+  if (type.includes("image") || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return "IMG";
+  if (type.includes("pdf") || /\.pdf$/i.test(name)) return "PDF";
+  if (type.includes("zip") || /\.(zip|rar|7z)$/i.test(name)) return "ZIP";
+  if (type.includes("spreadsheet") || /\.(csv|xlsx?)$/i.test(name)) return "XLS";
+  if (type.includes("word") || /\.(docx?|rtf)$/i.test(name)) return "DOC";
+  return "FILE";
+}
+
 function getEmailAttachments(item) {
   const values = item?.attachments || item?.attachment_paths || item?.attachmentPaths || [];
-  return Array.isArray(values) ? values.filter(Boolean) : [];
+  return Array.isArray(values) ? values.filter(Boolean).map((attachment) => {
+    if (typeof attachment === "string") {
+      return {
+        name: getAttachmentDisplayName(attachment),
+        path: attachment,
+        type: getAttachmentType(attachment),
+      };
+    }
+    return {
+      ...attachment,
+      name: getAttachmentDisplayName(attachment),
+      type: getAttachmentType(attachment),
+    };
+  }) : [];
 }
 
 function formatLastUpdated(value, now = Date.now()) {
@@ -725,6 +1203,321 @@ function PreviewMenuItem({ children, disabled = false, danger = false, onClick }
   );
 }
 
+function WorkspaceIdentityPanel({ shopName }) {
+  // TODO: support dynamic messages (first use, caught up, etc.)
+  return (
+    <div style={{
+      flex: 1,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 32,
+      textAlign: "center",
+    }}>
+      <div style={{ width: "100%", maxWidth: 520 }}>
+        <h1 style={{ margin: 0, fontSize: 36, lineHeight: 1.15, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em" }}>
+          {shopName}
+        </h1>
+        <div style={{ marginTop: 8, fontSize: 13, fontWeight: 650, color: "#94a3b8" }}>
+          Powered by Spaila
+        </div>
+        <div style={{ marginTop: 20, fontSize: 15, fontWeight: 650, color: "#cbd5e1" }}>
+          Select an email to begin
+        </div>
+        <div style={{ maxWidth: 540, margin: "28px auto 0", fontSize: 13, lineHeight: 1.55, color: "#6b7280", textAlign: "center" }}>
+          <p style={{ margin: 0 }}>
+            Workspace is your communication hub for customer conversations and orders in Spaila.
+          </p>
+          <p style={{ margin: "9px 0 0" }}>
+            Use it to review emails, manage orders, and respond efficiently—while your full email client remains available when needed.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttachmentList({ attachments, onOpen, compact = false }) {
+  if (!attachments.length) return null;
+  return (
+    <div style={{ marginTop: compact ? 12 : 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280" }}>
+        Attachments ({attachments.length})
+      </div>
+      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {attachments.map((attachment, index) => (
+          <button
+            key={`${attachment.name || "attachment"}-${attachment.path || attachment.url || (attachment.attachmentIndex ?? index)}`}
+            type="button"
+            onClick={() => onOpen?.(attachment)}
+            title={attachment.path || attachment.url || attachment.name}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              border: "1px solid #e5e7eb",
+              background: "#fff",
+              color: "#334155",
+              borderRadius: 999,
+              padding: compact ? "4px 10px" : "4px 10px",
+              fontSize: compact ? 11 : 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              maxWidth: compact ? 240 : 320,
+            }}
+          >
+            <span style={{ color: "#64748b", fontSize: 12, lineHeight: 1 }}>
+              {getAttachmentIcon(attachment)}
+            </span>
+            <span style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere" }}>
+              {attachment.name}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InlineReplyBox({
+  value,
+  onChange,
+  onSend,
+  attachments = [],
+  onAttachFiles,
+  onAttachOrderFiles,
+  onSelectOrderFile,
+  onCloseOrderFilePicker,
+  orderFilePicker = { open: false, loading: false, files: [], error: "" },
+  onRemoveAttachment,
+  isSending = false,
+}) {
+  const fileInputRef = React.useRef(null);
+  return (
+    <div className="reply-box" style={{ marginTop: 20, borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
+      <textarea
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+        placeholder="Write a reply..."
+        style={{
+          width: "100%",
+          minHeight: 88,
+          resize: "vertical",
+          boxSizing: "border-box",
+          border: "1px solid #cbd5e1",
+          borderRadius: 12,
+          padding: "11px 12px",
+          color: "#0f172a",
+          fontSize: 14,
+          lineHeight: 1.5,
+          fontFamily: "inherit",
+          outline: "none",
+          background: "#fff",
+        }}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) {
+            onAttachFiles?.(files);
+          }
+          event.target.value = "";
+        }}
+      />
+      {attachments.length ? (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 7 }}>
+            Attached:
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {attachments.map((file, index) => (
+              <span
+                key={`${file.name || "attachment"}-${file.size || 0}-${file.lastModified || index}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  border: "1px solid #e2e8f0",
+                  background: "#f8fafc",
+                  color: "#334155",
+                  borderRadius: 999,
+                  padding: "4px 8px 4px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  maxWidth: 260,
+                }}
+              >
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {file.name || "Attachment"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveAttachment?.(index)}
+                  aria-label={`Remove ${file.name || "attachment"}`}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#64748b",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 900,
+                    lineHeight: 1,
+                    padding: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="reply-actions" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <button
+            className="attach"
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            title={attachments.length ? `${attachments.length} file${attachments.length === 1 ? "" : "s"} attached` : "Attach file"}
+            aria-label="Attach file"
+            style={{
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#475569",
+              borderRadius: 10,
+              width: 36,
+              height: 34,
+              cursor: "pointer",
+              fontSize: 16,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            📎
+          </button>
+          <button
+            className="attach-order"
+            type="button"
+            onClick={() => onAttachOrderFiles?.()}
+            title="Attach from Order"
+            aria-label="Attach from Order"
+            style={{
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#475569",
+              borderRadius: 10,
+              width: 36,
+              height: 34,
+              cursor: "pointer",
+              fontSize: 16,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            📁
+          </button>
+        </div>
+        <button
+          className="send"
+          type="button"
+          disabled={isSending}
+          onClick={onSend}
+          style={{
+            border: "none",
+            background: "#2563eb",
+            color: "#fff",
+            borderRadius: 10,
+            padding: "8px 14px",
+            cursor: isSending ? "not-allowed" : "pointer",
+            fontSize: 13,
+            fontWeight: 800,
+            opacity: isSending ? 0.72 : 1,
+          }}
+        >
+          {isSending ? "Sending..." : "Send"}
+        </button>
+      </div>
+      {orderFilePicker?.open ? (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15, 23, 42, 0.35)",
+          zIndex: 2000,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 18,
+        }}>
+          <div style={{
+            width: "100%",
+            maxWidth: 540,
+            background: "#fff",
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            boxShadow: "0 20px 40px rgba(15, 23, 42, 0.2)",
+            overflow: "hidden",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid #e5e7eb" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a" }}>Order Files</div>
+              <button
+                type="button"
+                onClick={() => onCloseOrderFilePicker?.()}
+                style={{ border: "none", background: "transparent", color: "#64748b", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
+                aria-label="Close order files"
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ maxHeight: 320, overflowY: "auto", padding: 12 }}>
+              {orderFilePicker.loading ? (
+                <div style={{ fontSize: 13, color: "#64748b", padding: "10px 6px" }}>Loading files...</div>
+              ) : orderFilePicker.error ? (
+                <div style={{ fontSize: 13, color: "#b91c1c", padding: "10px 6px" }}>{orderFilePicker.error}</div>
+              ) : orderFilePicker.files?.length ? (
+                orderFilePicker.files.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    onClick={() => onSelectOrderFile?.(file)}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      border: "1px solid #e5e7eb",
+                      background: "#fff",
+                      color: "#1f2937",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                      cursor: "pointer",
+                      marginBottom: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ minWidth: 0, fontSize: 13, fontWeight: 600, wordBreak: "break-word", overflowWrap: "anywhere" }}>
+                      {file.name}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#64748b", flexShrink: 0 }}>{file.type || "file"}</span>
+                  </button>
+                ))
+              ) : (
+                <div style={{ fontSize: 13, color: "#64748b", padding: "10px 6px" }}>No files found in this order folder.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function WorkspacePage({
   onOpenFile,
   onOpenOrder,
@@ -733,6 +1526,7 @@ export default function WorkspacePage({
   onOrders,
   activeCount = 0,
   completedCount = 0,
+  archivedCount = 0,
 }) {
   const [workspaceState, setWorkspaceState] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -754,20 +1548,42 @@ export default function WorkspacePage({
   const [ordersForLinking, setOrdersForLinking] = React.useState([]);
   const [threadState, setThreadState] = React.useState({ threads: [], unlinkedMessages: [] });
   const [selectedThreadId, setSelectedThreadId] = React.useState("");
+  const [shopConfig, setShopConfig] = React.useState(() => loadShopConfig());
+  const [replyText, setReplyText] = React.useState("");
+  const [attachments, setAttachments] = React.useState([]);
+  const [orderFilePicker, setOrderFilePicker] = React.useState({
+    open: false,
+    loading: false,
+    files: [],
+    error: "",
+    folderPath: "",
+  });
+  const [assignToOrderOpen, setAssignToOrderOpen] = React.useState(false);
+  const [assignToOrderQuery, setAssignToOrderQuery] = React.useState("");
+  const [assignToOrderPickId, setAssignToOrderPickId] = React.useState("");
+  const [assignToOrderBusy, setAssignToOrderBusy] = React.useState(false);
+  const [replyMessagesByConversation, setReplyMessagesByConversation] = React.useState({});
+  const [isSendingReply, setIsSendingReply] = React.useState(false);
+  const [pendingRemovals, setPendingRemovals] = React.useState({});
   const inboxFetchInFlightRef = React.useRef(false);
   const lastAutoFetchAtRef = React.useRef(0);
   const previousImapConnectedRef = React.useRef(false);
+  const previewScrollRef = React.useRef(null);
+  const hasRestoredSelectionRef = React.useRef(false);
 
   const loadWorkspace = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [nextState, orders] = await Promise.all([
+      const [nextState, ordersRaw] = await Promise.all([
         window.parserApp?.getWorkspaceState?.({
           bucket: "Inbox",
           relativePath: "",
         }),
         fetchOrdersForLinking().catch(() => []),
       ]);
+      const orders = (Array.isArray(ordersRaw) ? ordersRaw : []).filter(
+        (o) => String(o?.status || "").toLowerCase() !== "archived"
+      );
       const processedRefs = buildProcessedEmailRefs(orders);
       const nextInboxItems = filterProcessedInboxItems(nextState?.inboxItems || [], processedRefs);
       if (Array.isArray(orders)) {
@@ -796,7 +1612,8 @@ export default function WorkspacePage({
 
   const loadOrdersForLinking = React.useCallback(async () => {
     try {
-      const orders = await fetchOrdersForLinking();
+      const raw = await fetchOrdersForLinking();
+      const orders = raw.filter((o) => String(o?.status || "").toLowerCase() !== "archived");
       const processedRefs = buildProcessedEmailRefs(orders);
       setOrdersForLinking(orders);
       setWorkspaceState((prev) => {
@@ -810,6 +1627,29 @@ export default function WorkspacePage({
       setOrdersForLinking([]);
     }
   }, []);
+
+  const removeInboxFromSpailaStorage = React.useCallback(async (item) => {
+    const emailId = getInboxItemId(item);
+    if (!emailId) {
+      return { ok: false, error: "Email id is missing.", workspaceOnly: false };
+    }
+    const link = isInboxEmailLinkedToOrder(item, ordersForLinking);
+    if (link.linked) {
+      console.log("[WORKSPACE_REMOVE]", {
+        email_id: emailId,
+        linked_order_id: link.linked_order_id || "",
+        action: "hidden_only",
+      });
+      const result = await window.parserApp?.hideInboxWorkspaceOnly?.({
+        emailId,
+        email_id: emailId,
+        imap_uid: item?.imap_uid,
+      });
+      return { ok: !!result?.ok, error: result?.error, workspaceOnly: true };
+    }
+    const result = await window.parserApp?.hideInboxItem?.({ emailId });
+    return { ok: !!result?.ok, error: result?.error, workspaceOnly: false };
+  }, [ordersForLinking]);
 
   const checkImapConnection = React.useCallback(async ({ showError = false } = {}) => {
     if (!workspaceState?.imapConfigured) {
@@ -871,6 +1711,11 @@ export default function WorkspacePage({
       }
       await loadWorkspace();
       await checkImapConnection();
+      try {
+        window.dispatchEvent(new CustomEvent("order-thread-updated", { detail: {} }));
+      } catch (_) {
+        /* ignore */
+      }
       return true;
     } catch (nextError) {
       await checkImapConnection();
@@ -885,6 +1730,28 @@ export default function WorkspacePage({
   }, [checkImapConnection, imapConnected, loadWorkspace, workspaceState?.imapConfigured]);
 
   const inboxItems = workspaceState?.inboxItems || [];
+  const displayInboxItems = React.useMemo(() => {
+    const out = [];
+    for (const item of inboxItems) {
+      const emailId = getInboxItemId(item);
+      const imapUid = String(item?.imap_uid || "").trim();
+      if ((emailId && pendingRemovals[emailId]) || (imapUid && pendingRemovals[imapUid])) {
+        console.log("[INBOX_FILTER]", { email_id: emailId || "(unknown)", reason: "pending_removal" });
+        continue;
+      }
+      const { handled, reason } = getInboxItemHandledState(item, ordersForLinking);
+      if (handled) {
+        console.log("[INBOX_FILTER]", { email_id: emailId || "(unknown)", reason });
+        continue;
+      }
+      out.push(item);
+    }
+    return out;
+  }, [inboxItems, ordersForLinking, pendingRemovals]);
+  const displayInboxIdKey = React.useMemo(
+    () => displayInboxItems.map(getInboxItemId).filter(Boolean).join("|"),
+    [displayInboxItems],
+  );
   const sentMessages = workspaceState?.sentMessages || [];
   const buckets = workspaceState?.buckets || [];
   const inboxPath = workspaceState?.inboxPath || buckets.find((item) => item.key === "Inbox")?.path || "";
@@ -894,22 +1761,89 @@ export default function WorkspacePage({
   const lastUpdatedLabel = formatLastUpdated(lastInboxFetchAt, clockTick);
   const showInboxEmptyState = !loading && inboxItems.length === 0 && sentMessages.length === 0;
   const displayInboxPath = inboxPath || "C:\\Spaila\\Inbox";
-  const inboxModeItems = inboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
+  const inboxModeItems = displayInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
   const sentItems = sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound");
-  const checkedInboxItems = inboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
-  const selectedInboxItem = inboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null;
+  const checkedInboxItems = displayInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
+  const selectedInboxItem = displayInboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null;
   const selectedSentItem = sentItems.find((item) => getMessageId(item) === selectedSentId) || null;
   const selectedMailboxItem = mode === "sent" ? selectedSentItem : selectedInboxItem;
   const selectedOrderLinkState = buildOrderLinkState(selectedMailboxItem, ordersForLinking);
   const selectedMessageClassification = mode === "inbox" ? getMessageClassification(selectedInboxItem, selectedOrderLinkState) : null;
   const selectedEmailAttachments = getEmailAttachments(selectedMailboxItem);
-  const inboxContextMenuItem = inboxItems.find((item) => getInboxItemId(item) === inboxContextMenu?.emailId) || null;
+  const selectedLinkedOrder = selectedOrderLinkState.linkedOrder || null;
+  const selectedLinkedOrderNumber = normalizeOrderNumber(selectedLinkedOrder?.order_number);
+  const selectedLinkedSentMessages = selectedLinkedOrderNumber
+    ? sentMessages
+      .filter((message) => normalizeOrderNumber(message?.order_number) === selectedLinkedOrderNumber)
+      .map((message) => normalizeSelectedOrderSentMessage(message, selectedLinkedOrder))
+    : [];
+  const selectedMailboxSubjectKey = normalizeConversationSubject(selectedMailboxItem?.subject || "");
+  const selectedMailboxParticipant = getMailboxParticipantAddress(selectedMailboxItem, mode);
+  const selectedSubjectSentMessages = selectedMailboxSubjectKey
+    ? sentMessages
+      .filter((message) => {
+        const subjectMatches = normalizeConversationSubject(message?.subject || "") === selectedMailboxSubjectKey;
+        if (!subjectMatches) return false;
+        if (!selectedMailboxParticipant) return true;
+        const sentTo = String(message?.to || message?.buyer_email || "").trim().toLowerCase();
+        return !!sentTo && sentTo.includes(selectedMailboxParticipant);
+      })
+      .map((message) => normalizeSelectedOrderSentMessage(message, selectedLinkedOrder || {}))
+    : [];
+  const selectedMailboxThreadMessages = selectedMailboxItem
+    ? dedupeMessages([
+      normalizeSelectedMailboxMessage(selectedMailboxItem, selectedLinkedOrder, mode),
+      ...(Array.isArray(selectedLinkedOrder?.messages) ? selectedLinkedOrder.messages : [])
+        .map((message) => normalizePersistedOrderMessage(message, selectedLinkedOrder)),
+      ...selectedLinkedSentMessages,
+      ...selectedSubjectSentMessages,
+    ]).sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")))
+    : [];
+  const inboxContextMenuItem = displayInboxItems.find((item) => getInboxItemId(item) === inboxContextMenu?.emailId) || null;
   const inboxContextOrderLinkState = buildOrderLinkState(inboxContextMenuItem, ordersForLinking);
-  const visibleInboxIdKey = inboxItems.map(getInboxItemId).filter(Boolean).join("|");
   const threadItems = threadState.threads || [];
   const unlinkedMessages = threadState.unlinkedMessages || [];
   const selectedThread = threadItems.find((thread) => thread.thread_id === selectedThreadId) || null;
   const selectedThreadMessages = selectedThread?.messages || [];
+  const currentConversationKey = selectedThread
+    ? `thread:${selectedThread.thread_id}`
+    : selectedMailboxItem
+      ? `email:${mode}:${getMessageId(selectedMailboxItem) || getInboxItemId(selectedMailboxItem)}`
+      : "";
+  const currentConversationReplies = currentConversationKey ? replyMessagesByConversation[currentConversationKey] || [] : [];
+  const selectedThreadMessagesWithReplies = selectedThread
+    ? dedupeConversationMessages([...selectedThreadMessages, ...currentConversationReplies])
+    : selectedThreadMessages;
+  const selectedMailboxReplies = !selectedThread && selectedMailboxItem ? currentConversationReplies : [];
+  const selectedMailboxThreadMessagesWithReplies = selectedMailboxThreadMessages.length
+    ? dedupeConversationMessages([...selectedMailboxThreadMessages, ...selectedMailboxReplies])
+    : [];
+  const assignableOrders = React.useMemo(() => {
+    const q = assignToOrderQuery.trim().toLowerCase();
+    const byId = new Map();
+    for (const row of ordersForLinking || []) {
+      const oid = String(row?.order_id || row?.id || "").trim();
+      if (!oid || byId.has(oid)) continue;
+      byId.set(oid, row);
+    }
+    let rows = [...byId.values()];
+    if (q) {
+      rows = rows.filter((row) => {
+        const name = String(row?.buyer_name || "").toLowerCase();
+        const num = String(row?.order_number || "").toLowerCase();
+        return name.includes(q) || num.includes(q);
+      });
+    }
+    return rows.slice(0, 200);
+  }, [ordersForLinking, assignToOrderQuery]);
+  const activeReplyOrder = selectedThread?.order || selectedLinkedOrder || null;
+  const displayShopName = String(shopConfig.shop_name || shopConfig.shopName || "").trim() || "Your Workspace";
+  const conversationStackStyle = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 20,
+  };
 
   function updateInboxOrderLearningState(emailId, updates) {
     setWorkspaceState((prev) => {
@@ -936,12 +1870,88 @@ export default function WorkspacePage({
   }, [loadOrdersForLinking, loadWorkspace]);
 
   React.useEffect(() => {
-    const built = buildThreadsFromMessages(inboxItems, sentMessages, ordersForLinking);
+    if (loading || hasRestoredSelectionRef.current) return;
+    hasRestoredSelectionRef.current = true;
+    const savedThreadId = getLocalStorageValue(WORKSPACE_SELECTED_THREAD_ID_KEY);
+    const savedEmailId = getLocalStorageValue(WORKSPACE_SELECTED_EMAIL_ID_KEY);
+    const savedSentId = getLocalStorageValue(WORKSPACE_SELECTED_SENT_ID_KEY);
+
+    if (savedThreadId && threadItems.some((thread) => thread.thread_id === savedThreadId)) {
+      setSelectedThreadId(savedThreadId);
+      setSelectedEmailId("");
+      setSelectedSentId("");
+      setMode("inbox");
+    } else if (savedEmailId && displayInboxItems.some((item) => getInboxItemId(item) === savedEmailId)) {
+      setSelectedEmailId(savedEmailId);
+      setSelectedThreadId("");
+      setSelectedSentId("");
+      setMode("inbox");
+    } else if (savedSentId && sentItems.some((item) => getMessageId(item) === savedSentId)) {
+      setSelectedSentId(savedSentId);
+      setSelectedEmailId("");
+      setSelectedThreadId("");
+      setMode("sent");
+    } else {
+      return;
+    }
+
+    const savedScrollTop = Number(getLocalStorageValue(WORKSPACE_SCROLL_Y_KEY));
+    if (!Number.isNaN(savedScrollTop) && savedScrollTop > 0) {
+      window.requestAnimationFrame(() => {
+        const node = previewScrollRef.current;
+        if (node) {
+          node.scrollTop = savedScrollTop;
+        }
+      });
+    }
+  }, [displayInboxItems, loading, sentItems, threadItems]);
+
+  React.useEffect(() => {
+    if (selectedThreadId) {
+      setLocalStorageValue(WORKSPACE_SELECTED_THREAD_ID_KEY, selectedThreadId);
+      setLocalStorageValue(WORKSPACE_SELECTED_EMAIL_ID_KEY, "");
+      setLocalStorageValue(WORKSPACE_SELECTED_SENT_ID_KEY, "");
+      return;
+    }
+    if (selectedEmailId) {
+      setLocalStorageValue(WORKSPACE_SELECTED_EMAIL_ID_KEY, selectedEmailId);
+      setLocalStorageValue(WORKSPACE_SELECTED_THREAD_ID_KEY, "");
+      setLocalStorageValue(WORKSPACE_SELECTED_SENT_ID_KEY, "");
+      return;
+    }
+    if (selectedSentId) {
+      setLocalStorageValue(WORKSPACE_SELECTED_SENT_ID_KEY, selectedSentId);
+      setLocalStorageValue(WORKSPACE_SELECTED_THREAD_ID_KEY, "");
+      setLocalStorageValue(WORKSPACE_SELECTED_EMAIL_ID_KEY, "");
+    }
+  }, [selectedEmailId, selectedSentId, selectedThreadId]);
+
+  React.useEffect(() => {
+    const node = previewScrollRef.current;
+    if (!node) return undefined;
+    const handleScroll = () => {
+      setLocalStorageValue(WORKSPACE_SCROLL_Y_KEY, String(node.scrollTop || 0));
+    };
+    node.addEventListener("scroll", handleScroll, { passive: true });
+    return () => node.removeEventListener("scroll", handleScroll);
+  }, [selectedEmailId, selectedSentId, selectedThreadId]);
+
+  React.useEffect(() => {
+    function handleShopConfigChange() {
+      setShopConfig(loadShopConfig());
+    }
+
+    window.addEventListener("spaila:shopconfig", handleShopConfigChange);
+    return () => window.removeEventListener("spaila:shopconfig", handleShopConfigChange);
+  }, []);
+
+  React.useEffect(() => {
+    const built = buildThreadsFromMessages(displayInboxItems, sentMessages, ordersForLinking);
     setThreadState((prev) => ({
       threads: mergeThreads(prev.threads, built.threads),
       unlinkedMessages: mergeUnlinkedMessages(prev.unlinkedMessages, built.unlinkedMessages),
     }));
-  }, [visibleInboxIdKey, sentMessages, ordersForLinking]);
+  }, [displayInboxIdKey, sentMessages, ordersForLinking]);
 
   React.useEffect(() => {
     if (selectedThreadId && !threadItems.some((thread) => thread.thread_id === selectedThreadId)) {
@@ -972,7 +1982,7 @@ export default function WorkspacePage({
   }, [inboxItems.length]);
 
   React.useEffect(() => {
-    const visibleIds = new Set(inboxItems.map(getInboxItemId).filter(Boolean));
+    const visibleIds = new Set(displayInboxItems.map(getInboxItemId).filter(Boolean));
     setCheckedEmailIds((current) => {
       const nextValues = [...current].filter((emailId) => visibleIds.has(emailId));
       if (nextValues.length === current.size) {
@@ -986,7 +1996,7 @@ export default function WorkspacePage({
     if (inboxContextMenu?.emailId && !visibleIds.has(inboxContextMenu.emailId)) {
       setInboxContextMenu(null);
     }
-  }, [visibleInboxIdKey, selectedEmailId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [displayInboxIdKey, selectedEmailId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
     setPreviewMode("clean");
@@ -997,6 +2007,10 @@ export default function WorkspacePage({
     setPreviewMode("clean");
     setPreviewContextMenu(null);
   }, [selectedSentId, mode]);
+
+  React.useEffect(() => {
+    closeOrderFilePicker();
+  }, [selectedEmailId, selectedSentId, selectedThreadId]);
 
   React.useEffect(() => {
     if (!inboxContextMenu) return undefined;
@@ -1079,6 +2093,250 @@ export default function WorkspacePage({
 
   async function handleRefreshInbox() {
     await fetchInbox({ manual: true, reason: "manual" });
+  }
+
+  async function handleOpenAttachment(attachment) {
+    try {
+      const result = await window.parserApp?.openAttachment?.({ attachment });
+      if (!result?.ok) {
+        setDropMessage(result?.error || "Could not open attachment.");
+      }
+    } catch (nextError) {
+      setDropMessage(nextError.message || "Could not open attachment.");
+    }
+  }
+
+  async function handleAttachInlineReplyFiles(files) {
+    const nextAttachments = await Promise.all((files || []).map(async (file) => {
+      let filePath = "";
+      try {
+        filePath = window.parserApp?.getFilePath?.(file) || "";
+      } catch (_error) {
+        filePath = "";
+      }
+      return {
+        name: file.name || "Attachment",
+        size: file.size || 0,
+        lastModified: file.lastModified || 0,
+        path: filePath,
+      };
+    }));
+    setAttachments((current) => [...current, ...nextAttachments]);
+  }
+
+  function closeOrderFilePicker() {
+    setOrderFilePicker((current) => ({ ...current, open: false }));
+  }
+
+  async function handleOpenOrderFilePicker() {
+    const folderPath = String(activeReplyOrder?.order_folder_path || "").trim();
+    if (!folderPath) {
+      setDropMessage("This conversation has no order folder yet.");
+      return;
+    }
+    setOrderFilePicker({ open: true, loading: true, files: [], error: "", folderPath });
+    try {
+      const result = await window.parserApp?.listAttachments?.({
+        folderPath,
+        mode: "all",
+        extensions: [],
+      });
+      if (!result) {
+        throw new Error("Could not load order files.");
+      }
+      const nextFiles = (Array.isArray(result.files) ? result.files : [])
+        .map((filePath) => {
+          const fullPath = String(filePath || "").trim();
+          const name = getFilenameFromPath(fullPath) || "Attachment";
+          const ext = name.includes(".") ? name.split(".").pop().toLowerCase() : "file";
+          return { name, path: fullPath, type: ext };
+        })
+        .filter((file) => file.path);
+      setOrderFilePicker({
+        open: true,
+        loading: false,
+        files: nextFiles,
+        error: "",
+        folderPath,
+      });
+    } catch (error) {
+      setOrderFilePicker({
+        open: true,
+        loading: false,
+        files: [],
+        error: error?.message || "Could not load order files.",
+        folderPath,
+      });
+    }
+  }
+
+  function handleAttachOrderFile(file) {
+    const filePath = String(file?.path || "").trim();
+    if (!filePath) return;
+    setAttachments((current) => {
+      if (current.some((item) => String(item.path || "").trim() === filePath)) {
+        return current;
+      }
+      return [
+        ...current,
+        {
+          name: file?.name || getFilenameFromPath(filePath) || "Attachment",
+          size: 0,
+          lastModified: 0,
+          path: filePath,
+        },
+      ];
+    });
+    closeOrderFilePicker();
+  }
+
+  function handleRemoveInlineReplyAttachment(indexToRemove) {
+    setAttachments((current) => current.filter((_file, index) => index !== indexToRemove));
+  }
+
+  function scrollConversationToBottom() {
+    window.requestAnimationFrame(() => {
+      const node = previewScrollRef.current;
+      if (node) {
+        node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+      }
+    });
+  }
+
+  function updateReplyMessage(conversationKey, messageId, updates) {
+    setReplyMessagesByConversation((current) => ({
+      ...current,
+      [conversationKey]: (current[conversationKey] || []).map((message) => (
+        message.id === messageId ? { ...message, ...updates } : message
+      )),
+    }));
+  }
+
+  async function handleSendInlineReply() {
+    if (isSendingReply) return;
+    const body = replyText;
+    const attachmentPaths = attachments.map((attachment) => String(attachment.path || "").trim()).filter(Boolean);
+    if ((!body.trim() && !attachments.length) || !currentConversationKey) return;
+    const to = getReplyTarget({ selectedThread, selectedThreadMessages, selectedMailboxItem });
+    const subject = getReplySubject({ selectedThread, selectedThreadMessages, selectedMailboxItem });
+    if (!to) {
+      setDropMessage("No reply email address found.");
+      return;
+    }
+    const from = String(shopConfig?.smtpEmailAddress || "").trim();
+    const smtpUsername = String(shopConfig?.smtpUsername || "").trim();
+    if (!from) {
+      setDropMessage("SMTP sender email is missing in Settings.");
+      return;
+    }
+    const fromDomain = getEmailDomain(from);
+    const usernameDomain = getEmailDomain(smtpUsername);
+    if (usernameDomain && fromDomain && usernameDomain !== fromDomain) {
+      setDropMessage("SMTP username must match the sender email domain.");
+      return;
+    }
+    const linkedOrder = selectedThread?.order || selectedLinkedOrder || null;
+    const linkedOrderId = linkedOrder?.order_id || linkedOrder?.id || "";
+    if (attachments.length && attachmentPaths.length !== attachments.length) {
+      setDropMessage("One or more attachments could not be read.");
+      return;
+    }
+    const optimisticId = `temp_${Date.now()}`;
+    const optimisticTimestamp = new Date().toISOString();
+    const optimisticMessage = {
+      id: optimisticId,
+      client_temp_id: optimisticId,
+      type: "outbound",
+      direction: "outbound",
+      to,
+      subject,
+      body,
+      attachments: attachmentPaths,
+      timestamp: optimisticTimestamp,
+      status: "sending",
+    };
+    setReplyMessagesByConversation((current) => ({
+      ...current,
+      [currentConversationKey]: [...(current[currentConversationKey] || []), optimisticMessage],
+    }));
+    setReplyText("");
+    setAttachments([]);
+    setIsSendingReply(true);
+    scrollConversationToBottom();
+    console.log("[SEND_DEBUG]", { from, to, subject });
+    let result;
+    try {
+      result = await window.parserApp?.sendDockEmail?.({
+        from,
+        smtp: {
+          senderName: shopConfig?.sender_name || "",
+          emailAddress: from,
+          host: shopConfig?.smtpHost || "",
+          port: shopConfig?.smtpPort || "",
+          username: smtpUsername,
+          password: shopConfig?.smtpPassword || "",
+        },
+        imap: {
+          host: shopConfig?.imapHost || "",
+          port: shopConfig?.imapPort || "993",
+          username: shopConfig?.imapUsername || "",
+          password: shopConfig?.imapPassword || "",
+          useSsl: shopConfig?.imapUseSsl !== false,
+        },
+        to,
+        subject,
+        body,
+        attachmentPaths,
+        orderFolderPath: linkedOrder?.order_folder_path || "",
+        orderNumber: selectedThread?.order_number || linkedOrder?.order_number || "",
+        buyerName: selectedThread?.buyer_name || linkedOrder?.buyer_name || "",
+        buyerEmail: selectedThread?.buyer_email || linkedOrder?.buyer_email || to,
+      });
+    } catch (error) {
+      setDropMessage(error?.message || "Could not send reply.");
+      updateReplyMessage(currentConversationKey, optimisticId, { status: "failed" });
+      setIsSendingReply(false);
+      return;
+    }
+    if (!result?.ok) {
+      setDropMessage(result?.error || "Could not send reply.");
+      updateReplyMessage(currentConversationKey, optimisticId, { status: "failed" });
+      setIsSendingReply(false);
+      return;
+    }
+    const serverMessageId = String(result.messageId || result.message_id || "").trim();
+    const message = {
+      id: serverMessageId || optimisticId,
+      message_id: serverMessageId || optimisticId,
+      client_temp_id: optimisticId,
+      type: "outbound",
+      direction: "outbound",
+      to,
+      subject,
+      body,
+      attachments: attachmentPaths,
+      timestamp: result.timestamp || new Date().toISOString(),
+      status: "sent",
+    };
+    console.log("[REPLY_SENT]", body);
+    updateReplyMessage(currentConversationKey, optimisticId, { ...message, status: "sent" });
+    setDropMessage("Reply sent.");
+    setIsSendingReply(false);
+    scrollConversationToBottom();
+    let persistedMessage = message;
+    let persistenceWarning = "";
+    if (linkedOrderId) {
+      try {
+        persistedMessage = await persistOrderMessage(linkedOrderId, message);
+      } catch (error) {
+        persistenceWarning = error?.message || "Reply sent, but could not save it to the order.";
+      }
+    }
+    if (persistenceWarning) {
+      setDropMessage(persistenceWarning);
+    } else if (persistedMessage !== message) {
+      updateReplyMessage(currentConversationKey, optimisticId, { ...persistedMessage, status: "sent" });
+    }
   }
 
   function openPreviewContextMenu(event) {
@@ -1170,17 +2428,118 @@ export default function WorkspacePage({
     onOpenOrder?.(order);
   }
 
+  function openAssignToOrderModal(itemOverride = null) {
+    const target = itemOverride || selectedInboxItem;
+    if (itemOverride && target) {
+      const id = getInboxItemId(target);
+      if (id) {
+        setSelectedEmailId(id);
+        setSelectedThreadId("");
+        setSelectedSentId("");
+        setMode("inbox");
+      }
+    }
+    setAssignToOrderQuery("");
+    setAssignToOrderPickId("");
+    setAssignToOrderOpen(true);
+  }
+
+  async function confirmAssignToOrder() {
+    const orderId = String(assignToOrderPickId || "").trim();
+    const item = selectedInboxItem;
+    if (!orderId || !item) {
+      setDropMessage("Select an order to assign this email.");
+      return;
+    }
+    const emailId = getInboxItemId(item);
+    if (!emailId) {
+      setDropMessage("Email id is missing.");
+      return;
+    }
+    const body = String(item.preview_text || item.body || item.preview || "").trim();
+    const subject = String(item.subject || "").trim();
+    const sender = String(item.sender || item.from || item.reply_to || "").trim();
+    const timestamp = String(item.timestamp || item.received_at || "").trim() || new Date().toISOString();
+    const messageId = String(item.message_id || "").trim();
+    if (!body && !subject) {
+      setDropMessage("This email has no subject or body text to save.");
+      return;
+    }
+    setAssignToOrderBusy(true);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8055/orders/${encodeURIComponent(orderId)}/messages/manual-assign`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email_id: emailId,
+            subject,
+            body,
+            sender,
+            timestamp,
+            ...(messageId ? { message_id: messageId } : {}),
+          }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = payload?.detail;
+        const msg = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d) => d?.msg || d).join(", ") : payload?.error;
+        throw new Error(msg || `Server error ${response.status}`);
+      }
+      if (payload?.status === "duplicate") {
+        setDropMessage("That email is already on this order's conversation.");
+        setAssignToOrderOpen(false);
+        return;
+      }
+      const persistLink = await window.parserApp?.setInboxLinkedOrder?.({
+        item: { email_id: emailId, emailId },
+        order_id: orderId,
+      });
+      await loadWorkspace();
+      await loadOrdersForLinking();
+      if (!persistLink?.ok) {
+        updateInboxOrderLearningState(emailId, { linked_order_id: orderId });
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("order-thread-updated", { detail: { order_id: orderId } }));
+      } catch (_e) {
+        /* ignore */
+      }
+      setDropMessage("Email assigned to order.");
+      setAssignToOrderOpen(false);
+    } catch (err) {
+      setDropMessage(err?.message || "Could not assign email to order.");
+    } finally {
+      setAssignToOrderBusy(false);
+    }
+  }
+
   async function handleRemoveInboxItem(item) {
     const emailId = getInboxItemId(item);
     if (!emailId) {
       setDropMessage("Email id is missing.");
       return;
     }
+    const imapUid = String(item?.imap_uid || "").trim();
     const previousIndex = inboxItems.findIndex((candidate) => getInboxItemId(candidate) === emailId);
+    setPendingRemovals((prev) => {
+      const next = { ...prev };
+      next[emailId] = true;
+      if (imapUid) next[imapUid] = true;
+      return next;
+    });
     hideInboxItemInState(item);
-    const result = await window.parserApp?.hideInboxItem?.({ emailId });
+    const result = await removeInboxFromSpailaStorage(item);
     if (!result?.ok) {
       setDropMessage(result?.error || "Could not remove email from Spaila.");
+      setPendingRemovals((prev) => {
+        const next = { ...prev };
+        delete next[emailId];
+        if (imapUid) delete next[imapUid];
+        return next;
+      });
       setWorkspaceState((prev) => {
         if (!prev?.inboxItems || prev.inboxItems.some((candidate) => getInboxItemId(candidate) === emailId)) {
           return prev;
@@ -1195,7 +2554,17 @@ export default function WorkspacePage({
         return { ...prev, inboxItems: inboxItemsWithRestoredItem };
       });
     } else {
-      setDropMessage("Email removed from Spaila.");
+      setPendingRemovals((prev) => {
+        const next = { ...prev };
+        delete next[emailId];
+        if (imapUid) delete next[imapUid];
+        return next;
+      });
+      setDropMessage(
+        result.workspaceOnly
+          ? "Email hidden from Inbox. It stays on the order conversation."
+          : "Email removed from Spaila.",
+      );
     }
   }
 
@@ -1227,7 +2596,7 @@ export default function WorkspacePage({
         throw new Error(payload?.detail || payload?.error || "Could not delete email from account.");
       }
       hideInboxItemInState(item);
-      await window.parserApp?.hideInboxItem?.({ emailId });
+      await removeInboxFromSpailaStorage(item);
       setDropMessage("Email deleted from account.");
     } catch (nextError) {
       await checkImapConnection();
@@ -1332,14 +2701,31 @@ export default function WorkspacePage({
   async function handleBulkRemove() {
     if (!checkedInboxItems.length) return;
     const itemsToRemove = [...checkedInboxItems];
+    setPendingRemovals((prev) => {
+      const next = { ...prev };
+      for (const item of itemsToRemove) {
+        const eid = getInboxItemId(item);
+        const uid = String(item?.imap_uid || "").trim();
+        if (eid) next[eid] = true;
+        if (uid) next[uid] = true;
+      }
+      return next;
+    });
     for (const item of itemsToRemove) {
       hideInboxItemInState(item);
     }
     for (const item of itemsToRemove) {
       const emailId = getInboxItemId(item);
+      const imapUid = String(item?.imap_uid || "").trim();
       if (emailId) {
-        await window.parserApp?.hideInboxItem?.({ emailId });
+        await removeInboxFromSpailaStorage(item);
       }
+      setPendingRemovals((prev) => {
+        const next = { ...prev };
+        if (emailId) delete next[emailId];
+        if (imapUid) delete next[imapUid];
+        return next;
+      });
     }
     setDropMessage(`${itemsToRemove.length} email${itemsToRemove.length === 1 ? "" : "s"} removed from Spaila.`);
   }
@@ -1374,7 +2760,7 @@ export default function WorkspacePage({
         }
         deleted += 1;
         hideInboxItemInState(item);
-        await window.parserApp?.hideInboxItem?.({ emailId });
+        await removeInboxFromSpailaStorage(item);
       } catch (nextError) {
         await checkImapConnection();
         setDropMessage(nextError.message || "Could not delete email from account.");
@@ -1660,47 +3046,71 @@ export default function WorkspacePage({
   }
 
   function renderTimelineMessage(message) {
-    const isOutbound = message.direction === "outbound";
+    const isOutbound = (message.direction || message.type) === "outbound";
+    const outboundStatus = isOutbound ? String(message.status || "sent") : "";
     const orderLinkState = buildOrderLinkState(message, ordersForLinking);
     const attachments = getEmailAttachments(message);
+    const contentText = String(message.preview_text || message.body || message.preview || "").trim();
+    const fallbackText = attachments.length ? "Attachment sent" : "";
+    const displayText = contentText || fallbackText;
+    const inboundLabel = String(
+      message.sender
+      || message.from
+      || message.reply_to
+      || message.buyer_name
+      || message.buyer_email
+      || ""
+    ).trim();
+    const bubbleLabel = isOutbound ? "You" : inboundLabel || "Unknown sender";
     return (
-      <div key={message.id} style={{ display: "flex", justifyContent: isOutbound ? "flex-end" : "flex-start", marginBottom: 18 }}>
+      <div
+        key={message.id}
+        className={isOutbound ? "message-outbound" : "message-inbound"}
+        style={{
+          alignSelf: isOutbound ? "flex-end" : "flex-start",
+          maxWidth: isOutbound ? "92%" : "90%",
+          marginLeft: isOutbound ? "auto" : 0,
+          marginRight: isOutbound ? 0 : "auto",
+          width: "auto",
+        }}
+      >
+        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4, fontWeight: 600 }}>
+          {bubbleLabel}
+        </div>
         <div style={{
-          maxWidth: "78%",
-          border: `1px solid ${isOutbound ? "#bbf7d0" : "#dbeafe"}`,
-          background: isOutbound ? "#f0fdf4" : "#ffffff",
-          borderRadius: isOutbound ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-          padding: "14px 16px",
-          boxShadow: "0 8px 20px rgba(15, 23, 42, 0.05)",
+          background: isOutbound ? "#e7efff" : "#f3f7f5",
+          border: isOutbound ? "1px solid #c6d7ff" : "1px solid #e1ebe6",
+          color: isOutbound ? "#1f2937" : "#0f172a",
+          borderRadius: isOutbound ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+          padding: "11px 12px",
+          boxShadow: "0 6px 16px rgba(15, 23, 42, 0.06)",
+        }}
+      >
+        {previewMode === "original" && message.preview_html && contentText ? (
+          <div
+            style={{ color: isOutbound ? "#1f2937" : "#334155", fontSize: 14, lineHeight: 1.6, wordBreak: "break-word", overflowWrap: "anywhere" }}
+            dangerouslySetInnerHTML={{ __html: message.preview_html }}
+          />
+        ) : displayText ? (
+          <div style={{ color: isOutbound ? "#1f2937" : "#1f2937", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 0 }}>
+            {renderReadableMessageBody(displayText, orderLinkState, handleOpenLinkedOrder)}
+          </div>
+        ) : null}
+        <AttachmentList attachments={attachments} onOpen={handleOpenAttachment} compact />
+        <div style={{
+          marginTop: 8,
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 8,
+          fontSize: 11,
+          color: outboundStatus === "failed" ? "#b91c1c" : isOutbound ? "#475569" : "#94a3b8",
+          fontWeight: 700,
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", marginBottom: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: isOutbound ? "#166534" : "#1d4ed8" }}>
-              {isOutbound ? "Outbound" : "Inbound"}
-            </div>
-            <div style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{formatTimestamp(message.timestamp)}</div>
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 4, overflowWrap: "anywhere" }}>
-            {message.subject || "(No subject)"}
-          </div>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
-            {isOutbound ? `To: ${message.to || "(Unknown recipient)"}` : `From: ${message.sender || message.from || "(Unknown sender)"}`}
-          </div>
-          {previewMode === "original" && message.preview_html ? (
-            <div style={{ color: "#334155", fontSize: 14, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: message.preview_html }} />
-          ) : (
-            <div style={{ color: "#1f2937", fontSize: 14, lineHeight: 1.65 }}>
-              {renderReadableMessageBody(message.preview_text || message.body || message.preview || "(No preview available)", orderLinkState, handleOpenLinkedOrder)}
-            </div>
-          )}
-          {attachments.length ? (
-            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {attachments.map((attachment, index) => (
-                <span key={`${message.id}-${attachment}-${index}`} style={{ display: "inline-flex", alignItems: "center", border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 999, padding: "4px 9px", fontSize: 11, fontWeight: 700 }}>
-                  {String(attachment).split(/[/\\]/).pop()}
-                </span>
-              ))}
-            </div>
+          {isOutbound ? (
+            <span>{outboundStatus === "sending" ? "Sending..." : outboundStatus === "failed" ? "Failed" : "Sent"}</span>
           ) : null}
+          <span>{formatTimestamp(message.timestamp)}</span>
+        </div>
         </div>
       </div>
     );
@@ -1714,6 +3124,7 @@ export default function WorkspacePage({
         onSelectTab={onOrders}
         activeCount={activeCount}
         completedCount={completedCount}
+        archivedCount={archivedCount}
         selectedNav="workspace"
         rightContent={
           <>
@@ -1954,9 +3365,9 @@ export default function WorkspacePage({
           style={{ ...panelStyle, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           {!selectedMailboxItem && !selectedThread ? (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 28, color: "#64748b", fontSize: 16, fontWeight: 700 }}>
-              Select an email to preview
-            </div>
+            <WorkspaceIdentityPanel
+              shopName={displayShopName}
+            />
           ) : selectedThread ? (
             <>
               <div style={{ padding: "14px 18px 18px", borderBottom: "1px solid #e5e7eb", background: "#ffffff" }}>
@@ -1970,7 +3381,7 @@ export default function WorkspacePage({
                   <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 14, color: "#6b7280" }}>
                     <span>{selectedThread.buyer_name || selectedThread.buyer_email || "Customer"}</span>
                     <span>•</span>
-                    <span>{selectedThreadMessages.length} message{selectedThreadMessages.length === 1 ? "" : "s"}</span>
+                    <span>{selectedThreadMessagesWithReplies.length} message{selectedThreadMessagesWithReplies.length === 1 ? "" : "s"}</span>
                     <span>•</span>
                     <span>{formatTimestamp(selectedThread.last_message_timestamp)}</span>
                   </div>
@@ -1994,8 +3405,23 @@ export default function WorkspacePage({
                   </button>
                 </div>
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "24px 28px", background: "#ffffff" }}>
-                {selectedThreadMessages.map(renderTimelineMessage)}
+              <div ref={previewScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 18px", background: "#ffffff" }}>
+                <div style={conversationStackStyle}>
+                  {selectedThreadMessagesWithReplies.map(renderTimelineMessage)}
+                </div>
+                <InlineReplyBox
+                  value={replyText}
+                  onChange={setReplyText}
+                  onSend={handleSendInlineReply}
+                  attachments={attachments}
+                  onAttachFiles={handleAttachInlineReplyFiles}
+                  onAttachOrderFiles={handleOpenOrderFilePicker}
+                  onSelectOrderFile={handleAttachOrderFile}
+                  onCloseOrderFilePicker={closeOrderFilePicker}
+                  orderFilePicker={orderFilePicker}
+                  onRemoveAttachment={handleRemoveInlineReplyAttachment}
+                  isSending={isSendingReply}
+                />
               </div>
             </>
           ) : (
@@ -2038,6 +3464,22 @@ export default function WorkspacePage({
                           }}
                         >
                           Reply in Email
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openAssignToOrderModal}
+                          style={{
+                            border: "1px solid #e0e7ff",
+                            background: "#fff",
+                            color: "#4338ca",
+                            borderRadius: 7,
+                            padding: "5px 8px",
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 700,
+                          }}
+                        >
+                          Assign to Order
                         </button>
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -2163,47 +3605,51 @@ export default function WorkspacePage({
                 </button>
                 </div>
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "24px 28px", background: "#ffffff" }}>
-                {previewMode === "original" && selectedMailboxItem.preview_html ? (
-                  <div
-                    style={{ maxWidth: 860, color: "#334155", fontSize: 14, lineHeight: 1.6 }}
-                    dangerouslySetInnerHTML={{ __html: selectedMailboxItem.preview_html }}
-                  />
-                ) : (
-                  <div style={{ maxWidth: 860 }}>
-                    {renderReadableMessageBody(
-                      selectedMailboxItem.preview_text || selectedMailboxItem.body || selectedMailboxItem.preview || "(No preview available)",
-                      selectedOrderLinkState,
-                      handleOpenLinkedOrder
-                    )}
+              <div ref={previewScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 18px", background: "#ffffff" }}>
+                {selectedMailboxThreadMessagesWithReplies.length ? (
+                  <div style={conversationStackStyle}>
+                    {selectedMailboxThreadMessagesWithReplies.map(renderTimelineMessage)}
                   </div>
+                ) : (
+                  <>
+                    {previewMode === "original" && selectedMailboxItem.preview_html ? (
+                      <div
+                        style={{ maxWidth: "100%", color: "#334155", fontSize: 14, lineHeight: 1.6, wordBreak: "break-word", overflowWrap: "anywhere" }}
+                        dangerouslySetInnerHTML={{ __html: selectedMailboxItem.preview_html }}
+                      />
+                    ) : (
+                      <div style={{ maxWidth: "100%", minWidth: 0 }}>
+                        {renderReadableMessageBody(
+                          selectedMailboxItem.preview_text || selectedMailboxItem.body || selectedMailboxItem.preview || "(No preview available)",
+                          selectedOrderLinkState,
+                          handleOpenLinkedOrder
+                        )}
+                      </div>
+                    )}
+                    {selectedMailboxReplies.length ? (
+                      <div style={conversationStackStyle}>
+                        {selectedMailboxReplies.map(renderTimelineMessage)}
+                      </div>
+                    ) : null}
+                  </>
                 )}
+                <InlineReplyBox
+                  value={replyText}
+                  onChange={setReplyText}
+                  onSend={handleSendInlineReply}
+                  attachments={attachments}
+                  onAttachFiles={handleAttachInlineReplyFiles}
+                  onAttachOrderFiles={handleOpenOrderFilePicker}
+                  onSelectOrderFile={handleAttachOrderFile}
+                  onCloseOrderFilePicker={closeOrderFilePicker}
+                  orderFilePicker={orderFilePicker}
+                  onRemoveAttachment={handleRemoveInlineReplyAttachment}
+                  isSending={isSendingReply}
+                />
               </div>
               {selectedEmailAttachments.length ? (
                 <div style={{ borderTop: "1px solid #f1f5f9", padding: "12px 18px", background: "#f8fafc" }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                    Attachments
-                  </div>
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {selectedEmailAttachments.map((attachment, index) => (
-                      <span
-                        key={`${attachment}-${index}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          border: "1px solid #e2e8f0",
-                          background: "#fff",
-                          color: "#475569",
-                          borderRadius: 999,
-                          padding: "5px 10px",
-                          fontSize: 12,
-                          fontWeight: 700,
-                        }}
-                      >
-                        {String(attachment).split(/[/\\]/).pop()}
-                      </span>
-                    ))}
-                  </div>
+                  <AttachmentList attachments={selectedEmailAttachments} onOpen={handleOpenAttachment} />
                 </div>
               ) : null}
             </>
@@ -2265,6 +3711,9 @@ export default function WorkspacePage({
               <div style={{ height: 1, background: "#f1f5f9", margin: "4px 0" }} />
               <PreviewMenuItem onClick={() => runInboxContextAction(() => handleMarkInboxOrder(inboxContextMenuItem))}>
                 Mark as Order
+              </PreviewMenuItem>
+              <PreviewMenuItem onClick={() => runInboxContextAction(() => openAssignToOrderModal(inboxContextMenuItem))}>
+                Assign to Order
               </PreviewMenuItem>
               {inboxContextMenuItem.order_not_order !== true ? (
                 <PreviewMenuItem onClick={() => runInboxContextAction(() => handleMarkInboxNotOrder(inboxContextMenuItem))}>
@@ -2337,6 +3786,9 @@ export default function WorkspacePage({
               <PreviewMenuItem onClick={() => runPreviewContextAction(() => handleMarkInboxOrder(selectedInboxItem))}>
                 Mark as Order
               </PreviewMenuItem>
+              <PreviewMenuItem onClick={() => runPreviewContextAction(() => openAssignToOrderModal())}>
+                Assign to Order
+              </PreviewMenuItem>
               {selectedInboxItem.order_not_order !== true ? (
                 <PreviewMenuItem onClick={() => runPreviewContextAction(() => handleMarkInboxNotOrder(selectedInboxItem))}>
                   Mark as Not Order
@@ -2360,6 +3812,140 @@ export default function WorkspacePage({
               </PreviewMenuItem>
             </>
           ) : null}
+        </div>
+      ) : null}
+      {assignToOrderOpen ? (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            zIndex: 2000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => !assignToOrderBusy && setAssignToOrderOpen(false)}
+          onKeyDown={(e) => e.key === "Escape" && !assignToOrderBusy && setAssignToOrderOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="assign-order-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(480px, 100%)",
+              maxHeight: "min(560px, 90vh)",
+              background: "#fff",
+              borderRadius: 12,
+              boxShadow: "0 24px 48px rgba(15, 23, 42, 0.2)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ padding: "16px 18px", borderBottom: "1px solid #e5e7eb" }}>
+              <div id="assign-order-title" style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>
+                Assign email to order
+              </div>
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, lineHeight: 1.45 }}>
+                {String(selectedInboxItem?.subject || "(No subject)").slice(0, 120)}
+                {String(selectedInboxItem?.subject || "").length > 120 ? "…" : ""}
+              </div>
+            </div>
+            <div style={{ padding: "12px 18px", borderBottom: "1px solid #f1f5f9" }}>
+              <label htmlFor="assign-order-search" style={{ fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 6 }}>
+                Search by buyer name or order number
+              </label>
+              <input
+                id="assign-order-search"
+                autoFocus
+                value={assignToOrderQuery}
+                onChange={(e) => setAssignToOrderQuery(e.target.value)}
+                placeholder="Type to filter…"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: "1px solid #d1d5db",
+                  fontSize: 14,
+                }}
+              />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "8px 10px" }}>
+              {assignableOrders.length ? (
+                assignableOrders.map((row) => {
+                  const oid = String(row?.order_id || row?.id || "").trim();
+                  const picked = oid === assignToOrderPickId;
+                  return (
+                    <button
+                      key={oid}
+                      type="button"
+                      onClick={() => setAssignToOrderPickId(oid)}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "10px 12px",
+                        marginBottom: 6,
+                        borderRadius: 8,
+                        border: picked ? "1px solid #6366f1" : "1px solid #e5e7eb",
+                        background: picked ? "#eef2ff" : "#fff",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                        {String(row?.order_number || "").trim() || "—"}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        {String(row?.buyer_name || "").trim() || "—"}
+                        {row?.buyer_email ? ` · ${row.buyer_email}` : ""}
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div style={{ padding: 16, fontSize: 13, color: "#64748b" }}>No orders match your search.</div>
+              )}
+            </div>
+            <div style={{ padding: "14px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button
+                type="button"
+                disabled={assignToOrderBusy}
+                onClick={() => setAssignToOrderOpen(false)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "1px solid #d1d5db",
+                  background: "#fff",
+                  cursor: assignToOrderBusy ? "not-allowed" : "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={assignToOrderBusy || !assignToOrderPickId}
+                onClick={() => confirmAssignToOrder()}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: assignToOrderBusy || !assignToOrderPickId ? "#94a3b8" : "#4338ca",
+                  color: "#fff",
+                  cursor: assignToOrderBusy || !assignToOrderPickId ? "not-allowed" : "pointer",
+                  fontSize: 13,
+                  fontWeight: 700,
+                }}
+              >
+                {assignToOrderBusy ? "Saving…" : "Assign"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

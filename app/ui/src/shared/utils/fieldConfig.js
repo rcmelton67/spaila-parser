@@ -509,6 +509,10 @@ export const DEFAULT_SAVE_FOLDER = "C:\\Spaila\\Backup";
 
 export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
+  /** @type {number | null} Days after last activity before auto-archiving; null = off */
+  autoArchiveDays: null,
+  /** Absolute path for archived order folders; empty = backend default (e.g. C:\\Spaila\\archive) */
+  orderArchiveRoot: "",
   saveFolder:    DEFAULT_SAVE_FOLDER,
   showEmailIcon: true, // show ✉ icon in buyer_name cells
   sender_name: "",
@@ -524,6 +528,22 @@ export const DEFAULT_SHOP_CONFIG = {
   imapUseSsl: true,
   imapFetchLimit: "20",
 };
+
+function persistOrderArchiveSettings(config) {
+  try {
+    if (typeof window === "undefined" || !window.parserApp?.saveJson) {
+      return;
+    }
+    const root = String(config?.orderArchiveRoot ?? "").trim();
+    window.parserApp.saveJson({
+      folderPath: "C:\\Spaila",
+      filename: "order_archive_settings.json",
+      data: { archive_root: root },
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
 
 function persistEmailSettings(config) {
   try {
@@ -559,11 +579,16 @@ export function loadShopConfig() {
     const raw = localStorage.getItem(SHOP_CONFIG_KEY);
     if (!raw) return { ...DEFAULT_SHOP_CONFIG };
     const saved = JSON.parse(raw);
-    return {
-      ...DEFAULT_SHOP_CONFIG,
-      ...saved,
-      saveFolder: DEFAULT_SAVE_FOLDER,
-    };
+    const merged = { ...DEFAULT_SHOP_CONFIG, ...saved, saveFolder: DEFAULT_SAVE_FOLDER };
+    merged.orderArchiveRoot = String(merged.orderArchiveRoot ?? "").trim();
+    const aad = merged.autoArchiveDays;
+    if (aad === null || aad === undefined || aad === "") {
+      merged.autoArchiveDays = null;
+    } else {
+      const n = typeof aad === "number" ? aad : Number.parseInt(String(aad), 10);
+      merged.autoArchiveDays = Number.isFinite(n) && n > 0 ? n : null;
+    }
+    return merged;
   } catch {
     return { ...DEFAULT_SHOP_CONFIG };
   }
@@ -575,6 +600,7 @@ export function saveShopConfig(config) {
     saveFolder: DEFAULT_SAVE_FOLDER,
   }));
   persistEmailSettings(config);
+  persistOrderArchiveSettings(config);
   window.dispatchEvent(new CustomEvent("spaila:shopconfig"));
 }
 

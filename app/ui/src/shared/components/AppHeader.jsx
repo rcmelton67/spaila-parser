@@ -28,6 +28,7 @@ export default function AppHeader({
   onSelectTab,
   activeCount = 0,
   completedCount = 0,
+  archivedCount = 0,
   tabCounts = null,
   showCounts = true,
   selectedNav = "active",
@@ -219,6 +220,16 @@ export default function AppHeader({
               color: "#fff", borderRadius: 999, padding: "1px 7px",
               fontSize: 11, fontWeight: 700, lineHeight: "16px",
             }}>{tabCounts.completed}</span>
+          )}
+        </button>
+        <button style={navButtonStyle("archived")} onClick={() => onSelectTab?.("archived")}>
+          Archived
+          {tabCounts && (
+            <span style={{
+              marginLeft: 6, background: selectedNav === "archived" ? "#2563eb" : "#6b7280",
+              color: "#fff", borderRadius: 999, padding: "1px 7px",
+              fontSize: 11, fontWeight: 700, lineHeight: "16px",
+            }}>{tabCounts.archived}</span>
           )}
         </button>
       </div>
