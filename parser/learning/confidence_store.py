@@ -168,6 +168,64 @@ def get_currently_promoted_fields(template_id: str, source_scopes: Dict[str, str
     return frozenset(promoted)
 
 
+def reset_field(template_id: str, field: str, source: str = "") -> int:
+    """Remove confidence streaks for one field after an explicit user action."""
+    store = _load()
+    prefix = f"{template_id}:{field}:"
+    removed = 0
+    for key in list(store.keys()):
+        if not key.startswith(prefix):
+            continue
+        record = store.get(key, {})
+        if field == "quantity" and source and record.get("source", "") not in {"", source}:
+            continue
+        removed += 1
+        del store[key]
+    if removed:
+        _save(store)
+    print(
+        f"[CONF_STORE_RESET_FIELD] template={template_id[:12]} field={field} removed={removed}",
+        file=sys.stderr, flush=True,
+    )
+    return removed
+
+
+def summarize_fields(fields: set[str]) -> Dict[str, Dict]:
+    store = _load()
+    summary = {
+        field: {
+            "entries": 0,
+            "promoted": False,
+            "max_streak": 0,
+        }
+        for field in fields
+    }
+    for record in store.values():
+        field = record.get("field", "")
+        if field not in summary:
+            continue
+        streak = int(record.get("streak_count", 0) or 0)
+        summary[field]["entries"] += 1
+        summary[field]["max_streak"] = max(summary[field]["max_streak"], streak)
+        if streak >= CONFIDENCE_PROMOTION_THRESHOLD:
+            summary[field]["promoted"] = True
+    return summary
+
+
+def reset_field_everywhere(field: str) -> int:
+    """Remove confidence streaks for one field across all templates."""
+    store = _load()
+    removed = 0
+    for key in list(store.keys()):
+        if store.get(key, {}).get("field") != field:
+            continue
+        removed += 1
+        del store[key]
+    if removed:
+        _save(store)
+    return removed
+
+
 def clear_all() -> int:
     """Wipe all confidence tracking records.  Returns count of records removed."""
     store = _load()

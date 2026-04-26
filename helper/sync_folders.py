@@ -38,7 +38,6 @@ _WORKSPACE_DIRS = ensure_workspace_layout(print)
 BASE_PATH = _WORKSPACE_DIRS["root"]
 INBOX_PATH_STR = str(_WORKSPACE_DIRS["Inbox"])
 ORDERS_PATH_STR = str(_WORKSPACE_DIRS["Orders"])
-DUPLICATES_PATH_STR = str(_WORKSPACE_DIRS["Duplicates"])
 ARCHIVE_PATH_STR = str(_WORKSPACE_DIRS["Archive"])
 BACKUP_PATH_STR = str(_WORKSPACE_DIRS["Backup"])
 
@@ -47,19 +46,17 @@ ORDERS_API_URL = "http://localhost:8055/orders"
 
 def init_folders():
     """Create canonical workspace folders under the shared Spaila root."""
-    global INBOX_PATH_STR, ORDERS_PATH_STR, DUPLICATES_PATH_STR, ARCHIVE_PATH_STR, BACKUP_PATH_STR
+    global INBOX_PATH_STR, ORDERS_PATH_STR, ARCHIVE_PATH_STR, BACKUP_PATH_STR
 
     dirs = ensure_workspace_layout(print)
     INBOX_PATH_STR = str(dirs["Inbox"])
     ORDERS_PATH_STR = str(dirs["Orders"])
-    DUPLICATES_PATH_STR = str(dirs["Duplicates"])
     ARCHIVE_PATH_STR = str(dirs["Archive"])
     BACKUP_PATH_STR = str(dirs["Backup"])
 
     print(f"[INIT] Base path: {dirs['root']}")
     print(f"[INIT] Inbox: {INBOX_PATH_STR}")
     print(f"[INIT] Orders: {ORDERS_PATH_STR}")
-    print(f"[INIT] Duplicates: {DUPLICATES_PATH_STR}")
 
 
 def ensure_folder(path):
@@ -116,6 +113,48 @@ def extract_order_number_from_eml(file_path):
         print(f"[ERROR] parse eml {file_path}: {e}")
 
     return None
+
+
+def _subject_from_eml(file_path):
+    try:
+        from email import policy
+        from email.parser import BytesParser
+
+        with open(file_path, "rb") as f:
+            msg = BytesParser(policy=policy.default).parse(f, headersonly=True)
+        return str(msg.get("subject") or "")
+    except Exception as e:
+        print(f"[ERROR] parse eml subject {file_path}: {e}")
+        return ""
+
+
+def is_original_order_email(email):
+    if isinstance(email, (str, os.PathLike)):
+        subject = _subject_from_eml(email).lower()
+    elif isinstance(email, dict):
+        subject = str(email.get("subject") or "").lower()
+    else:
+        subject = str(getattr(email, "subject", "") or "").lower()
+
+    subject = subject.strip()
+    if subject.startswith("re:"):
+        return False
+
+    if "you made a sale" in subject:
+        return True
+
+    if "new order" in subject:
+        return True
+
+    return False
+
+
+def log_inbox_filter_decision(filepath, *, linked_order, original_order, action):
+    print(
+        "[INBOX_FILTER_DECISION] "
+        f"reason=linked_order_original_only linked_order={bool(linked_order)} "
+        f"original_order={bool(original_order)} action={action} file={os.path.basename(filepath)}"
+    )
 
 
 def _normalize_order_number(val):
@@ -647,6 +686,15 @@ def move_matching_eml(folder_path, order_number):
         if extracted is not None and _normalize_order_number(extracted) == _normalize_order_number(
             order_number
         ):
+            original_order = is_original_order_email(file_path)
+            log_inbox_filter_decision(
+                file_path,
+                linked_order=True,
+                original_order=original_order,
+                action="move" if original_order else "keep_inbox",
+            )
+            if not original_order:
+                continue
             dst = os.path.join(folder_path, file)
 
             try:
@@ -658,20 +706,10 @@ def move_matching_eml(folder_path, order_number):
 
 
 def move_to_duplicates(filepath):
-    """Move a duplicate-inbox .eml into the duplicates folder (order already exists in API)."""
-    os.makedirs(DUPLICATES_PATH_STR, exist_ok=True)
-
-    filename = os.path.basename(filepath)
-    base, ext = os.path.splitext(filename)
-    target = os.path.join(DUPLICATES_PATH_STR, filename)
-    n = 1
-    while os.path.exists(target):
-        target = os.path.join(DUPLICATES_PATH_STR, f"{base}_{n}{ext}")
-        n += 1
-
+    """Discard duplicate-inbox .eml files; duplicates are tracked internally."""
     if os.path.exists(filepath):
-        shutil.move(filepath, target)
-        print(f"[DUPLICATE] {os.path.basename(target)} -> duplicates")
+        os.remove(filepath)
+        print(f"[DUPLICATE] discarded {os.path.basename(filepath)}")
 
 
 def move_to_unmatched(filepath):
@@ -713,6 +751,15 @@ def process_single_file(filepath):
         and _matching_order_folder_already_has_eml(extracted, orders)
         and not _eml_already_under_matching_order_folder(filepath, extracted, orders)
     ):
+        original_order = is_original_order_email(filepath)
+        log_inbox_filter_decision(
+            filepath,
+            linked_order=True,
+            original_order=original_order,
+            action="discard_duplicate" if original_order else "keep_inbox",
+        )
+        if not original_order:
+            return False
         print(f"[DUPLICATE] Order already exists: {extracted}")
         move_to_duplicates(filepath)
         return True
@@ -766,6 +813,16 @@ def process_single_file(filepath):
 
     if not order_found or not matched_folder:
         print(f"[MATCH] NO MATCH FOUND: {extracted_norm}")
+        return False
+
+    original_order = is_original_order_email(filepath)
+    log_inbox_filter_decision(
+        filepath,
+        linked_order=True,
+        original_order=original_order,
+        action="move" if original_order else "keep_inbox",
+    )
+    if not original_order:
         return False
 
     return move_eml_to_order_folder(filepath, matched_folder, basename, matched_order)

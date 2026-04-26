@@ -45,6 +45,16 @@ const readValue = {
   color: "#1a1a1a",
 };
 
+const checkboxLabel = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  fontSize: "13px",
+  color: "#374151",
+  cursor: "pointer",
+  userSelect: "none",
+};
+
 // ── Panel wrapper ───────────────────────────────────────────────────────────
 function Panel({ title, children }) {
   const [visible, setVisible] = React.useState(true);
@@ -292,6 +302,28 @@ export default function EditOrderModal({ order, onClose, onSaved }) {
                 </FieldRow>
                 <FieldRow label={L("price", "Price") + ":"}>
                   <input style={input} value={form.price || ""} onChange={(e) => set("price", e.target.value)} />
+                </FieldRow>
+                <FieldRow label="Gift:">
+                  <div style={{ display: "grid", gap: "8px", paddingTop: "6px" }}>
+                    <label style={checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={!!form.is_gift}
+                        onChange={(e) => set("is_gift", e.target.checked)}
+                        style={{ width: 15, height: 15, accentColor: "#2563eb" }}
+                      />
+                      <span>Mark as gift</span>
+                    </label>
+                    <label style={checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={!!form.gift_wrap}
+                        onChange={(e) => set("gift_wrap", e.target.checked)}
+                        style={{ width: 15, height: 15, accentColor: "#2563eb" }}
+                      />
+                      <span>Gift wrap</span>
+                    </label>
+                  </div>
                 </FieldRow>
               </Panel>
 

@@ -34,7 +34,6 @@ _SYNC_FOLDERS = Path(__file__).resolve().parent / "sync_folders.py"
 _WORKSPACE_DIRS = ensure_workspace_layout(print)
 BASE_PATH = _WORKSPACE_DIRS["root"]
 INBOX_PATH_STR = str(_WORKSPACE_DIRS["Inbox"])
-DUPLICATES_PATH = _WORKSPACE_DIRS["Duplicates"]
 
 ICON_PATH = r"C:\Users\rcmel\dev\email_extractor\ui_electron\src\assets\branding\spaila-logo.blue.ico"
 _ICON_FALLBACK = _ROOT / "ui_electron" / "src" / "assets" / "branding" / "spaila-logo.blue.ico"
@@ -133,14 +132,12 @@ def read_logs() -> None:
             log_lines.append("[tray] helper stdout closed")
 
 
-def get_counts() -> tuple[int, int]:
+def get_counts() -> int:
     inbox = _WORKSPACE_DIRS["Inbox"]
-    duplicates = DUPLICATES_PATH
 
     inbox_count = len(list(inbox.glob("*.eml"))) if inbox.exists() else 0
-    duplicates_count = len(list(duplicates.glob("*.eml"))) if duplicates.exists() else 0
 
-    return inbox_count, duplicates_count
+    return inbox_count
 
 
 def create_icon() -> Image.Image:
@@ -268,16 +265,14 @@ def main() -> None:
         else:
             status_text = "Stopped"
 
-        inbox_count, dup_count = get_counts()
+        inbox_count = get_counts()
 
         with _log_lock:
             tail = list(log_lines[-50:])
             la = last_action
 
         status_label.config(text=f"Status: {status_text}")
-        counts_label.config(
-            text=f"Inbox: {inbox_count} .eml | Duplicates: {dup_count} .eml"
-        )
+        counts_label.config(text=f"Inbox: {inbox_count} .eml")
         last_label.config(text=f"Last: {la}" if la else "Last: (none)")
 
         text.delete(1.0, tk.END)

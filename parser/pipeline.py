@@ -42,19 +42,17 @@ from .models import Candidate, DecisionRow
 from .replay.fingerprint import compute_template_id, compute_template_family_id, normalize_for_family, normalize_for_family
 from .replay.load import load_replay
 from .anchors.match import apply_anchor_scoring, compute_anchor_match
-from .learning.store import load_assignments, load_records
+from .learning.store import load_assignments, load_records, load_shipping_address_line_type_assignments
 from .learning.confidence_store import update_streak, get_currently_promoted_fields
 
 ENABLE_REPLAY = True
-_GIFT_STRONG_WORDS = (
+_GIFT_FLAG_WORDS = (
     "marked as gift",
     "this order is a gift",
     "gift details",
     "gift order",
 )
-_GIFT_MEDIUM_WORDS = ("gift message", "customer note", "message:")
-_PERSONALIZATION_WORDS = ("pet name", "heading", "engraving", "custom text")
-_MESSAGE_LABELS = ("customer note", "gift message")
+_GIFT_MESSAGE_WORDS = ("gift message",)
 _GIFT_WRAP_WORDS = ("gift wrap", "gift wrapped", "gift wrapping")
 
 OVERRIDE_THRESHOLDS = {
@@ -125,44 +123,44 @@ def _merge_attention_ranges(ranges: List[Dict[str, int]]) -> List[Dict[str, int]
 def _collect_gift_attention_ranges(clean_text: str) -> Dict[str, Any]:
     line_spans = _line_spans(clean_text)
     attention_ranges: List[Dict[str, int]] = []
-    gift_message = ""
+    gift_message_detected = False
 
     for i, line in enumerate(line_spans):
         lowered = line["stripped"].lower()
-        if lowered not in _MESSAGE_LABELS:
+        if not lowered:
             continue
 
-        message_lines: List[str] = []
-        block_end = line["end"]
-        for next_line in line_spans[i + 1:]:
-            next_stripped = next_line["stripped"]
-            if not next_stripped:
-                if message_lines:
-                    break
-                continue
-            message_lines.append(next_stripped)
-            block_end = next_line["end"]
-
-        if message_lines:
-            gift_message = " ".join(message_lines)
+        if any(word in lowered for word in _GIFT_MESSAGE_WORDS):
+            gift_message_detected = True
+            block_end = line["end"]
+            saw_message_body = False
+            for next_line in line_spans[i + 1:]:
+                next_stripped = next_line["stripped"]
+                if not next_stripped:
+                    if saw_message_body:
+                        break
+                    continue
+                saw_message_body = True
+                block_end = next_line["end"]
             attention_ranges.append({
                 "start": line["start"],
                 "end": block_end,
             })
-            break
 
-    for line in line_spans:
-        lowered = line["stripped"].lower()
-        if not lowered:
-            continue
-        if any(word in lowered for word in _GIFT_STRONG_WORDS + _GIFT_MEDIUM_WORDS + _GIFT_WRAP_WORDS):
+        if any(word in lowered for word in _GIFT_FLAG_WORDS + _GIFT_WRAP_WORDS):
             attention_ranges.append({
                 "start": line["start"],
                 "end": line["end"],
             })
 
+    normalized_text = re.sub(r"\s+", " ", clean_text.lower()).strip()
     return {
-        "gift_message": gift_message,
+        "gift": any(word in normalized_text for word in _GIFT_FLAG_WORDS),
+        "gift_message": (
+            gift_message_detected
+            or any(word in normalized_text for word in _GIFT_MESSAGE_WORDS)
+        ),
+        "gift_wrap": any(word in normalized_text for word in _GIFT_WRAP_WORDS),
         "gift_attention_ranges": _merge_attention_ranges(attention_ranges),
     }
 
@@ -252,6 +250,265 @@ _GENERIC_QUANTITY_SIGS: frozenset = frozenset({
     "number_regex|none|pricing",
     "number_regex|none|buyer",
 })
+
+
+_ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+_STATE_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
+_STREET_LINE_RE = re.compile(
+    r"^\d[\d\-]*\s+.+\b(?:dr|drive|rd|road|st|street|ave|avenue|blvd|boulevard|ln|lane|way|ct|court|pl|place|ter|terrace|pkwy|hwy|cir|circle|loop|sq)\.?\b",
+    re.IGNORECASE,
+)
+_COUNTRY_LINE_RE = re.compile(r"\b(?:united states|usa|canada|australia|united kingdom|uk)\b", re.IGNORECASE)
+_COMPANY_LINE_RE = re.compile(r"\b(?:llc|inc|co\.?|company|corp|ltd|memorials|shop|store|studio)\b", re.IGNORECASE)
+
+
+def _shipping_address_pattern_hints(value: str) -> Dict[str, bool]:
+    lines = [line.strip() for line in (value or "").splitlines() if line.strip()]
+    joined = "\n".join(lines)
+    return {
+        "contains_zip": bool(_ZIP_RE.search(joined)),
+        "contains_state_zip": bool(_STATE_ZIP_RE.search(joined)),
+        "contains_street_line": any(_STREET_LINE_RE.search(line) for line in lines),
+        "contains_country": bool(lines and lines[-1].lower() in {"united states", "usa", "canada", "australia"}),
+    }
+
+
+def _normalize_line_match(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().casefold()
+
+
+def classify_shipping_address_line(line: str, buyer_name: str = "") -> str:
+    text = re.sub(r"\s+", " ", line or "").strip()
+    lowered = text.casefold()
+    buyer = _normalize_line_match(buyer_name)
+    if buyer and lowered == buyer:
+        line_type = "name"
+    elif _COUNTRY_LINE_RE.search(text):
+        line_type = "country"
+    elif _STREET_LINE_RE.search(text):
+        line_type = "street"
+    elif "," in text and _STATE_ZIP_RE.search(text):
+        line_type = "city_state_zip"
+    elif _ZIP_RE.search(text):
+        line_type = "city_state_zip"
+    elif _COMPANY_LINE_RE.search(text):
+        line_type = "company"
+    else:
+        line_type = "unknown"
+    print(
+        "[ADDRESS_LINE_CLASSIFICATION] "
+        + json.dumps({"line": text, "type": line_type}, ensure_ascii=False),
+        file=sys.stderr,
+        flush=True,
+    )
+    return line_type
+
+
+def split_shipping_address_candidate_lines(candidate, buyer_name: str = "") -> List[Dict[str, Any]]:
+    lines: List[Dict[str, Any]] = []
+    base_start = candidate.start if isinstance(getattr(candidate, "start", None), int) else None
+    for span in _line_spans(candidate.value or ""):
+        text = span["stripped"]
+        if not text:
+            continue
+        start = base_start + span["start"] if base_start is not None else None
+        end = base_start + span["end"] if base_start is not None else None
+        lines.append({
+            "text": text,
+            "type": classify_shipping_address_line(text, buyer_name),
+            "start": start,
+            "end": end,
+        })
+    return lines
+
+
+def build_shipping_address_line_learning(
+    candidate,
+    selected_start: int,
+    selected_end: int,
+    buyer_name: str = "",
+) -> Dict[str, Any]:
+    lines = split_shipping_address_candidate_lines(candidate, buyer_name)
+    selected_types: List[str] = []
+    excluded_types: List[str] = []
+    for line in lines:
+        line_start = line.get("start")
+        line_end = line.get("end")
+        overlaps_selection = (
+            isinstance(line_start, int)
+            and isinstance(line_end, int)
+            and line_start < selected_end
+            and selected_start < line_end
+        )
+        target = selected_types if overlaps_selection else excluded_types
+        line_type = line["type"]
+        if line_type not in target:
+            target.append(line_type)
+    return {
+        "learned_line_types": selected_types,
+        "excluded_line_types": [line_type for line_type in excluded_types if line_type not in selected_types],
+        "line_count_pattern": len(lines),
+    }
+
+
+def _shipping_address_relative_position(candidate, segments: List[Any]) -> Dict[str, Any]:
+    total = max(len(segments), 1)
+    index = next((i for i, seg in enumerate(segments) if seg.id == candidate.segment_id), None)
+    if index is None:
+        return {}
+
+    previous_label = ""
+    for prev in reversed(segments[:index]):
+        lowered = prev.text.lower()
+        if any(label in lowered for label in ("shipping address", "billing address", "ship to", "deliver to", "recipient")):
+            previous_label = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+            break
+
+    return {
+        "segment_index": index,
+        "segment_ratio": round(index / total, 4),
+        "previous_label": previous_label,
+    }
+
+
+def build_shipping_address_signature(candidate, segment_map: Dict) -> str:
+    """Build a structure-only signature for shipping-address learning.
+
+    The signature deliberately excludes the address text so one corrected
+    address block can teach the parser where future address blocks live.
+    """
+    return build_extraction_signature(candidate, segment_map)
+
+
+_PRICE_LABEL_PATTERNS: tuple = (
+    ("order_total", re.compile(r"\border\s+total\b|\bgrand\s+total\b|\breceipt\s+total\b|\bpayment\s+total\b", re.IGNORECASE)),
+    ("sales_tax", re.compile(r"\bsales\s+tax\b|\btax\b", re.IGNORECASE)),
+    ("shipping", re.compile(r"\bshipping\b|\bpostage\b|\bdelivery\b", re.IGNORECASE)),
+    ("discount", re.compile(r"\bdiscount\b|\bcoupon\b|\bpromo\b", re.IGNORECASE)),
+    ("subtotal", re.compile(r"\bsubtotal\b", re.IGNORECASE)),
+    ("item_total", re.compile(r"\bitem\s+total\b|\bline\s+total\b", re.IGNORECASE)),
+    ("item_price", re.compile(r"\bitem\s+price\b|\bunit\s+price\b|\bprice\b|\beach\b|\bper\s+unit\b", re.IGNORECASE)),
+    ("product", re.compile(r"\bproduct\b|\bitem\b|\blisting\b|\bsku\b|\bvariation\b|\bquantity\b|\bqty\b", re.IGNORECASE)),
+)
+_PRICE_AGGREGATE_LABELS = {"order_total", "sales_tax", "shipping", "discount", "subtotal"}
+_PRICE_ITEM_LABELS = {"item_total", "item_price", "product"}
+
+
+def _price_candidate_index(candidate, segments: List[Any]) -> _Opt[int]:
+    return next((i for i, seg in enumerate(segments) if seg.id == candidate.segment_id), None)
+
+
+def _normalize_label_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+
+
+def _price_nearby_label(candidate, segments: List[Any]) -> str:
+    idx = _price_candidate_index(candidate, segments)
+    if idx is None:
+        search_text = " ".join([candidate.segment_text or "", candidate.left_context or "", candidate.right_context or ""])
+        for label, pattern in _PRICE_LABEL_PATTERNS:
+            if pattern.search(search_text):
+                return label
+        return "none"
+
+    direct_text = " ".join([segments[idx].text, candidate.left_context or "", candidate.right_context or ""])
+    for label, pattern in _PRICE_LABEL_PATTERNS:
+        if pattern.search(direct_text):
+            return label
+
+    offsets = [1, -1, 2, -2, 3, -3]
+    for offset in offsets:
+        nearby_idx = idx + offset
+        if nearby_idx < 0 or nearby_idx >= len(segments):
+            continue
+        search_text = segments[nearby_idx].text
+        for label, pattern in _PRICE_LABEL_PATTERNS:
+            if pattern.search(search_text):
+                return label
+    return "none"
+
+
+def _price_context_class(candidate, segments: List[Any]) -> str:
+    label = _price_nearby_label(candidate, segments)
+    if label in {"order_total"}:
+        return "aggregate_total"
+    if label in {"sales_tax"}:
+        return "tax"
+    if label in {"shipping"}:
+        return "shipping"
+    if label in {"discount"}:
+        return "discount"
+    if label in {"subtotal"}:
+        return "subtotal"
+    if label in _PRICE_ITEM_LABELS:
+        return "item_price"
+    return "price_unknown"
+
+
+def classify_price_type(candidate, segments: List[Any]) -> str:
+    label = _price_nearby_label(candidate, segments)
+    context_text = " ".join([
+        candidate.segment_text or "",
+        candidate.left_context or "",
+        candidate.right_context or "",
+    ]).lower()
+    if label == "item_total" or "item total" in context_text:
+        return "item_total"
+    if label == "order_total" or "order total" in context_text or "grand total" in context_text:
+        return "order_total"
+    if label == "shipping" or "shipping" in context_text or "postage" in context_text:
+        return "shipping"
+    if label == "sales_tax" or "sales tax" in context_text or re.search(r"\btax\b", context_text):
+        return "tax"
+    if label == "discount" or "discount" in context_text:
+        return "discount"
+    if label == "subtotal" or "subtotal" in context_text:
+        return "subtotal"
+    if label == "item_price" or label == "product" or re.search(r"\b(price|item|product|variation|listing|each|unit)\b", context_text):
+        return "item_price"
+    if "total" in context_text:
+        return "order_total"
+    return "unknown_price"
+
+
+def _price_section_type(candidate, segments: List[Any]) -> str:
+    label = _price_nearby_label(candidate, segments)
+    if label in _PRICE_AGGREGATE_LABELS:
+        return "summary"
+    if label in _PRICE_ITEM_LABELS:
+        return "item"
+    return _candidate_segment_role(candidate, {seg.id: seg for seg in segments}) if segments else "unknown"
+
+
+def _price_relative_position(candidate, segments: List[Any]) -> Dict[str, Any]:
+    total = max(len(segments), 1)
+    idx = _price_candidate_index(candidate, segments)
+    if idx is None:
+        return {}
+
+    previous_label = ""
+    for prev in reversed(segments[:idx]):
+        for label, pattern in _PRICE_LABEL_PATTERNS:
+            if pattern.search(prev.text):
+                previous_label = label
+                break
+        if previous_label:
+            break
+
+    return {
+        "segment_index": idx,
+        "segment_ratio": round(idx / total, 4),
+        "previous_label": previous_label,
+    }
+
+
+def build_price_signature(candidate, segment_map: Dict, segments: List[Any] | None = None) -> str:
+    """Build a structure-only signature for price learning."""
+    extractor = candidate.extractor or "unknown"
+    label = _price_nearby_label(candidate, segments or [])
+    section = _price_section_type(candidate, segments or []) if segments else _infer_segment_role(candidate.segment_text or "")
+    context_class = _price_context_class(candidate, segments or []) if segments else label
+    return f"{extractor}|{label}|{section}|{context_class}"
 
 
 def _selected_body_part(ingested: Dict[str, Any]) -> str:
@@ -462,6 +719,10 @@ def _apply_signature_scoring(
             sig = build_quantity_signature(candidate, segment_map, clean_text)
             if sig is None:
                 continue  # too generic — no boost
+        elif field == "price":
+            sig = build_price_signature(candidate, segment_map)
+        elif field == "shipping_address":
+            sig = build_shipping_address_signature(candidate, segment_map)
         else:
             sig = build_extraction_signature(candidate, segment_map)
 
@@ -580,6 +841,366 @@ def _learned_replay_candidate(
     )
 
 
+def _candidate_segment_role(candidate, segment_map: Dict) -> str:
+    seg = segment_map.get(candidate.segment_id) if candidate.segment_id else None
+    return _infer_segment_role(candidate.segment_text or (seg.text if seg else ""))
+
+
+def _price_metadata(candidate, segments: List[Any], segment_map: Dict) -> Dict[str, Any]:
+    signature = build_price_signature(candidate, segment_map, segments)
+    return {
+        "learned_signature": signature,
+        "price_type": classify_price_type(candidate, segments),
+        "nearby_label": _price_nearby_label(candidate, segments),
+        "section_type": _price_section_type(candidate, segments),
+        "context_class": _price_context_class(candidate, segments),
+        "relative_position": _price_relative_position(candidate, segments),
+    }
+
+
+def _price_trace_candidates(candidates: List, segments: List[Any], segment_map: Dict) -> None:
+    for candidate in candidates:
+        meta = _price_metadata(candidate, segments, segment_map)
+        payload = {
+            "candidate_id": candidate.id,
+            "value": candidate.value,
+            "start": candidate.start,
+            "end": candidate.end,
+            "extractor": candidate.extractor,
+            "learned_signature": meta["learned_signature"],
+            "segment_id": candidate.segment_id,
+            "price_type": meta["price_type"],
+            "nearby_label": meta["nearby_label"],
+            "section_type": meta["section_type"],
+            "left_context": candidate.left_context,
+            "right_context": candidate.right_context,
+            "signals": candidate.signals,
+            "score": round(candidate.score, 4),
+        }
+        print(f"[PRICE_CANDIDATE_CLASSIFICATION] {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+
+
+def _price_record_score(record: Dict, candidate, segments: List[Any], segment_map: Dict) -> tuple[float, List[str]]:
+    meta = _price_metadata(candidate, segments, segment_map)
+    score = 0.0
+    signals: List[str] = []
+
+    learned_price_type = record.get("price_type") or record.get("context_class") or ""
+    if learned_price_type:
+        current_price_type = meta["price_type"]
+        if current_price_type != learned_price_type:
+            return -999.0, [f"price_type_mismatch({current_price_type}!={learned_price_type})"]
+        score += 40.0
+        signals.append(f"price_type_match(+40:{current_price_type})")
+
+    stored_sig = record.get("learned_signature") or ""
+    if stored_sig and meta["learned_signature"] == stored_sig:
+        score += 12.0
+        signals.append("price_sig_exact(+12)")
+    elif stored_sig:
+        stored_parts = stored_sig.split("|")
+        current_parts = meta["learned_signature"].split("|")
+        if len(stored_parts) >= 4 and len(current_parts) >= 4 and stored_parts[0] == current_parts[0] and stored_parts[2] == current_parts[2]:
+            score += 6.0
+            signals.append("price_sig_section_partial(+6)")
+
+    if record.get("extractor") and candidate.extractor == record.get("extractor"):
+        score += 3.0
+        signals.append("price_extractor_match(+3)")
+    if record.get("section_type") and meta["section_type"] == record.get("section_type"):
+        score += 4.0
+        signals.append("price_section_match(+4)")
+    if record.get("nearby_label") and meta["nearby_label"] == record.get("nearby_label"):
+        score += 4.0
+        signals.append("price_label_match(+4)")
+    if record.get("context_class") and meta["context_class"] == record.get("context_class"):
+        score += 4.0
+        signals.append("price_context_match(+4)")
+
+    if meta["price_type"] == "item_price":
+        score += 6.0
+        signals.append("item_price_type(+6)")
+    elif meta["price_type"] in {"order_total", "tax", "shipping", "discount", "subtotal"}:
+        score -= 14.0
+        signals.append(f"summary_price_type(-14:{meta['price_type']})")
+
+    if "summary_section(−6.0)" in candidate.penalties or "near_order_total(−5.0)" in candidate.penalties or "segment_is_total(−5.0)" in candidate.penalties:
+        score -= 6.0
+        signals.append("existing_summary_penalty(-6)")
+
+    return score, signals
+
+
+def _price_record_matches_candidate(record: Dict, candidate, segments: List[Any], segment_map: Dict) -> bool:
+    score, _signals = _price_record_score(record, candidate, segments, segment_map)
+    return score >= 10.0
+
+
+def _price_rejection_matches_candidate(record: Dict, candidate, segments: List[Any], segment_map: Dict) -> bool:
+    if record.get("price_type"):
+        meta = _price_metadata(candidate, segments, segment_map)
+        if meta["price_type"] != record.get("price_type"):
+            return False
+        if record.get("learned_signature") and meta["learned_signature"] == record.get("learned_signature"):
+            return True
+        if record.get("extractor") and candidate.extractor != record.get("extractor"):
+            return False
+        if record.get("section_type") and meta["section_type"] != record.get("section_type"):
+            return False
+        if record.get("nearby_label") and meta["nearby_label"] != record.get("nearby_label"):
+            return False
+        return True
+    if record.get("candidate_id"):
+        return candidate.id == record.get("candidate_id")
+    if record.get("learned_signature") and build_price_signature(candidate, segment_map, segments) == record.get("learned_signature"):
+        return True
+    return _price_record_matches_candidate(record, candidate, segments, segment_map)
+
+
+def _apply_price_rejections(
+    template_id: str,
+    candidates: List,
+    segments: List[Any],
+    segment_map: Dict,
+) -> List:
+    records = [
+        record for record in load_records(template_id, field="price", record_type="reject")
+        if record.get("active", True)
+    ]
+    if not records:
+        return candidates
+
+    for candidate in candidates:
+        for record in records:
+            if not _price_rejection_matches_candidate(record, candidate, segments, segment_map):
+                continue
+            candidate.score -= 60.0
+            candidate.penalties.append("rejected_price_structure(-60)")
+            break
+    return candidates
+
+
+def _select_price_structural_candidate(
+    template_id: str,
+    candidates: List,
+    segments: List[Any],
+    segment_map: Dict,
+) -> _Opt[tuple[Any, float, List[str], Dict]]:
+    assigned_records = load_assignments(template_id, "price")
+    if not assigned_records:
+        return None
+
+    learned_price_type = assigned_records[0].get("price_type") or assigned_records[0].get("context_class", "")
+    print(
+        f"[PRICE_TYPE_REPLAY_ATTEMPT] {json.dumps({'learned_price_type': learned_price_type, 'candidate_count': len(candidates)}, ensure_ascii=False)}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    rejected_records = [
+        record for record in load_records(template_id, field="price", record_type="reject")
+        if record.get("active", True)
+    ]
+    best: _Opt[tuple[Any, float, List[str], Dict]] = None
+    for record in assigned_records:
+        for candidate in candidates:
+            score, signals = _price_record_score(record, candidate, segments, segment_map)
+            if any(_price_rejection_matches_candidate(rejection, candidate, segments, segment_map) for rejection in rejected_records):
+                score -= 60.0
+                signals.append("rejected_price_structure(-60)")
+            if best is None or score > best[1]:
+                best = (candidate, score, signals, record)
+
+    if best is None or best[1] < 10.0:
+        print(
+            f"[PRICE_TYPE_REPLAY_FAILED] {json.dumps({'reason': 'no_matching_price_type'}, ensure_ascii=False)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+    candidate, score, signals, _record = best
+    meta = _price_metadata(candidate, segments, segment_map)
+    payload = {
+        "candidate_id": candidate.id,
+        "value": candidate.value,
+        "price_type": meta["price_type"],
+        "score": round(score, 4),
+        "signals": signals,
+    }
+    print(f"[PRICE_TYPE_REPLAY_SELECTED] {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
+    return best
+
+
+def _shipping_record_matches_candidate(record: Dict, candidate, segment_map: Dict) -> bool:
+    learned_sig = record.get("learned_signature") or ""
+    candidate_sig = build_shipping_address_signature(candidate, segment_map)
+    if learned_sig and learned_sig != candidate_sig:
+        return False
+    if record.get("extractor") and candidate.extractor != record.get("extractor"):
+        return False
+
+    record_role = ""
+    parts = learned_sig.split("|")
+    if len(parts) >= 3:
+        record_role = parts[2]
+    if record_role and _candidate_segment_role(candidate, segment_map) != record_role:
+        return False
+    return True
+
+
+def _shipping_rejection_matches_candidate(record: Dict, candidate, segment_map: Dict) -> bool:
+    if record.get("candidate_id") and candidate.id != record.get("candidate_id"):
+        return False
+    return _shipping_record_matches_candidate(record, candidate, segment_map)
+
+
+def _boost_shipping_address_assignments(
+    template_id: str,
+    candidates: List,
+    segments: List,
+    segment_map: Dict,
+) -> List:
+    records = load_assignments(template_id, "shipping_address")
+    if not records:
+        return candidates
+
+    for candidate in candidates:
+        for record in records:
+            if not _shipping_record_matches_candidate(record, candidate, segment_map):
+                continue
+            candidate.score += 25.0
+            candidate.signals.append("assigned_structure(+25)")
+            candidate.source = "learned"
+            break
+    return candidates
+
+
+def _apply_shipping_address_rejections(
+    template_id: str,
+    candidates: List,
+    segment_map: Dict,
+) -> List:
+    records = [
+        record for record in load_records(template_id, field="shipping_address", record_type="reject")
+        if record.get("active", True)
+    ]
+    if not records:
+        return candidates
+
+    for candidate in candidates:
+        for record in records:
+            if not _shipping_rejection_matches_candidate(record, candidate, segment_map):
+                continue
+            candidate.score -= 50.0
+            candidate.penalties.append("rejected_structure(-50)")
+            break
+    return candidates
+
+
+def _select_shipping_address_line_type_candidate(
+    template_id: str,
+    candidates: List,
+    buyer_name: str = "",
+) -> _Opt[Any]:
+    records = load_shipping_address_line_type_assignments(template_id)
+    if not records:
+        return None
+
+    best = None
+    for record in records:
+        learned_types = [line_type for line_type in record.get("learned_line_types", []) if line_type]
+        if not learned_types:
+            continue
+        learned_set = set(learned_types)
+        for candidate in candidates:
+            lines = split_shipping_address_candidate_lines(candidate, buyer_name)
+            selected_lines = [line for line in lines if line["type"] in learned_set]
+            present_types = {line["type"] for line in selected_lines}
+            if not selected_lines or not learned_set.issubset(present_types):
+                continue
+            score = len(selected_lines) * 10.0 + len(present_types) + (candidate.score or 0.0) / 100.0
+            if best is None or score > best["score"]:
+                best = {
+                    "candidate": candidate,
+                    "record": record,
+                    "lines": selected_lines,
+                    "score": score,
+                    "learned_line_types": learned_types,
+                }
+
+    if best is None:
+        return None
+
+    final_output = "\n".join(line["text"] for line in best["lines"]).strip()
+    print(
+        "[ADDRESS_LEARNING_APPLIED] "
+        + json.dumps({
+            "learned_line_types": best["learned_line_types"],
+            "selected_lines": [line["text"] for line in best["lines"]],
+            "final_output": final_output,
+        }, ensure_ascii=False),
+        file=sys.stderr,
+        flush=True,
+    )
+    candidate = best["candidate"]
+    first_line = best["lines"][0]
+    last_line = best["lines"][-1]
+    return Candidate(
+        id="learned_shipping_address_0001",
+        field_type="shipping_address",
+        value=final_output,
+        raw_text=final_output,
+        start=first_line.get("start"),
+        end=last_line.get("end"),
+        segment_id=candidate.segment_id,
+        extractor=candidate.extractor,
+        signals=["assigned_line_types(authoritative)"],
+        penalties=[],
+        score=999,
+        segment_text=candidate.segment_text,
+        left_context=candidate.left_context,
+        right_context=candidate.right_context,
+        source="learned",
+    )
+
+
+def _trim_address_duplicate_buyer_name(address_decision: _Opt[DecisionRow], buyer_decision: _Opt[DecisionRow]) -> _Opt[DecisionRow]:
+    if address_decision is None or buyer_decision is None:
+        return address_decision
+    if any(signal.startswith("assigned_line_types(") for signal in address_decision.provenance.get("signals", [])):
+        return address_decision
+
+    buyer_name = (buyer_decision.value or "").strip()
+    lines = (address_decision.value or "").splitlines()
+    if not buyer_name or not lines:
+        return address_decision
+
+    if lines[0].strip() != buyer_name:
+        return address_decision
+
+    trimmed_value = "\n".join(lines[1:]).strip()
+    if not trimmed_value:
+        return address_decision
+
+    start = address_decision.start
+    if isinstance(start, int):
+        start += len(lines[0])
+        original_value = address_decision.value or ""
+        if original_value.startswith(lines[0] + "\r\n"):
+            start += 2
+        elif original_value.startswith(lines[0] + "\n"):
+            start += 1
+
+    address_decision.value = trimmed_value
+    address_decision.start = start
+    if isinstance(start, int):
+        address_decision.end = start + len(trimmed_value)
+    address_decision.provenance.setdefault("signals", []).append("buyer_name_trimmed_from_address")
+    address_decision.provenance["snippet"] = trimmed_value
+    return address_decision
+
+
 def _inject_assigned_candidates(
     template_id: str,
     field: str,
@@ -587,6 +1208,7 @@ def _inject_assigned_candidates(
     segments: List,
     clean_text: str,
     source: str | None = None,
+    buyer_name: str = "",
 ) -> List:
     """Span-authoritative injection.
 
@@ -602,7 +1224,44 @@ def _inject_assigned_candidates(
     """
     assigned_records = load_assignments(template_id, field, source=source)
     if not assigned_records:
+        if field == "shipping_address":
+            selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name)
+            return [selected] if selected is not None else []
         return candidates
+
+    for i, record in enumerate(assigned_records):
+        manual_candidate = _manual_record_exact_candidate(field, i, record, clean_text)
+        if manual_candidate is not None:
+            return [manual_candidate]
+
+    if field == "shipping_address":
+        selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name)
+        return [selected] if selected is not None else []
+
+    if field == "price":
+        segment_map = {seg.id: seg for seg in segments}
+        selected = _select_price_structural_candidate(template_id, candidates, segments, segment_map)
+        if selected is None:
+            return []
+
+        best_candidate, _structural_score, structural_signals, _record = selected
+        return [Candidate(
+            id=f"learned_{field}_0001",
+            field_type=field,
+            value=best_candidate.value,
+            raw_text=best_candidate.raw_text,
+            start=best_candidate.start,
+            end=best_candidate.end,
+            segment_id=best_candidate.segment_id,
+            extractor=best_candidate.extractor,
+            signals=["assigned_price_type(authoritative)", *structural_signals],
+            penalties=[],
+            score=999,
+            segment_text=best_candidate.segment_text,
+            left_context=best_candidate.left_context,
+            right_context=best_candidate.right_context,
+            source="learned",
+        )]
 
     if field == "quantity":
         best_candidate = None
@@ -902,6 +1561,90 @@ def _field_is_rejected(template_id: str, field: str, source: str | None = None) 
     return any(record.get("active", True) for record in records)
 
 
+def _manual_record_exact_candidate(
+    field: str,
+    index: int,
+    record: Dict,
+    clean_text: str,
+) -> Candidate | None:
+    if record.get("assignment_source") != "manual":
+        return None
+
+    start = record.get("start")
+    end = record.get("end")
+    selected_text = record.get("selected_text") or record.get("value") or ""
+    if (
+        not isinstance(start, int)
+        or not isinstance(end, int)
+        or start < 0
+        or end < start
+        or end > len(clean_text)
+        or clean_text[start:end] != selected_text
+    ):
+        return None
+
+    print(
+        f"[ASSIGNMENT_OVERRIDE_APPLIED] field={field!r} value={selected_text!r} start={start} end={end}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return _learned_replay_candidate(
+        field,
+        index,
+        selected_text,
+        selected_text,
+        start,
+        end,
+        record.get("segment_id", ""),
+        record.get("segment_text", "") or selected_text,
+        record,
+        signals=["manual_assignment(authoritative)", "assigned_span(authoritative)"],
+    )
+
+
+def _manual_lock_decision(field: str, lock: Dict[str, Any], clean_text: str) -> DecisionRow:
+    value = "" if lock.get("value") is None else str(lock.get("value"))
+    start = lock.get("start")
+    end = lock.get("end")
+    print(
+        f"[ASSIGNMENT_OVERRIDE_APPLIED] field={field!r} value={value!r} start={start!r} end={end!r}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return DecisionRow(
+        field=field,
+        value=value,
+        decision="assigned",
+        decision_source="manual_override",
+        candidate_id=f"manual_override_{field}",
+        start=start if isinstance(start, int) else None,
+        end=end if isinstance(end, int) else None,
+        confidence=1.0,
+        provenance={
+            "segment_id": "manual",
+            "snippet": value,
+            "signals": ["manual_assignment_lock(authoritative)"],
+        },
+    )
+
+
+def _apply_assignment_locks(
+    decision_rows: List[DecisionRow],
+    assignment_lock: Dict[str, Dict[str, Any]] | None,
+    clean_text: str,
+) -> List[DecisionRow]:
+    if not assignment_lock:
+        return decision_rows
+
+    locked_rows = {
+        field: _manual_lock_decision(field, lock, clean_text)
+        for field, lock in assignment_lock.items()
+    }
+    next_rows = [row for row in decision_rows if row.field not in locked_rows]
+    next_rows.extend(locked_rows.values())
+    return next_rows
+
+
 def _apply_assignment_policy(
     template_id: str,
     field: str,
@@ -909,13 +1652,17 @@ def _apply_assignment_policy(
     segments: List,
     clean_text: str,
     source: str | None = None,
+    buyer_name: str = "",
 ) -> tuple[List, bool]:
     """Return candidates plus whether the field remains assignment-locked.
 
     Non-strict fields fall back to the normal scoring/replay path when an
     active assignment exists but its stored span no longer resolves.
     """
-    if not load_assignments(template_id, field, source=source):
+    if field == "shipping_address":
+        if not load_assignments(template_id, field, source=source) and not load_shipping_address_line_type_assignments(template_id):
+            return candidates, False
+    elif not load_assignments(template_id, field, source=source):
         return candidates, False
 
     assigned_candidates = _inject_assigned_candidates(
@@ -925,6 +1672,7 @@ def _apply_assignment_policy(
         segments,
         clean_text,
         source,
+        buyer_name,
     )
     if assigned_candidates:
         return assigned_candidates, True
@@ -945,7 +1693,11 @@ def _apply_assignment_policy(
     return candidates, False
 
 
-def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
+def parse_eml(
+    path: str,
+    update_confidence: bool = True,
+    assignment_lock: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     ingested = load_eml(path)
     clean_text = sanitize(ingested)
     learning_source = _detect_learning_source(ingested, clean_text)
@@ -986,17 +1738,21 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
         quantity_candidates = _apply_signature_scoring(
             quantity_candidates, template_family_id, "quantity", segment_map, clean_text, source=learning_source
         )
-    quantity_decision = None if _field_is_rejected(template_family_id, "quantity", source=learning_source) else decide_quantity(quantity_candidates)
+    quantity_decision = None if (
+        not assignment_locked["quantity"] and _field_is_rejected(template_family_id, "quantity", source=learning_source)
+    ) else decide_quantity(quantity_candidates)
 
     # --- PRICE ---
     price_candidates = score_price(candidates, segments, quantity_candidates)
+    price_candidates = _apply_price_rejections(template_family_id, price_candidates, segments, segment_map)
+    _price_trace_candidates(price_candidates, segments, segment_map)
     price_candidates, assignment_locked["price"] = _apply_assignment_policy(
         template_family_id, "price", price_candidates, segments, clean_text
     )
     if not assignment_locked["price"]:
         price_candidates = apply_anchor_scoring(template_family_id, "price", price_candidates)
         price_candidates = _apply_signature_scoring(price_candidates, template_family_id, "price", segment_map)
-    price_decision = None if _field_is_rejected(template_family_id, "price") else decide_price(price_candidates)
+    price_decision = decide_price(price_candidates)
 
     # --- PRICE SELECTION TRACE ---
     _price_trace = sorted(
@@ -1023,7 +1779,9 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if not assignment_locked["order_number"]:
         order_candidates = apply_anchor_scoring(template_family_id, "order_number", order_candidates)
         order_candidates = _apply_signature_scoring(order_candidates, template_family_id, "order_number", segment_map)
-    order_decision = None if _field_is_rejected(template_family_id, "order_number") else decide_order_number(order_candidates)
+    order_decision = None if (
+        not assignment_locked["order_number"] and _field_is_rejected(template_family_id, "order_number")
+    ) else decide_order_number(order_candidates)
 
     # Emit price selection trace now that order_number is known.
     _order_num_for_log = order_decision.value if order_decision else "unknown"
@@ -1086,7 +1844,9 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if not assignment_locked["order_date"]:
         date_candidates = apply_anchor_scoring(template_family_id, "order_date", date_candidates)
         date_candidates = _apply_signature_scoring(date_candidates, template_family_id, "order_date", segment_map)
-    date_decision = None if _field_is_rejected(template_family_id, "order_date") else decide_order_date(date_candidates)
+    date_decision = None if (
+        not assignment_locked["order_date"] and _field_is_rejected(template_family_id, "order_date")
+    ) else decide_order_date(date_candidates)
 
     # --- BUYER EMAIL ---
     email_candidates = validate_candidates(extract_emails(segments), clean_text)
@@ -1097,7 +1857,9 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if not assignment_locked["buyer_email"]:
         email_candidates = apply_anchor_scoring(template_family_id, "buyer_email", email_candidates)
         email_candidates = _apply_signature_scoring(email_candidates, template_family_id, "buyer_email", segment_map)
-    email_decision = None if _field_is_rejected(template_family_id, "buyer_email") else decide_buyer_email(email_candidates)
+    email_decision = None if (
+        not assignment_locked["buyer_email"] and _field_is_rejected(template_family_id, "buyer_email")
+    ) else decide_buyer_email(email_candidates)
 
     # --- SHIP BY ---
     # Subject candidates have start=None/end=None; body candidates are validated
@@ -1116,7 +1878,9 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if not assignment_locked["ship_by"]:
         ship_by_candidates = apply_anchor_scoring(template_family_id, "ship_by", ship_by_candidates)
         ship_by_candidates = _apply_signature_scoring(ship_by_candidates, template_family_id, "ship_by", segment_map)
-    ship_by_decision = None if _field_is_rejected(template_family_id, "ship_by") else decide_ship_by(ship_by_candidates)
+    ship_by_decision = None if (
+        not assignment_locked["ship_by"] and _field_is_rejected(template_family_id, "ship_by")
+    ) else decide_ship_by(ship_by_candidates)
 
     # --- BUYER NAME ---
     name_candidates = validate_candidates(extract_buyer_name(segments), clean_text)
@@ -1127,18 +1891,26 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if not assignment_locked["buyer_name"]:
         name_candidates = apply_anchor_scoring(template_family_id, "buyer_name", name_candidates)
         name_candidates = _apply_signature_scoring(name_candidates, template_family_id, "buyer_name", segment_map)
-    name_decision = None if _field_is_rejected(template_family_id, "buyer_name") else decide_buyer_name(name_candidates)
+    name_decision = None if (
+        not assignment_locked["buyer_name"] and _field_is_rejected(template_family_id, "buyer_name")
+    ) else decide_buyer_name(name_candidates)
 
     # --- SHIPPING ADDRESS ---
     addr_candidates = validate_candidates(extract_shipping_address(segments), clean_text)
     addr_candidates = score_shipping_address(addr_candidates, segments)
     addr_candidates, assignment_locked["shipping_address"] = _apply_assignment_policy(
-        template_family_id, "shipping_address", addr_candidates, segments, clean_text
+        template_family_id,
+        "shipping_address",
+        addr_candidates,
+        segments,
+        clean_text,
+        buyer_name=name_decision.value if name_decision else "",
     )
     if not assignment_locked["shipping_address"]:
         addr_candidates = apply_anchor_scoring(template_family_id, "shipping_address", addr_candidates)
         addr_candidates = _apply_signature_scoring(addr_candidates, template_family_id, "shipping_address", segment_map)
-    addr_decision = None if _field_is_rejected(template_family_id, "shipping_address") else decide_shipping_address(addr_candidates)
+    addr_decision = decide_shipping_address(addr_candidates)
+    addr_decision = _trim_address_duplicate_buyer_name(addr_decision, name_decision)
 
     _log_field_decision_proof(path, "quantity", quantity_candidates, quantity_decision, 5.0)
     _log_field_decision_proof(path, "price", price_candidates, price_decision, 8.0)
@@ -1183,18 +1955,22 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     if addr_decision:
         decision_rows.append(addr_decision)
 
+    decision_rows = _apply_assignment_locks(decision_rows, assignment_lock, clean_text)
+
     # =========================
     # REPLAY (FINAL STEP)
     # =========================
 
     if ENABLE_REPLAY:
         for field, value in replay_data.items():
-            if field == "quantity":
+            if field in {"quantity", "price"}:
                 continue
             # Skip replay for fields locked by a user-assigned span — injection
             # already placed the authoritative candidate; replay would only
             # corrupt it with value-only text search.
             if assignment_locked.get(field):
+                continue
+            if assignment_lock and field in assignment_lock:
                 continue
 
             existing = next((d for d in decision_rows if d.field == field), None)
@@ -1254,7 +2030,13 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     # Build a rich signature map keyed by candidate_id for use in the
     # confidence block. template_id + field + signature is the streak key.
     _sig_map: Dict[str, str] = {
-        c.id: build_extraction_signature(c, segment_map)
+        c.id: (
+            build_price_signature(c, segment_map, segments)
+            if c.field_type == "price"
+            else build_shipping_address_signature(c, segment_map)
+            if c.field_type == "shipping_address"
+            else build_extraction_signature(c, segment_map)
+        )
         for c in all_candidates
     }
 
@@ -1280,6 +2062,8 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
         for _row in decision_rows:
             if _row.decision != "suggested":
                 continue
+            if _row.field == "price" and any("rejected_price_structure" in signal for signal in _row.provenance.get("signals", [])):
+                continue
             if _row.field in _already_promoted:
                 _row.decision = "assigned"
                 _row.decision_source = "confidence_promotion"
@@ -1295,6 +2079,8 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     else:
         for _row in decision_rows:
             if _row.decision != "suggested":
+                continue
+            if _row.field == "price" and any("rejected_price_structure" in signal for signal in _row.provenance.get("signals", [])):
                 continue
 
             if _row.field == "quantity":
@@ -1333,25 +2119,17 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
                     file=sys.stderr, flush=True,
                 )
 
+    decision_rows = _apply_assignment_locks(decision_rows, assignment_lock, clean_text)
+
     meta: Dict[str, Any] = {}
     gift_attention = _collect_gift_attention_ranges(clean_text)
-    if gift_attention["gift_message"]:
-        meta["gift_message"] = gift_attention["gift_message"]
     if gift_attention["gift_attention_ranges"]:
         meta["gift_attention_ranges"] = gift_attention["gift_attention_ranges"]
 
-    lower_text = clean_text.lower()
-    normalized_text = re.sub(r"\s+", " ", lower_text).strip()
-    has_message_content = bool(meta.get("gift_message"))
     flags = {
-        "is_gift": (
-            any(word in normalized_text for word in _GIFT_STRONG_WORDS)
-            or (
-                any(word in normalized_text for word in _GIFT_MEDIUM_WORDS)
-                and has_message_content
-            )
-        ),
-        "has_personalization": any(word in lower_text for word in _PERSONALIZATION_WORDS),
+        "gift": bool(gift_attention["gift"]),
+        "gift_wrap": bool(gift_attention["gift_wrap"]),
+        "gift_message": bool(gift_attention["gift_message"]),
     }
 
     # =========================
@@ -1362,6 +2140,8 @@ def parse_eml(path: str, update_confidence: bool = True) -> Dict[str, Any]:
     validated_decisions: List[DecisionRow] = []
     for row in decision_rows:
         if row.start is None or row.end is None:
+            validated_decisions.append(row)
+        elif row.decision_source == "manual_override":
             validated_decisions.append(row)
         elif clean_text[row.start:row.end] == row.value:
             validated_decisions.append(row)

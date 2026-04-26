@@ -38,6 +38,8 @@ const TABS = [
   { id: "printing",  label: "Printing"    },
   { id: "documents", label: "Docs"        },
   { id: "general",   label: "General"     },
+  { id: "learning",  label: "Learning"    },
+  { id: "advanced",  label: "Advanced"    },
 ];
 
 /* ── icons ─────────────────────────────────────────────────────────────── */
@@ -2598,9 +2600,248 @@ function DocumentsTab({ config, setConfig }) {
   );
 }
 
+function AdvancedTab() {
+  const [workspaceState, setWorkspaceState] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const loadWorkspaceInfo = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const nextState = await window.parserApp?.getWorkspaceState?.({ bucket: "Inbox", relativePath: "" });
+      setWorkspaceState(nextState || null);
+      setError("");
+    } catch (nextError) {
+      setError(nextError.message || "Could not load workspace details.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadWorkspaceInfo();
+  }, [loadWorkspaceInfo]);
+
+  const buckets = workspaceState?.buckets || [];
+
+  return (
+    <div>
+      <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: 4 }}>
+        Workspace Details
+      </div>
+      <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: 16, lineHeight: 1.6 }}>
+        Reference counts for Spaila folders. These are informational and do not change learning or order data.
+      </div>
+      <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>Folder Counts</div>
+            <div style={{ marginTop: 3, fontSize: 12, color: "#6b7280" }}>
+              Inbox, Orders, Archive, and Backup totals.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={loadWorkspaceInfo}
+            disabled={loading}
+            style={{
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              color: "#374151",
+              borderRadius: 8,
+              padding: "6px 10px",
+              cursor: loading ? "default" : "pointer",
+              opacity: loading ? 0.7 : 1,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+        {error ? (
+          <div style={{ marginTop: 12, fontSize: 12, color: "#b91c1c" }}>{error}</div>
+        ) : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginTop: 14 }}>
+          {["Inbox", "Orders", "Archive", "Backup"].map((key) => {
+            const bucketInfo = buckets.find((item) => item.key === key);
+            return (
+              <div key={key} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, background: "#fff" }}>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>{key}</div>
+                <div style={{ marginTop: 6, fontSize: 24, fontWeight: 800, color: "#111827" }}>{bucketInfo?.count ?? 0}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const LEARNING_FIELDS = [
+  { key: "shipping_address", label: "Shipping Address" },
+  { key: "buyer_name", label: "Buyer Name" },
+  { key: "buyer_email", label: "Buyer Email" },
+  { key: "price", label: "Price" },
+  { key: "quantity", label: "Quantity" },
+  { key: "order_date", label: "Order Date" },
+  { key: "ship_by", label: "Ship By" },
+];
+
+function LearningTab() {
+  const [summary, setSummary] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [resettingField, setResettingField] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [lastReset, setLastReset] = React.useState(null);
+
+  const loadLearningSummary = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const nextSummary = await window.parserApp?.getLearningSummary?.();
+      setSummary(nextSummary || null);
+      setError("");
+    } catch (nextError) {
+      setError(nextError.message || "Could not load learning details.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadLearningSummary();
+  }, [loadLearningSummary]);
+
+  const handleResetField = async (field) => {
+    const fieldInfo = LEARNING_FIELDS.find((item) => item.key === field);
+    const label = fieldInfo?.label || field;
+    const confirmed = window.confirm(
+      `Reset learning for ${label}?\nThis will clear learned corrections for this field only.`
+    );
+    if (!confirmed) {
+      return;
+    }
+    setResettingField(field);
+    setError("");
+    try {
+      const result = await window.parserApp?.resetFieldLearning?.({ field });
+      setLastReset(result || { field });
+      await loadLearningSummary();
+    } catch (nextError) {
+      setError(nextError.message || `Could not reset ${label} learning.`);
+    } finally {
+      setResettingField("");
+    }
+  };
+
+  const summaryByField = Object.fromEntries((summary?.fields || []).map((item) => [item.field, item]));
+
+  return (
+    <div>
+      <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: 4 }}>
+        Learning
+      </div>
+      <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: 16, lineHeight: 1.6 }}>
+        Review learned corrections by field. Resetting is scoped to one field and does not affect other learning.
+      </div>
+      <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>Field Learning</div>
+            <div style={{ marginTop: 3, fontSize: 12, color: "#6b7280" }}>
+              Manual assignments take priority over matching rejections.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={loadLearningSummary}
+            disabled={loading}
+            style={{
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              color: "#374151",
+              borderRadius: 8,
+              padding: "6px 10px",
+              cursor: loading ? "default" : "pointer",
+              opacity: loading ? 0.7 : 1,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+        {error ? (
+          <div style={{ marginBottom: 12, fontSize: 12, color: "#b91c1c" }}>{error}</div>
+        ) : null}
+        {lastReset ? (
+          <div style={{ marginBottom: 12, fontSize: 12, color: "#166534" }}>
+            Reset complete for {LEARNING_FIELDS.find((item) => item.key === lastReset.field)?.label || lastReset.field}.
+          </div>
+        ) : null}
+        <div style={{ display: "grid", gap: 10 }}>
+          {LEARNING_FIELDS.map((fieldInfo) => {
+            const item = summaryByField[fieldInfo.key] || {};
+            const confidence = item.confidence || {};
+            const confidenceText = confidence.entries
+              ? `${confidence.promoted ? "Promoted" : "Tracking"} (${confidence.max_streak || 0}/4)`
+              : "None";
+            const isResetting = resettingField === fieldInfo.key;
+            return (
+              <div
+                key={fieldInfo.key}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(150px, 1.2fr) repeat(3, minmax(110px, 0.8fr)) auto",
+                  alignItems: "center",
+                  gap: 10,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 10,
+                  padding: 12,
+                  background: "#fff",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{fieldInfo.label}</div>
+                <div style={{ fontSize: 12, color: "#4b5563" }}>
+                  Assignments: <strong>{item.assignments || 0}</strong>
+                </div>
+                <div style={{ fontSize: 12, color: "#4b5563" }}>
+                  Active rejections: <strong>{item.active_rejections || 0}</strong>
+                </div>
+                <div style={{ fontSize: 12, color: "#4b5563" }}>
+                  Confidence: <strong>{confidenceText}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleResetField(fieldInfo.key)}
+                  disabled={Boolean(resettingField)}
+                  style={{
+                    border: "1px solid #fecaca",
+                    background: "#fff7f7",
+                    color: "#991b1b",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    cursor: resettingField ? "default" : "pointer",
+                    opacity: resettingField && !isResetting ? 0.55 : 1,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {isResetting ? "Resetting..." : "Reset Field Learning"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── main component ─────────────────────────────────────────────────────── */
-export default function SettingsPage({ onOrders, onWorkspace, onSettings, ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
-  const [activeTab, setActiveTab] = React.useState("orders");
+export default function SettingsPage({ onOrders, onWorkspace, onSettings, initialTab = "orders", ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
+  const [activeTab, setActiveTab] = React.useState(initialTab || "orders");
   const [fields, setFields] = React.useState(() => loadFieldConfig());
   const [localOrder, setLocalOrder] = React.useState(() => externalColumnOrder ? [...externalColumnOrder] : defaultColumnOrder());
   const [localParserOrder, setLocalParserOrder] = React.useState(() => loadParserFieldOrder());
@@ -2613,8 +2854,25 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, orders
   const [localShopConfig, setLocalShopConfig] = React.useState(() => loadShopConfig());
   const [localDocumentsConfig, setLocalDocumentsConfig] = React.useState(() => loadDocumentsConfig());
   const [localPrintConfig, setLocalPrintConfig] = React.useState(() => loadPrintConfig());
+  const [saveFeedback, setSaveFeedback] = React.useState(false);
+  const saveFeedbackTimerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    setActiveTab(initialTab || "orders");
+  }, [initialTab]);
+
+  React.useEffect(() => {
+    return () => {
+      if (saveFeedbackTimerRef.current) {
+        window.clearTimeout(saveFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   function handleSave() {
+    if (saveFeedbackTimerRef.current) {
+      window.clearTimeout(saveFeedbackTimerRef.current);
+    }
     saveShopConfig(localShopConfig);
     saveDocumentsConfig(localDocumentsConfig);
     savePrintConfig(localPrintConfig);
@@ -2628,7 +2886,11 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, orders
     saveDateConfig(localDateConfig);
     saveArchiveConfig(localArchiveConfig);
     saveEmailTemplates(localEmailTemplates);
-    onOrders?.();
+    setSaveFeedback(true);
+    saveFeedbackTimerRef.current = window.setTimeout(() => {
+      setSaveFeedback(false);
+      onOrders?.();
+    }, 650);
   }
 
   /** Update the shared label for a field key. Both tabs write here. */
@@ -3017,6 +3279,14 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, orders
               />
             )}
 
+            {activeTab === "advanced" && (
+              <AdvancedTab />
+            )}
+
+            {activeTab === "learning" && (
+              <LearningTab />
+            )}
+
             {activeTab === "parser" && (
               <>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "4px" }}>
@@ -3070,17 +3340,32 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, orders
 
           {/* Footer */}
           <div style={{
-            display: "flex", justifyContent: "flex-end", gap: "8px",
+            display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "10px",
             padding: "13px 24px",
             borderTop: "1px solid #e5e7eb",
             background: "#fafafa",
             flexShrink: 0,
           }}>
+            {saveFeedback && (
+              <span style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                color: "#15803d",
+                transition: "opacity 0.15s",
+              }}>
+                Saved
+              </span>
+            )}
             <button onClick={handleSave} style={{
               padding: "8px 22px", border: "none", borderRadius: "6px",
-              background: "#2563eb", color: "#fff", cursor: "pointer",
+              background: saveFeedback ? "#16a34a" : "#2563eb", color: "#fff", cursor: "pointer",
               fontSize: "13px", fontWeight: 600,
-            }}>Save</button>
+              boxShadow: saveFeedback
+                ? "inset 0 2px 5px rgba(0,0,0,0.2)"
+                : "0 1px 3px rgba(37,99,235,0.35)",
+              transform: saveFeedback ? "translateY(1px)" : "translateY(0)",
+              transition: "background 0.12s, box-shadow 0.12s, transform 0.12s",
+            }}>{saveFeedback ? "Saved" : "Save"}</button>
           </div>
         </div>
       </div>

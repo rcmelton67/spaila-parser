@@ -163,6 +163,7 @@ function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, 
       const result = await onSendEmail?.({ subject: currentSubject, body: currentBody });
       if (result?.ok) {
         setSendState({ sending: false, error: "", success: "Email sent" });
+        onClose?.();
       } else {
         setSendState({ sending: false, error: result?.error || "Could not send email.", success: "" });
       }
@@ -293,7 +294,7 @@ function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, 
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.6fr) minmax(260px, 1fr) auto", gap: 12, alignItems: "stretch" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "stretch" }}>
             <div style={{ padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", justifyContent: "center" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 Attachments ({dock.attachmentPaths?.length || 0})
@@ -312,18 +313,6 @@ function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, 
                 {dock.environment?.attachmentCapability === "Manual" ? (
                   <div>Attach manually</div>
                 ) : null}
-              </div>
-            </div>
-
-            <div style={{ padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                Environment
-              </div>
-              <div style={{ marginTop: 8, fontSize: 13, color: "#0f172a" }}>
-                {dock.environment?.os || "Unknown"} • {dock.environment?.emailClient || "Unknown"}
-              </div>
-              <div style={{ marginTop: 4, fontSize: 12, color: "#64748b" }}>
-                Attachments: {dock.environment?.attachmentCapability || "Manual"}
               </div>
             </div>
 
@@ -459,6 +448,8 @@ function createManualOrderDraft(activeTab = "active") {
     price: "",
     order_notes: "",
     gift_message: "",
+    is_gift: false,
+    gift_wrap: false,
     buyer_name: "",
     buyer_email: "",
     shipping_address: "",
@@ -474,7 +465,14 @@ function createManualOrderDraft(activeTab = "active") {
 }
 
 /* ── Draggable column header ────────────────────────────────────────────── */
-function SortableHeader({ col, width, fontSize, onStartResize, activeSort, onOpenMenu }) {
+function SortableHeader({
+  col,
+  width,
+  fontSize,
+  onStartResize,
+  activeSort,
+  onOpenMenu,
+}) {
   const {
     attributes,
     listeners,
@@ -552,11 +550,12 @@ function SortableHeader({ col, width, fontSize, onStartResize, activeSort, onOpe
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-export default function OrdersPage({ onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, isActive, onCountsChange }) {
+export default function OrdersPage({ onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, focusOrderRequest, isActive, onCountsChange }) {
   const [rows, setRows] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [searchExcludedColumns, setSearchExcludedColumns] = React.useState(() => new Set());
   const [viewConfig, setViewConfig] = React.useState(() => loadViewConfig());
   const [activeSort, setActiveSort] = React.useState(() => normalizeSortConfig(loadViewConfig().defaultSort));
   const [editingOrder, setEditingOrder] = React.useState(null);
@@ -648,6 +647,12 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   const [giftLetterToast, setGiftLetterToast] = React.useState(null); // { error?: string }
   const [saveToast, setSaveToast] = React.useState(null); // { ok, message }
+
+  React.useEffect(() => {
+    if (!emailToast || emailToast.kind !== "success") return undefined;
+    const timer = window.setTimeout(() => setEmailToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [emailToast]);
 
   async function handleSaveToFolder() {
     const folder = DEFAULT_SAVE_FOLDER;
@@ -871,6 +876,48 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     return displayValue ?? "";
   }, [dateConfig, orderStatuses, priceList, statusConfig.states]);
 
+  const searchActive = searchQuery.trim().length > 0;
+  React.useEffect(() => {
+    if (!searchActive && searchExcludedColumns.size) {
+      setSearchExcludedColumns(new Set());
+    }
+  }, [searchActive, searchExcludedColumns.size]);
+
+  const toggleSearchColumnExclusion = React.useCallback((columnKey) => {
+    setSearchExcludedColumns((current) => {
+      const next = new Set(current);
+      if (next.has(columnKey)) {
+        next.delete(columnKey);
+      } else {
+        next.add(columnKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const getColumnSearchValues = React.useCallback((row, columnKey) => {
+    const rawValue = row[columnKey];
+    const displayValue = getDisplayedCellValue(row, columnKey);
+    const values = [];
+
+    if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
+      values.push(rawValue);
+    }
+    if (displayValue !== undefined && displayValue !== null && displayValue !== "" && displayValue !== rawValue) {
+      values.push(displayValue);
+    }
+    if (DATE_FIELD_KEYS.has(columnKey)) {
+      const formatted = formatDate(rawValue, dateConfig);
+      if (formatted) {
+        values.push(formatted);
+      }
+    }
+
+    return values
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+  }, [dateConfig, getDisplayedCellValue]);
+
   const getPrintCellPresentation = React.useCallback((row, columnKey) => {
     const text = getDisplayedCellValue(row, columnKey) || "—";
 
@@ -912,28 +959,23 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     };
   }, [fieldMap, getDisplayedCellValue, orderStatuses, priceList, statusConfig.states]);
 
-  const getRowSearchValues = React.useCallback((row) => {
-    const dateStrings = [row.order_date, row.ship_by]
-      .flatMap((value) => [value, formatDate(value, dateConfig)])
-      .filter(Boolean);
+  const searchableColumnKeys = React.useMemo(() => {
+    const configuredKeys = Object.entries(viewConfig.searchableFields || {})
+      .filter(([, enabled]) => !!enabled)
+      .map(([key]) => key);
 
-    return [
-      row.buyer_name,
-      row.order_number,
-      row.pet_name,
-      row.notes,
-      row.order_notes,
-      row.custom_1,
-      row.custom_2,
-      row.custom_3,
-      row.custom_4,
-      row.custom_5,
-      row.custom_6,
-      ...dateStrings,
-    ]
-      .filter(Boolean)
-      .map((value) => String(value).toLowerCase());
-  }, [dateConfig]);
+    if (viewConfig.includeOrderInfo) {
+      configuredKeys.push("order_info");
+    }
+
+    return configuredKeys.filter((key, index, array) => (
+      !searchExcludedColumns.has(key) && array.indexOf(key) === index
+    ));
+  }, [searchExcludedColumns, viewConfig.includeOrderInfo, viewConfig.searchableFields]);
+
+  const getRowSearchValues = React.useCallback((row) => (
+    searchableColumnKeys.flatMap((columnKey) => getColumnSearchValues(row, columnKey))
+  ), [getColumnSearchValues, searchableColumnKeys]);
 
   function toggleRow(id) {
     setSelectedIds((prev) => {
@@ -1084,12 +1126,33 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         username: shopConfig?.smtpUsername || "",
         password: shopConfig?.smtpPassword || "",
       },
+      imap: {
+        host: shopConfig?.imapHost || "",
+        port: shopConfig?.imapPort || "993",
+        username: shopConfig?.imapUsername || "",
+        password: shopConfig?.imapPassword || "",
+        useSsl: shopConfig?.imapUseSsl !== false,
+      },
       to: mailDock.to,
       subject: draft.subject ?? mailDock.currentSubject ?? mailDock.subject,
       body: draft.body ?? mailDock.currentBody ?? mailDock.body,
       attachmentPaths: mailDock.attachmentPaths || [],
       orderFolderPath: mailDock.attachmentFolderPath || mailDock.attachmentSourcePath || "",
+      orderNumber: mailDock.row?.order_number || "",
+      buyerName: mailDock.row?.buyer_name || "",
+      buyerEmail: mailDock.row?.buyer_email || "",
     });
+    if (result?.ok) {
+      const append = result.appendToSent || {};
+      setEmailToast({
+        title: append.ok ? "Email sent" : "Email sent with warning",
+        warnings: [
+          "Sent",
+          append.ok ? "Saved to Sent folder" : "Could not save to Sent folder",
+        ],
+        kind: append.ok ? "success" : "warning",
+      });
+    }
     return result || { ok: false, error: "Could not send email." };
   }
 
@@ -1227,6 +1290,13 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   React.useEffect(() => { loadOrders(); }, [refreshKey]);
 
+  React.useEffect(() => {
+    const orderNumber = String(focusOrderRequest?.orderNumber || "").trim();
+    if (orderNumber) {
+      setSearchQuery(orderNumber);
+    }
+  }, [focusOrderRequest?.key, focusOrderRequest?.orderNumber]);
+
   const filteredOrders = React.useMemo(() => {
     let base = safeOrders.filter((row) => activeTab === "completed" ? isCompletedOrder(row) : !isCompletedOrder(row));
 
@@ -1273,6 +1343,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   const safeDisplayOrders = displayOrders || [];
   const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall
+  const activeSearchableVisibleColumns = React.useMemo(() => (
+    visibleColumns.filter((column) => searchableColumnKeys.includes(column.key))
+  ), [searchableColumnKeys, visibleColumns]);
 
   const handlePrint = React.useCallback(async () => {
     const visiblePrintColumns = visibleColumns.filter(
@@ -1441,17 +1514,24 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       {emailToast && (
         <div style={{
           position: "fixed", top: 16, right: 16, zIndex: 99999,
-          background: "#1e293b", color: "#fff", borderRadius: 8,
+          background: emailToast.kind === "success" ? "#dbeafe" : "#1e293b",
+          color: emailToast.kind === "success" ? "#1e3a8a" : "#fff",
+          border: emailToast.kind === "success" ? "1px solid #93c5fd" : "none",
+          borderRadius: 8,
           padding: "12px 16px", maxWidth: 340, boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
           fontSize: 12, lineHeight: 1.6,
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ Email warnings</div>
-              {emailToast.warnings.map((w, i) => <div key={i} style={{ color: "#fbbf24" }}>• {w}</div>)}
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                {emailToast.title || "⚠ Email warnings"}
+              </div>
+              {emailToast.warnings.map((w, i) => (
+                <div key={i} style={{ color: emailToast.kind === "success" ? "#1d4ed8" : "#fbbf24" }}>• {w}</div>
+              ))}
             </div>
             <button onClick={() => setEmailToast(null)}
-              style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 14, padding: 0, flexShrink: 0 }}>✕</button>
+              style={{ background: "none", border: "none", color: emailToast.kind === "success" ? "#60a5fa" : "#9ca3af", cursor: "pointer", fontSize: 14, padding: 0, flexShrink: 0 }}>✕</button>
           </div>
         </div>
       )}
@@ -1770,6 +1850,67 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                       />
                     ))}
                   </tr>
+                  {searchActive && activeSearchableVisibleColumns.length > 0 && (
+                    <tr>
+                      <th style={{
+                        width: 30, minWidth: 30, maxWidth: 30,
+                        padding: "6px 0 6px 8px",
+                        border: "1px solid #e5e7eb",
+                        background: "#f8fafc",
+                        boxSizing: "border-box",
+                      }} />
+                      {visibleColumns.map((c) => {
+                        const w = colWidths[c.key] ?? c.defaultWidth;
+                        const isSearchableColumn = searchableColumnKeys.includes(c.key);
+                        return (
+                          <th
+                            key={`filter-chip-${c.key}`}
+                            style={{
+                              width: w,
+                              minWidth: w,
+                              maxWidth: w,
+                              padding: "6px 7px",
+                              border: "1px solid #e5e7eb",
+                              background: "#f8fafc",
+                              textAlign: "left",
+                              fontWeight: 400,
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {isSearchableColumn ? (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  toggleSearchColumnExclusion(c.key);
+                                }}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  width: 22,
+                                  height: 22,
+                                  borderRadius: "12px",
+                                  background: "#dbeafe",
+                                  border: "1px solid #93c5fd",
+                                  color: "#1d4ed8",
+                                  cursor: "pointer",
+                                  padding: 0,
+                                  fontSize: "13px",
+                                  fontWeight: 800,
+                                  lineHeight: 1,
+                                }}
+                                title={`Remove ${c.label} from search`}
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  )}
                 </thead>
               </SortableContext>
 
@@ -2173,6 +2314,16 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                 },
                 color: "#2563eb",
               },
+              ...(searchActive ? [{
+                label: searchExcludedColumns.has(column.key)
+                  ? `Clear ${column.label} Filter`
+                  : `Filter ${column.label} by "${activeSearchTerm}"`,
+                action: () => {
+                  toggleSearchColumnExclusion(column.key);
+                  closeHeaderMenu();
+                },
+                color: searchExcludedColumns.has(column.key) ? "#2563eb" : "#111",
+              }] : []),
             ];
           })().map(({ label, action, color = "#111" }) => (
             <div

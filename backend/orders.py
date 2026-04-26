@@ -67,6 +67,12 @@ def _make_order_folder(
 router = APIRouter()
 
 
+def _as_bool_int(value) -> int:
+    if isinstance(value, str):
+        return 1 if value.strip().lower() in {"1", "true", "yes", "on"} else 0
+    return 1 if bool(value) else 0
+
+
 @router.post("/orders/create")
 async def create_order(payload: dict):
     order = payload.get("order", {})
@@ -79,6 +85,9 @@ async def create_order(payload: dict):
     order_number = order.get("order_number") or ""
     buyer_name   = order.get("buyer_name")
     order_date   = order.get("order_date")
+    ship_by      = str(order.get("ship_by") or "").strip()
+    if not ship_by:
+        raise HTTPException(status_code=400, detail="Ship by date is required.")
 
     # Create the folder immediately so Show Folder works without waiting for the helper
     order_folder_path = _make_order_folder(buyer_name, order_number, order_date)
@@ -94,8 +103,8 @@ async def create_order(payload: dict):
             buyer_email, shipping_address, ship_by,
             status, created_at,
             source_eml_path, eml_path, order_folder_path,
-            platform
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            platform, is_gift, gift_wrap
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
@@ -103,13 +112,15 @@ async def create_order(payload: dict):
         buyer_name,
         order.get("buyer_email"),
         order.get("shipping_address"),
-        order.get("ship_by"),
+        ship_by,
         "active",
         created_at,
         source_eml_path,
         None,               # eml_path — helper moves the file here
         order_folder_path,  # set immediately at creation
         platform,
+        _as_bool_int(order.get("is_gift")),
+        _as_bool_int(order.get("gift_wrap")),
     ))
 
     # gift_message is order-level from the parser payload but stored per-item
@@ -176,8 +187,8 @@ def create_manual_order(payload: dict):
             buyer_email, shipping_address, ship_by,
             status, created_at,
             source_eml_path, eml_path, order_folder_path,
-            platform
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            platform, is_gift, gift_wrap
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
@@ -192,6 +203,8 @@ def create_manual_order(payload: dict):
         None,
         order_folder_path,
         "unknown",
+        _as_bool_int(payload.get("is_gift")),
+        _as_bool_int(payload.get("gift_wrap")),
     ))
 
     cur.execute("""
@@ -296,7 +309,9 @@ def list_orders():
             items.order_notes,
             items.item_index,
             orders.platform,
-            items.item_status
+            items.item_status,
+            orders.is_gift,
+            orders.gift_wrap
         FROM items
         JOIN orders ON items.order_id = orders.id
         WHERE orders.status NOT IN ('deleted')
@@ -333,6 +348,8 @@ def list_orders():
             "item_index": r[22],
             "platform":    r[23] or "unknown",
             "item_status": r[24] or None,
+            "is_gift": bool(r[25]),
+            "gift_wrap": bool(r[26]),
         }
         for r in rows
     ]
@@ -352,6 +369,8 @@ def update_full(payload: dict):
             shipping_address  = ?,
             order_date        = ?,
             ship_by           = ?,
+            is_gift           = ?,
+            gift_wrap         = ?,
             status            = ?
         WHERE id = ?
     """, (
@@ -361,6 +380,8 @@ def update_full(payload: dict):
         payload.get("shipping_address") or None,
         payload.get("order_date"),
         payload.get("ship_by"),
+        _as_bool_int(payload.get("is_gift")),
+        _as_bool_int(payload.get("gift_wrap")),
         payload.get("status", "active"),
         payload.get("order_id"),
     ))

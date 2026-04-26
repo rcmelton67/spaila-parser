@@ -12,24 +12,24 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "date_header|none|header",
     "source": "",
-    "last_value": "April 22, 2026",
-    "streak_count": 62
+    "last_value": "April 25, 2026",
+    "streak_count": 98
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|email|body": {
     "field": "buyer_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|email|body",
     "source": "",
-    "last_value": "geejuu30@yahoo.com",
-    "streak_count": 58
+    "last_value": "logankistler@gmail.com",
+    "streak_count": 94
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:ship_by:ship_by_subject_regex|ship_by|order": {
     "field": "ship_by",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "ship_by_subject_regex|ship_by|order",
     "source": "",
-    "last_value": "Apr 29",
-    "streak_count": 57
+    "last_value": "May 8",
+    "streak_count": 91
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_label_name|none|body": {
     "field": "buyer_name",
@@ -44,16 +44,8 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|price|pricing",
     "source": "",
-    "last_value": "64.00",
-    "streak_count": 57
-  },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_label_block|none|body": {
-    "field": "shipping_address",
-    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
-    "extraction_signature": "address_label_block|none|body",
-    "source": "",
-    "last_value": "16684 Markley Lake Dr SE\nPRIOR LAKE , MN 55372-1998\nUnited States\nPurchase Shipping Label\nShipping internationally?\nDouble check any customs requirements. Learn more.\nSell with confidence\nLearn about Etsy Seller Protection .\nChoose a DDP shipping service for US deliveries\nDDP (Delivered Duty Paid) means duties are prepaid before delivery to avoid customs complications and charges at delivery. Review our list of recommended carriers to learn more.\nHeart Rock Memorial Pet Loss Gift\nSize: 8\" Heading+name/date\nPersonalization: The Best Boy, Deacon (dog), 2010 - 2026\nShop: MeltonMemorials\nTransaction ID: 5036409968\nQuantity: 1\nPrice: $64.00\nPersonalized item\nProcessing time: 1 week\nNo returns or exchanges accepted\nOrder total\nItem total:\n$64.00\nShipping:\n$0.00\nSales tax:\n$5.36\nOrder total:\n$69.36\nEtsy\u2019s Purchase Protection program.\nFor qualifying orders up to $250, Etsy will refund buyers and you\u2019ll keep your earnings. Learn more\nQuestions\nIf you have any questions about this order, please contact the buyer directly\nrmloftus19\nSend them a Convo \u00a0\u00a0|\nrachel.m.loftus@gmail.com Send them an email\nShop policies for this order:\nShipping\nCustoms and import taxes\nBuyers are responsible for any customs and import taxes that may apply. Sellers aren't responsible for delays due to customs.\nTerms showing to your buyers:\nReturns & exchanges\nContact the seller if you have any problems with your order.\nCancellations\nCancellations: accepted\nRequest a cancellation: within 2 days of purchase\nIf you were not involved in this transaction, please contact us via our Contact Page .\nIf you live in North America or South America, this email is sent by Etsy, Inc., 117 Adams Street, Brooklyn, NY 11201, USA; if you live elsewhere, this email is sent by Etsy Ireland UC, a subsidiary of Etsy, Inc., One Le Pole Square, Ship Street Great, Dublin 8, D08 E6PD, Ireland having company registration number 495696 and VAT registration number IE9777587C. You are receiving this email because you registered on Etsy.com with this email address.\nCopyright \u00a9 2026 Etsy, Inc, an affiliate of Etsy Ireland UC. All rights reserved.",
-    "streak_count": 33
+    "last_value": "56.00",
+    "streak_count": 78
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|none|body": {
     "field": "buyer_email",
@@ -69,7 +61,7 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "12,438",
-    "streak_count": 1
+    "streak_count": 2
   },
   "2e45b23c2f43d929bdcb3bffac11bb428c0b0f4f732ec88c06e4b9d3a80682ba:order_number:number_regex|from|body": {
     "field": "order_number",
@@ -77,15 +69,15 @@
     "extraction_signature": "number_regex|from|body",
     "source": "",
     "last_value": "2",
-    "streak_count": 1
+    "streak_count": 2
   },
   "2e45b23c2f43d929bdcb3bffac11bb428c0b0f4f732ec88c06e4b9d3a80682ba:order_date:date_header|none|header": {
     "field": "order_date",
     "template_id": "2e45b23c2f43d929bdcb3bffac11bb428c0b0f4f732ec88c06e4b9d3a80682ba",
     "extraction_signature": "date_header|none|header",
     "source": "",
-    "last_value": "April 22, 2026",
-    "streak_count": 3
+    "last_value": "April 24, 2026",
+    "streak_count": 4
   },
   "2e45b23c2f43d929bdcb3bffac11bb428c0b0f4f732ec88c06e4b9d3a80682ba:quantity:number_regex|email|shipping_block:etsy": {
     "field": "quantity",
@@ -199,37 +191,21 @@
     "last_value": "Jenna Lowry",
     "streak_count": 4
   },
-  "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:shipping_address:address_block_street_forward|none|body": {
-    "field": "shipping_address",
-    "template_id": "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459",
-    "extraction_signature": "address_block_street_forward|none|body",
-    "source": "",
-    "last_value": "Prestige Realty\n121 N Main\nCedar City, UT 84720",
-    "streak_count": 4
-  },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|order_number|order": {
     "field": "order_number",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "number_regex|order_number|order",
     "source": "",
-    "last_value": "4040263533",
-    "streak_count": 20
+    "last_value": "4038405186",
+    "streak_count": 56
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_block_first_line|none|body": {
     "field": "buyer_name",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
-    "last_value": "Victoria Hernandez",
-    "streak_count": 16
-  },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_block_with_recipient|none|body": {
-    "field": "shipping_address",
-    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
-    "extraction_signature": "address_block_with_recipient|none|body",
-    "source": "",
-    "last_value": "Victoria Hernandez\n68140 modelo rd\nCATHEDRAL CITY , CA 92234\nUnited States",
-    "streak_count": 19
+    "last_value": "Logan Kistler",
+    "streak_count": 50
   },
   "ff037095d24343c83ad8689c75b71239fbdc69704ff928ebb5d0a7ed5b3d113d:quantity:number_regex|quantity|qty_label:unknown": {
     "field": "quantity",
@@ -319,14 +295,6 @@
     "last_value": "Rachel Loftus-Jungwirth",
     "streak_count": 1
   },
-  "aa43ea0afc2adea6103956ca6c64dd95bc38300edcc08346f6958b2983ec64c8:shipping_address:address_block_with_recipient|none|body": {
-    "field": "shipping_address",
-    "template_id": "aa43ea0afc2adea6103956ca6c64dd95bc38300edcc08346f6958b2983ec64c8",
-    "extraction_signature": "address_block_with_recipient|none|body",
-    "source": "",
-    "last_value": "Rachel Loftus-Jungwirth\n16684 Markley Lake Dr SE\nPRIOR LAKE , MN 55372-1998\nUnited States",
-    "streak_count": 1
-  },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:quantity:number_regex|quantity|qty_label:etsy": {
     "field": "quantity",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
@@ -350,5 +318,53 @@
     "source": "",
     "last_value": "rodney@meltonmemorials.com",
     "streak_count": 1
+  },
+  "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "67.195",
+    "streak_count": 1
+  },
+  "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865:order_date:date_header|none|header": {
+    "field": "order_date",
+    "template_id": "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865",
+    "extraction_signature": "date_header|none|header",
+    "source": "",
+    "last_value": "April 23, 2026",
+    "streak_count": 1
+  },
+  "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "f7edc692f9ec119d3dd6f72601de62c7a9eb26724872664d968feea4baa68865",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "hlayton95@yahoo.com",
+    "streak_count": 1
+  },
+  "1f35f3044908bb915b361e1511394e2a1cd35621e414c9128f551487c5866014:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "1f35f3044908bb915b361e1511394e2a1cd35621e414c9128f551487c5866014",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "35.00",
+    "streak_count": 3
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_block_with_recipient|none|body": {
+    "field": "shipping_address",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "address_block_with_recipient|none|body",
+    "source": "",
+    "last_value": "3443 French School\nUnit 206\nCALEDONIA , MI 49316-7221\nUnited States",
+    "streak_count": 1
+  },
+  "e38270cfbb66981353d2eb691e1dd9eab426a40c2f9d78fd0e1410a7c31bdba7:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "e38270cfbb66981353d2eb691e1dd9eab426a40c2f9d78fd0e1410a7c31bdba7",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "89.99",
+    "streak_count": 3
   }
 }

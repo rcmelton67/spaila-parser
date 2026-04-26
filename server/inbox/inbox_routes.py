@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from workspace_paths import get_workspace_root
 
 from .inbox_service import fetch_and_store_emails
+from .imap_client import check_imap_connection, delete_message
 
 
 router = APIRouter()
@@ -41,4 +42,54 @@ def fetch_inbox_emails():
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error) or "Could not fetch inbox emails.") from error
 
-    return {"saved": result["saved"]}
+    return {"saved": result["saved"], "skipped": result.get("skipped", 0)}
+
+
+def _check_imap_from_settings(settings: dict) -> bool:
+    return check_imap_connection(
+        host=settings.get("imapHost") or settings.get("imap_host"),
+        username=settings.get("imapUsername") or settings.get("imap_user"),
+        password=settings.get("imapPassword") or settings.get("imap_pass"),
+        mailbox="INBOX",
+        port=settings.get("imapPort") or settings.get("imap_port") or 993,
+        use_ssl=bool(settings.get("imapUseSsl", settings.get("imap_ssl", True))),
+        timeout=2.5,
+    )
+
+
+@router.get("/inbox/check")
+def check_inbox_connection():
+    try:
+        settings = _load_email_settings()
+        connected = _check_imap_from_settings(settings)
+    except Exception as error:
+        return {"ok": True, "connected": False, "error": str(error) or "Email connection unavailable."}
+
+    return {"ok": True, "connected": bool(connected)}
+
+
+@router.post("/inbox/delete")
+def delete_inbox_email(payload: dict):
+    try:
+        settings = _load_email_settings()
+        if not _check_imap_from_settings(settings):
+            raise HTTPException(status_code=503, detail="Email connection unavailable. Cannot delete from account.")
+        email_id = str(payload.get("email_id") or payload.get("emailId") or "").strip()
+        delete_message(
+            host=settings.get("imapHost") or settings.get("imap_host"),
+            username=settings.get("imapUsername") or settings.get("imap_user"),
+            password=settings.get("imapPassword") or settings.get("imap_pass"),
+            email_id=email_id,
+            mailbox="INBOX",
+            port=settings.get("imapPort") or settings.get("imap_port") or 993,
+            use_ssl=bool(settings.get("imapUseSsl", settings.get("imap_ssl", True))),
+            timeout=2.5,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error) or "Could not delete inbox email.") from error
+
+    return {"ok": True}

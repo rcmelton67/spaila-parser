@@ -18,7 +18,6 @@ function getWorkspacePaths() {
     InboxNew: path.join(root, "inbox"),
     InboxCur: path.join(root, "inbox"),
     Orders: path.join(root, "Orders"),
-    Duplicates: path.join(root, "Duplicates"),
     Archive: path.join(root, "Archive"),
     Backup: path.join(root, "Backup"),
   };
@@ -30,7 +29,6 @@ function ensureWorkspaceLayout(log = () => {}) {
 
   const legacyPairs = {
     orders: "Orders",
-    duplicates: "Duplicates",
     archive: "Archive",
     backup: "Backup",
   };

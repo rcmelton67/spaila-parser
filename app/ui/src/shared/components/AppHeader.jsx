@@ -33,10 +33,35 @@ export default function AppHeader({
   selectedNav = "active",
   rightContent = null,
 }) {
+  const [saveFeedback, setSaveFeedback] = React.useState(false);
+  const saveFeedbackTimerRef = React.useRef(null);
   const hasDoc = !!documentsConfig.thankYouPath;
   const titleText = hasDoc
     ? "Open thank you letter (ready to print)"
     : "No thank you letter configured - go to Settings -> Documents";
+
+  React.useEffect(() => {
+    return () => {
+      if (saveFeedbackTimerRef.current) {
+        window.clearTimeout(saveFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerSave = () => {
+    if (!canSave) {
+      return;
+    }
+    if (saveFeedbackTimerRef.current) {
+      window.clearTimeout(saveFeedbackTimerRef.current);
+    }
+    setSaveFeedback(true);
+    onSave?.();
+    saveFeedbackTimerRef.current = window.setTimeout(() => {
+      setSaveFeedback(false);
+    }, 700);
+  };
+
   const navButtonStyle = (key) => (
     selectedNav === key
       ? tabStyleActive
@@ -89,33 +114,36 @@ export default function AppHeader({
     }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
-          onClick={canSave ? onSave : undefined}
-          title={saveTitle}
+          onClick={triggerSave}
+          title={saveFeedback ? "Saved" : saveTitle}
           style={{
             width: 36, height: 36,
             display: "flex", alignItems: "center", justifyContent: "center",
-            background: canSave ? "#2563eb" : "#e2e8f0",
-            border: `1px solid ${canSave ? "#1d4ed8" : "#cbd5e1"}`,
+            background: saveFeedback ? "#16a34a" : canSave ? "#dbeafe" : "#e2e8f0",
+            border: `1px solid ${saveFeedback ? "#15803d" : canSave ? "#bfdbfe" : "#cbd5e1"}`,
             borderRadius: "10px",
             cursor: canSave ? "pointer" : "default",
             fontSize: "18px",
-            color: canSave ? "#fff" : "#94a3b8",
-            boxShadow: canSave ? "0 1px 3px rgba(37,99,235,0.4)" : "none",
-            transition: "all 0.2s",
+            color: canSave ? "#1d4ed8" : "#94a3b8",
+            boxShadow: saveFeedback
+              ? "inset 0 2px 5px rgba(0,0,0,0.22)"
+              : canSave ? "0 1px 3px rgba(37,99,235,0.16)" : "none",
+            transform: saveFeedback ? "translateY(1px)" : "translateY(0)",
+            transition: "background 0.14s, border-color 0.14s, box-shadow 0.14s, transform 0.14s",
             flexShrink: 0,
             opacity: canSave ? 1 : 0.55,
           }}
           onMouseEnter={(e) => {
-            if (!canSave) return;
-            e.currentTarget.style.background = "#1d4ed8";
-            e.currentTarget.style.boxShadow = "0 2px 8px rgba(37,99,235,0.5)";
+            if (!canSave || saveFeedback) return;
+            e.currentTarget.style.background = "#bfdbfe";
+            e.currentTarget.style.boxShadow = "0 2px 8px rgba(37,99,235,0.22)";
           }}
           onMouseLeave={(e) => {
-            if (!canSave) return;
-            e.currentTarget.style.background = "#2563eb";
-            e.currentTarget.style.boxShadow = "0 1px 3px rgba(37,99,235,0.4)";
+            if (!canSave || saveFeedback) return;
+            e.currentTarget.style.background = "#dbeafe";
+            e.currentTarget.style.boxShadow = "0 1px 3px rgba(37,99,235,0.16)";
           }}
-        >💾</button>
+        >{saveFeedback ? "✓" : "💾"}</button>
 
         <button
           onClick={onSettings}

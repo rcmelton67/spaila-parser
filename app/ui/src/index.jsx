@@ -21,7 +21,9 @@ function Shell() {
   const [columnOrder, setColumnOrder] = React.useState(() => loadColumnOrder());
   const [parserFileRequest, setParserFileRequest] = React.useState({ key: 0, filePath: "" });
   const [ordersTab, setOrdersTab] = React.useState("active");
+  const [orderFocusRequest, setOrderFocusRequest] = React.useState({ key: 0, orderNumber: "" });
   const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0 });
+  const [settingsTab, setSettingsTab] = React.useState("orders");
 
   React.useEffect(() => {
     function handleHashChange() {
@@ -70,7 +72,17 @@ function Shell() {
     navigate("/");
   }
 
-  function goToSettings() {
+  function openOrder(order) {
+    const orderNumber = String(order?.order_number || "").trim();
+    if (!orderNumber) return;
+    const status = String(order?.item_status || order?.status || "").toLowerCase();
+    setOrdersTab(status === "completed" || status === "done" ? "completed" : "active");
+    setOrderFocusRequest((current) => ({ key: current.key + 1, orderNumber }));
+    navigate("/");
+  }
+
+  function goToSettings(nextTab = "orders") {
+    setSettingsTab(nextTab || "orders");
     navigate("/settings");
   }
 
@@ -103,6 +115,7 @@ function Shell() {
           onCountsChange={setOrderCounts}
           activeTab={ordersTab}
           onActiveTabChange={setOrdersTab}
+          focusOrderRequest={orderFocusRequest}
           isActive={route === "/"}
           columnOrder={columnOrder}
           onColumnOrderChange={handleColumnOrderChange}
@@ -129,6 +142,7 @@ function Shell() {
       {route === "/workspace" && (
         <WorkspacePage
           onOpenFile={openParserFile}
+          onOpenOrder={openOrder}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
           onOrders={goToOrders}
@@ -144,6 +158,7 @@ function Shell() {
           onOrders={goToOrders}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
+          initialTab={settingsTab}
           ordersTab={ordersTab}
           onOrdersTabChange={setOrdersTab}
           columnOrder={columnOrder}

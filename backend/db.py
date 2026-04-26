@@ -34,7 +34,9 @@ def init_db():
         created_at TEXT,
         order_folder_path TEXT,
         source_eml_path TEXT,
-        eml_path TEXT
+        eml_path TEXT,
+        is_gift INTEGER DEFAULT 0,
+        gift_wrap INTEGER DEFAULT 0
     )
     """)
 
@@ -60,6 +62,8 @@ def init_db():
         ("source_eml_path",   "TEXT"),
         ("eml_path",          "TEXT"),
         ("platform",          "TEXT"),   # "etsy" | "woo" | "shopify" | "unknown"
+        ("is_gift",           "INTEGER DEFAULT 0"),
+        ("gift_wrap",         "INTEGER DEFAULT 0"),
         # gift_message intentionally NOT here — it lives in items (per-item)
     ])
     _ensure_columns(cur, "items", [

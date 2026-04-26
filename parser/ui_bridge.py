@@ -3,8 +3,23 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from .learning.store import save_assignment, save_rejection
-from .pipeline import parse_eml, build_extraction_signature, build_quantity_signature
+from .learning.store import CORE_FIELDS, learning_summary, reset_field_learning, save_assignment, save_rejection
+from .learning.confidence_store import reset_field, reset_field_everywhere, summarize_fields
+from .pipeline import (
+    parse_eml,
+    build_extraction_signature,
+    build_quantity_signature,
+    build_price_signature,
+    build_shipping_address_signature,
+    build_shipping_address_line_learning,
+    classify_price_type,
+    _price_context_class,
+    _price_nearby_label,
+    _price_relative_position,
+    _price_section_type,
+    _shipping_address_pattern_hints,
+    _shipping_address_relative_position,
+)
 from .replay.fingerprint import compute_template_family_id
 
 
@@ -69,12 +84,95 @@ def _find_context(
     candidate_id = action.get("candidate_id", "")
     segment_id = action.get("segment_id", "")
     value = action.get("value", "")
+    field = action.get("field", "")
+    is_manual_assignment = bool(action.get("selected_text")) or action.get("source") == "manual"
+
+    def _buyer_name_value() -> str:
+        for decision in result.get("decisions", []):
+            if getattr(decision, "field", "") == "buyer_name":
+                return getattr(decision, "value", "") or ""
+        return ""
+
+    def _candidate_context(candidate) -> Dict[str, Any]:
+        if field == "price":
+            sig = build_price_signature(candidate, segment_map or {}, result.get("segments", []))
+            return {
+                "segment_id": candidate.segment_id,
+                "start": candidate.start,
+                "end": candidate.end,
+                "selected_text": candidate.raw_text,
+                "segment_text": candidate.segment_text,
+                "left_context": candidate.left_context,
+                "right_context": candidate.right_context,
+                "candidate_id": candidate.id,
+                "extractor": candidate.extractor,
+                "learned_signature": sig,
+                "price_type": classify_price_type(candidate, result.get("segments", [])),
+                "section_type": _price_section_type(candidate, result.get("segments", [])),
+                "nearby_label": _price_nearby_label(candidate, result.get("segments", [])),
+                "context_class": _price_context_class(candidate, result.get("segments", [])),
+                "relative_position": _price_relative_position(candidate, result.get("segments", [])),
+            }
+        if field == "shipping_address":
+            sig = build_shipping_address_signature(candidate, segment_map or {})
+            lines = [line for line in (candidate.value or "").splitlines() if line.strip()]
+            line_learning = {}
+            if isinstance(action.get("start"), int) and isinstance(action.get("end"), int):
+                line_learning = build_shipping_address_line_learning(
+                    candidate,
+                    action.get("start"),
+                    action.get("end"),
+                    _buyer_name_value(),
+                )
+            return {
+                "segment_id": candidate.segment_id,
+                "start": candidate.start,
+                "end": candidate.end,
+                "selected_text": candidate.raw_text,
+                "segment_text": candidate.segment_text,
+                "left_context": candidate.left_context,
+                "right_context": candidate.right_context,
+                "candidate_id": candidate.id,
+                "extractor": candidate.extractor,
+                "learned_signature": sig,
+                "relative_position": _shipping_address_relative_position(candidate, result.get("segments", [])),
+                "line_count": len(lines),
+                "pattern_hints": _shipping_address_pattern_hints(candidate.value),
+                **line_learning,
+            }
+        if segment_map:
+            sig = build_extraction_signature(candidate, segment_map)
+        else:
+            sig = candidate.extractor
+        return {
+            "segment_id": candidate.segment_id,
+            "start": candidate.start,
+            "end": candidate.end,
+            "selected_text": candidate.raw_text,
+            "segment_text": candidate.segment_text,
+            "left_context": candidate.left_context,
+            "right_context": candidate.right_context,
+            "candidate_id": candidate.id,
+            "extractor": candidate.extractor,
+            "learned_signature": sig,
+        }
 
     if action.get("selected_text"):
         start = action.get("start", 0)
         end = action.get("end", 0)
         selected_text = action.get("selected_text", "")
         clean_text = result.get("clean_text", "")
+        if is_manual_assignment:
+            print(
+                "[ASSIGNMENT_BYPASS_GATE] "
+                + json.dumps({
+                    "field": action.get("field", ""),
+                    "start": start,
+                    "end": end,
+                }),
+                file=sys.stderr,
+                flush=True,
+            )
         if (
             isinstance(start, int)
             and isinstance(end, int)
@@ -86,6 +184,31 @@ def _find_context(
                 file=sys.stderr,
                 flush=True,
             )
+            if field in {"price", "shipping_address"}:
+                matched_candidate = next(
+                    (
+                        c for c in result["candidates"]
+                        if (c.field_type == field or (field == "price" and c.extractor == "number_regex"))
+                        and (
+                            (candidate_id and c.id == candidate_id)
+                            or (
+                                isinstance(c.start, int)
+                                and isinstance(c.end, int)
+                                and c.start <= start
+                                and end <= c.end
+                            )
+                        )
+                    ),
+                    None,
+                )
+                if matched_candidate is not None:
+                    context = _candidate_context(matched_candidate)
+                    return {
+                        **context,
+                        "start": start,
+                        "end": end,
+                        "selected_text": selected_text,
+                    }
             return {
                 "segment_id": action.get("segment_id", ""),
                 "start": start,
@@ -97,6 +220,21 @@ def _find_context(
                 "candidate_id": action.get("candidate_id", ""),
                 "extractor": action.get("extractor", ""),
                 "learned_signature": action.get("learned_signature", action.get("extractor", "")),
+                "assignment_source": "manual" if is_manual_assignment else "",
+            }
+        if is_manual_assignment:
+            return {
+                "segment_id": action.get("segment_id", ""),
+                "start": start,
+                "end": end,
+                "selected_text": selected_text,
+                "segment_text": selected_text,
+                "left_context": action.get("left_context", ""),
+                "right_context": action.get("right_context", ""),
+                "candidate_id": action.get("candidate_id", ""),
+                "extractor": action.get("extractor", "manual_selection"),
+                "learned_signature": action.get("learned_signature", action.get("extractor", "manual_selection")),
+                "assignment_source": "manual",
             }
         print(
             f"[ASSIGNMENT_APPLIED] rejected_mismatch field={action.get('field', '')!r} start={start} end={end}",
@@ -105,40 +243,13 @@ def _find_context(
         )
         return None
 
-    def _sig(candidate) -> str:
-        if segment_map:
-            return build_extraction_signature(candidate, segment_map)
-        return candidate.extractor
-
     for candidate in result["candidates"]:
         if candidate_id and candidate.id == candidate_id:
-            return {
-                "segment_id": candidate.segment_id,
-                "start": candidate.start,
-                "end": candidate.end,
-                "selected_text": candidate.raw_text,
-                "segment_text": candidate.segment_text,
-                "left_context": candidate.left_context,
-                "right_context": candidate.right_context,
-                "candidate_id": candidate.id,
-                "extractor": candidate.extractor,
-                "learned_signature": _sig(candidate),
-            }
+            return _candidate_context(candidate)
 
     for candidate in result["candidates"]:
         if segment_id and candidate.segment_id == segment_id and candidate.value == value:
-            return {
-                "segment_id": candidate.segment_id,
-                "start": candidate.start,
-                "end": candidate.end,
-                "selected_text": candidate.raw_text,
-                "segment_text": candidate.segment_text,
-                "left_context": candidate.left_context,
-                "right_context": candidate.right_context,
-                "candidate_id": candidate.id,
-                "extractor": candidate.extractor,
-                "learned_signature": _sig(candidate),
-            }
+            return _candidate_context(candidate)
 
     return None
 
@@ -190,6 +301,7 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
     field = action["field"]
     value = action.get("selected_text") or action.get("value", "")
     value = "" if value is None else str(value)
+    is_manual_assignment = action_name == "save_assignment" and (bool(action.get("selected_text")) or action.get("source") == "manual")
 
     if action_name == "save_assignment":
         learned_sig = context.get("learned_signature", "")
@@ -222,7 +334,26 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
             f"SIGNATURE_LEARN {{ field: {field!r}, value: {value!r}, signature: {learned_sig!r} }}",
             file=sys.stderr, flush=True,
         )
+        if field == "price":
+            print(
+                "[PRICE_TYPE_LEARNED] "
+                + json.dumps({
+                    "price_type": context.get("price_type", ""),
+                    "value": value,
+                    "signature": learned_sig,
+                    "context": {
+                        "extractor": context.get("extractor", ""),
+                        "nearby_label": context.get("nearby_label", ""),
+                        "section_type": context.get("section_type", ""),
+                    },
+                }, ensure_ascii=False),
+                file=sys.stderr,
+                flush=True,
+            )
+        if is_manual_assignment:
+            context = {**context, "assignment_source": "manual"}
         save_assignment(template_id, field, value, context)
+        reset_field(template_id, field, source=result.get("learning_source", "unknown") if field == "quantity" else "")
     elif action_name == "save_rejection":
         save_rejection(template_id, field, {
             "value": value,
@@ -231,11 +362,50 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
     else:
         raise ValueError(f"Unsupported action: {action_name}")
 
-    refreshed = parse_eml(path, update_confidence=False)
+    assignment_lock = None
+    if action_name == "save_assignment" and is_manual_assignment:
+        assignment_lock = {
+            field: {
+                "value": value,
+                "start": context.get("start"),
+                "end": context.get("end"),
+                "source": "manual",
+            }
+        }
+    refreshed = parse_eml(path, update_confidence=False, assignment_lock=assignment_lock)
     return _apply_suppression(
         _serialize_result(refreshed),
         action.get("suppressed_fields", []),
     )
+
+
+def get_learning_summary() -> Dict[str, Any]:
+    return {
+        "success": True,
+        **learning_summary(summarize_fields(CORE_FIELDS)),
+    }
+
+
+def reset_learning_field(field: str) -> Dict[str, Any]:
+    reset_result = reset_field_learning(field)
+    confidence_removed = reset_field_everywhere(field)
+    result = {
+        "success": True,
+        **reset_result,
+        "confidence_removed": confidence_removed,
+    }
+    print(
+        "[FIELD_LEARNING_RESET] "
+        + json.dumps({
+            "field": field,
+            "assignments_removed": reset_result["assignments_removed"],
+            "rejections_removed": reset_result["rejections_removed"],
+            "confidence_removed": confidence_removed,
+        }),
+        file=sys.stderr,
+        flush=True,
+    )
+    return result
 
 
 def _main_json(argv: List[str]) -> Dict[str, Any]:
@@ -246,6 +416,10 @@ def _main_json(argv: List[str]) -> Dict[str, Any]:
 
     request = json.loads(argv[1])
     command = request["action"]
+    if command == "learning_summary":
+        return get_learning_summary()
+    if command == "reset_field_learning":
+        return reset_learning_field(request["field"])
     path = request["path"]
     suppressed_fields = request.get("suppressed_fields", [])
 

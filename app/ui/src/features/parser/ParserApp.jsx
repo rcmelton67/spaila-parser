@@ -28,6 +28,7 @@ const _ORDER_FIELD_KEYS = Object.keys(_ORDER_FIELD_META).map((key) => ({
   key,
   ...(_ORDER_FIELD_META[key]),
 }));
+const REQUIRED_ORDER_FIELD_KEYS = new Set(["order_number", "buyer_name", "ship_by"]);
 
 // Metadata for per-item fields.
 const _ITEM_FIELD_KEYS = [
@@ -1060,26 +1061,34 @@ function FieldRow({
   label,
   fieldKey,
   decision,
+  manualValue,
   hasSelection,
   loading,
   selected,
   onSelect,
   onTeach,
+  onManualChange,
   multiline,
   priceCandidateCount,
   isKeyActive,
   navKey,
+  required,
 }) {
   const value = normalizeFieldValue(decision?.value ?? "");
   const isAddressField = fieldKey === "shipping_address";
-  const displayValue = isAddressField ? formatAddressForDisplay(value) : value;
+  const isManualOverride = manualValue !== undefined;
+  const effectiveValue = isManualOverride ? manualValue : value;
+  const displayValue = isAddressField ? formatAddressForDisplay(effectiveValue) : effectiveValue;
   const canAccept = !!decision && !loading && !actionAlreadyApplied("save_assignment", decision);
   const canReject = !!decision && !loading && !actionAlreadyApplied("save_rejection", decision);
-  const inputState = decision?.decision === "assigned"
+  const inputState = isManualOverride && normalizeFieldValue(manualValue)
+    ? "assigned-state"
+    : decision?.decision === "assigned"
     ? "assigned-state"
     : decision?.decision === "suggested"
       ? "suggested-state"
       : "";
+  const isEditable = typeof onManualChange === "function";
 
   const lineCount = displayValue ? displayValue.split("\n").length : 1;
   const addressFieldRef = React.useRef(null);
@@ -1106,6 +1115,10 @@ function FieldRow({
       onMouseLeave={tooltipLines.length > 0 ? tooltip.hide : undefined}
       onClick={() => onSelect(decision, fieldKey)}
       onKeyDown={(event) => {
+        const tag = event.target.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") {
+          return;
+        }
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect(decision, fieldKey);
@@ -1128,28 +1141,29 @@ function FieldRow({
           value={displayValue}
           placeholder="(empty)"
           rows={isAddressField ? Math.max(3, Math.min(lineCount, 4)) : lineCount}
-          readOnly
+          readOnly={!isEditable}
           onClick={(event) => {
             event.stopPropagation();
             onSelect(decision, fieldKey);
           }}
           onFocus={() => onSelect(decision, fieldKey)}
-          onChange={() => {}}
+          onChange={(event) => onManualChange?.(fieldKey, event.target.value)}
         />
       ) : (
         <input
           id={`field-${fieldKey}`}
           className={`field-input ${inputState}`}
           type="text"
-          value={value}
-          placeholder="(empty)"
-          readOnly
+          value={effectiveValue}
+          placeholder={required ? "Required" : "(empty)"}
+          readOnly={!isEditable}
           onClick={(event) => {
             event.stopPropagation();
             onSelect(decision, fieldKey);
           }}
           onFocus={() => onSelect(decision, fieldKey)}
-          onChange={() => {}}
+          onChange={(event) => onManualChange?.(fieldKey, event.target.value)}
+          aria-required={required || undefined}
         />
       )}
       <div className="compact-actions">
@@ -1346,7 +1360,7 @@ export default function App({
 
   // Apply user-preferred order, falling back to default array order for any key not in parserFieldOrder.
   const orderedFields = parserFieldOrder
-    .filter((key) => key in _orderKeyMeta && _parserVisible[key] !== false)
+    .filter((key) => key in _orderKeyMeta && (_parserVisible[key] !== false || REQUIRED_ORDER_FIELD_KEYS.has(key)))
     .map((key) => {
       const { multiline } = _orderKeyMeta[key];
       return [_labels[key] ?? key, key, !!multiline];
@@ -1376,8 +1390,10 @@ export default function App({
   const [itemMeta, setItemMeta] = React.useState([emptyItemMeta()]);
   const [giftMessage, setGiftMessage] = React.useState(null);
   const [giftMessageMeta, setGiftMessageMeta] = React.useState(null);
+  const [giftOptions, setGiftOptions] = React.useState({ is_gift: false, gift_wrap: false });
   const [activeKeyField, setActiveKeyField] = React.useState(null);
   const [createToast, setCreateToast] = React.useState("");
+  const [manualOrderFields, setManualOrderFields] = React.useState({});
   const [showDetectedFields, setShowDetectedFields] = React.useState(false);
   const [showFullEmail, setShowFullEmail] = React.useState(false);
   const [showHiddenContent, setShowHiddenContent] = React.useState(false);
@@ -1454,6 +1470,13 @@ export default function App({
       .filter((d) => d.decision === "assigned")
       .map((d) => [d.field, normalizeFieldValue(d.value)]),
   );
+  const manualShipByTouched = Object.prototype.hasOwnProperty.call(manualOrderFields, "ship_by");
+  const effectiveAssignedFields = {
+    ...assignedFields,
+    ship_by: manualShipByTouched
+      ? normalizeFieldValue(manualOrderFields.ship_by)
+      : normalizeFieldValue(assignedFields.ship_by || ""),
+  };
 
   const priceCandidateCount = meta?.price_candidate_count ?? 0;
   // Combine state and ref so hasSelection is true the moment text is highlighted,
@@ -1488,6 +1511,14 @@ export default function App({
     }
     scrollToRange(field, source.start, source.end);
   }, [scrollToRange]);
+
+  const handleManualOrderFieldChange = React.useCallback((field, value) => {
+    setManualOrderFields((current) => ({
+      ...current,
+      [field]: value,
+    }));
+    setSelectedField(field);
+  }, []);
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
 
@@ -1615,22 +1646,46 @@ export default function App({
 
   // ── End keyboard navigation ────────────────────────────────────────────────
 
-  const requiredFields = ["order_number", "buyer_name"];
+  const requiredFields = Array.from(REQUIRED_ORDER_FIELD_KEYS);
+  const requiredFieldLabels = {
+    order_number: "Order number",
+    buyer_name: "Buyer name",
+    ship_by: "Ship by date",
+  };
+  const missingRequiredFields = requiredFields.filter((f) => {
+    const val = effectiveAssignedFields[f];
+    return !val || val.trim() === "";
+  });
   const canCreateOrder = requiredFields.every((f) => {
-    const val = assignedFields[f];
+    const val = effectiveAssignedFields[f];
     return val && val.trim() !== "";
   });
+  const unresolvedGiftFlags = React.useMemo(() => {
+    const unresolved = [];
+    if (flags.gift && !giftOptions.is_gift) {
+      unresolved.push({ key: "gift", label: "Gift detected" });
+    }
+    if (flags.gift_wrap && !giftOptions.gift_wrap) {
+      unresolved.push({ key: "gift_wrap", label: "Gift wrap detected" });
+    }
+    if (flags.gift_message && !normalizeFieldValue(giftMessage?.value || "")) {
+      unresolved.push({ key: "gift_message", label: "Gift message detected" });
+    }
+    return unresolved;
+  }, [flags.gift, flags.gift_message, flags.gift_wrap, giftMessage, giftOptions.gift_wrap, giftOptions.is_gift]);
 
   function buildOrderPayload() {
     return {
       order: {
-        order_number: normalizeFieldValue(assignedFields.order_number || ""),
-        order_date: normalizeFieldValue(assignedFields.order_date || ""),
-        buyer_name: normalizeFieldValue(assignedFields.buyer_name || ""),
-        buyer_email: normalizeFieldValue(assignedFields.buyer_email || ""),
-        shipping_address: normalizeFieldValue(assignedFields.shipping_address || ""),
-        ship_by: normalizeFieldValue(assignedFields.ship_by || ""),
+        order_number: normalizeFieldValue(effectiveAssignedFields.order_number || ""),
+        order_date: normalizeFieldValue(effectiveAssignedFields.order_date || ""),
+        buyer_name: normalizeFieldValue(effectiveAssignedFields.buyer_name || ""),
+        buyer_email: normalizeFieldValue(effectiveAssignedFields.buyer_email || ""),
+        shipping_address: normalizeFieldValue(effectiveAssignedFields.shipping_address || ""),
+        ship_by: normalizeFieldValue(effectiveAssignedFields.ship_by || ""),
         gift_message: normalizeFieldValue(giftMessage?.value || ""),
+        is_gift: !!giftOptions.is_gift,
+        gift_wrap: !!giftOptions.gift_wrap,
       },
       items: state.items.map((item, index) => ({
         item_index: index + 1,
@@ -1691,6 +1746,29 @@ export default function App({
   }
 
   async function handleCreateOrder() {
+    if (!canCreateOrder) {
+      const missing = missingRequiredFields
+        .map((field) => requiredFieldLabels[field] || field)
+        .join(", ");
+      setState((current) => ({
+        ...current,
+        error: `Complete required fields before creating the order: ${missing}.`,
+      }));
+      return;
+    }
+    if (unresolvedGiftFlags.length) {
+      const unresolvedList = unresolvedGiftFlags.map((flag) => `- ${flag.label}`).join("\n");
+      const proceed = window.confirm(
+        `Gift details detected but not fully confirmed.\n\n${unresolvedList}\n\nPress OK to proceed anyway, or Cancel to fix.`,
+      );
+      if (!proceed) {
+        setState((current) => ({
+          ...current,
+          error: `Gift details detected but not fully confirmed: ${unresolvedGiftFlags.map((flag) => flag.label).join(", ")}.`,
+        }));
+        return;
+      }
+    }
     await createOrder();
   }
 
@@ -1733,10 +1811,10 @@ export default function App({
       setPulseGiftAttention(false);
     }
 
-    // Auto-scroll to Gift Message field when gift/personalization is detected.
-    if (nextFlags.is_gift || nextFlags.has_personalization) {
+    // Auto-scroll to gift controls when gift-related content is detected.
+    if (nextFlags.gift || nextFlags.gift_wrap || nextFlags.gift_message) {
       requestAnimationFrame(() => {
-        document.querySelector('[data-nav-key="gift_message"]')
+        document.querySelector('[data-nav-key="gift_options"]')
           ?.scrollIntoView({ block: "center", behavior: "smooth" });
       });
     }
@@ -1825,6 +1903,8 @@ export default function App({
     setItemMeta([emptyItemMeta()]);
     setGiftMessage(null);
     setGiftMessageMeta(null);
+    setGiftOptions({ is_gift: false, gift_wrap: false });
+    setManualOrderFields({});
     setActiveKeyField(null);
     setState({
       text: "",
@@ -2448,10 +2528,14 @@ export default function App({
         <aside className="panel fields-panel">
           <div className="panel-title">Parsed Fields</div>
           <div className="fields-list">
-            {meta.gift_message ? (
-              <div className="personalization-box">
-                <div className="compact-label">Personalization</div>
-                <div className="personalization-text">{meta.gift_message}</div>
+            {unresolvedGiftFlags.length ? (
+              <div className="gift-flag-panel">
+                <div className="gift-flag-panel-title">Gift Flags</div>
+                {unresolvedGiftFlags.map((flag) => (
+                  <div key={flag.key} className="gift-flag-alert">
+                    {`⚠ ${flag.label}`}
+                  </div>
+                ))}
               </div>
             ) : null}
 
@@ -2466,10 +2550,13 @@ export default function App({
                 selected={selectedField === key}
                 onSelect={handleFieldClick}
                 onTeach={teach}
+                manualValue={key === "ship_by" && manualShipByTouched ? manualOrderFields.ship_by : undefined}
+                onManualChange={key === "ship_by" ? handleManualOrderFieldChange : undefined}
                 multiline={!!multiline}
                 priceCandidateCount={priceCandidateCount}
                 isKeyActive={activeKeyField === key}
                 navKey={key}
+                required={requiredFields.includes(key)}
               />
             ))}
 
@@ -2486,33 +2573,41 @@ export default function App({
                 selected={selectedField === key}
                 onSelect={handleFieldClick}
                 onTeach={teach}
+                manualValue={key === "ship_by" && manualShipByTouched ? manualOrderFields.ship_by : undefined}
+                onManualChange={key === "ship_by" ? handleManualOrderFieldChange : undefined}
                 multiline={!!multiline}
                 priceCandidateCount={priceCandidateCount}
                 isKeyActive={activeKeyField === key}
                 navKey={key}
+                required={requiredFields.includes(key)}
               />
             ))}
 
+            <div className="gift-option-row" data-nav-key="gift_options">
+              <label className="gift-option-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!giftOptions.is_gift}
+                  onChange={(event) => {
+                    setGiftOptions((current) => ({ ...current, is_gift: event.target.checked }));
+                  }}
+                />
+                <span>Mark as gift</span>
+              </label>
+              <label className="gift-option-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!giftOptions.gift_wrap}
+                  onChange={(event) => {
+                    setGiftOptions((current) => ({ ...current, gift_wrap: event.target.checked }));
+                  }}
+                />
+                <span>Gift wrap</span>
+              </label>
+            </div>
+
             <ItemFieldRow
-              label={
-                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                  Gift Message
-                  {(flags.is_gift || flags.has_personalization) && (
-                    <span
-                      className="field-flag-badge"
-                      title={
-                        flags.is_gift && flags.has_personalization
-                          ? "Gift order — personalization needed"
-                          : flags.is_gift
-                            ? "Gift order detected"
-                            : "Personalization needed"
-                      }
-                    >
-                      {flags.is_gift ? "🎁" : "✏️"}
-                    </span>
-                  )}
-                </span>
-              }
+              label="Gift Message"
               fieldKey="gift_message"
               value={giftMessage}
               meta={giftMessageMeta}
@@ -2589,6 +2684,15 @@ export default function App({
                 />
               );
             })}
+
+            {!canCreateOrder ? (
+              <div className="required-fields-hint">
+                Required before order creation:{" "}
+                {missingRequiredFields
+                  .map((field) => requiredFieldLabels[field] || field)
+                  .join(", ")}
+              </div>
+            ) : null}
 
             <button
               type="button"

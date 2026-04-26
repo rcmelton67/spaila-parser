@@ -5,10 +5,16 @@ contextBridge.exposeInMainWorld("parserApp", {
   resolvePath: (payload) => ipcRenderer.invoke("parser:resolve-path", payload),
   saveAssignment: (payload) => ipcRenderer.invoke("parser:save-assignment", payload),
   saveRejection: (payload) => ipcRenderer.invoke("parser:save-rejection", payload),
+  getLearningSummary: () => ipcRenderer.invoke("parser:learning-summary"),
+  resetFieldLearning: (payload) => ipcRenderer.invoke("parser:reset-field-learning", payload || {}),
   teach: (payload) => ipcRenderer.invoke("parser:teach", payload),
   getWorkspaceState: (payload) => ipcRenderer.invoke("workspace:get-state", payload || {}),
   addFilesToInbox: (payload) => ipcRenderer.invoke("workspace:add-to-inbox", payload || {}),
   openInboxItem: (payload) => ipcRenderer.invoke("workspace:open-inbox-item", payload || {}),
+  hideInboxItem: (payload) => ipcRenderer.invoke("workspace:hide-inbox-item", payload || {}),
+  markInboxOrder: (payload) => ipcRenderer.invoke("workspace:mark-inbox-order", payload || {}),
+  markInboxNotOrder: (payload) => ipcRenderer.invoke("workspace:mark-inbox-not-order", payload || {}),
+  undoInboxOrderMark: (payload) => ipcRenderer.invoke("workspace:undo-inbox-order-mark", payload || {}),
   openFolder:       (folderPath)  => ipcRenderer.invoke("shell:open-folder", folderPath),
   pickFile:         (opts)        => ipcRenderer.invoke("dialog:pick-file", opts || {}),
   pickFolder:       ()            => ipcRenderer.invoke("dialog:pick-folder"),
@@ -25,4 +31,8 @@ contextBridge.exposeInMainWorld("parserApp", {
   backupSave:          (payload) => ipcRenderer.invoke("backup:save", payload),
   backupRestore:       (payload) => ipcRenderer.invoke("backup:restore", payload),
   openFile:            (payload) => ipcRenderer.invoke("documents:open-file", payload),
+});
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
 });

@@ -2,10 +2,17 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { spawn } = require("child_process");
 const nodemailer = require("nodemailer");
+const { ImapFlow } = require("imapflow");
 const { pathToFileURL } = require("url");
 const { ensureWorkspaceLayout } = require("./workspacePaths");
+const {
+  buildEmailPreview,
+  cleanPreviewText,
+  logPreviewTextIntegrity,
+} = require("./previewText");
 
 // ── Helper process (sync_folders.py) ────────────────────────────────────────
 const ROOT = path.join(__dirname, "..", "..");
@@ -232,6 +239,25 @@ function normalizeSmtpConfig(config = {}) {
   };
 }
 
+function normalizeImapConfig(config = {}) {
+  const username = String(config.username || config.imapUsername || config.imap_user || "").trim();
+  return {
+    host: String(config.host || config.imapHost || config.imap_host || "").trim(),
+    port: Number.parseInt(String(config.port || config.imapPort || config.imap_port || "").trim(), 10) || 993,
+    username,
+    password: String(config.password || config.imapPassword || config.imap_pass || ""),
+    useSsl: config.useSsl ?? config.imapUseSsl ?? config.imap_ssl ?? true,
+  };
+}
+
+function validateImapAppendConfig(config) {
+  const imap = normalizeImapConfig(config);
+  if (!imap.host || !imap.username || !imap.password) {
+    return { ok: false, imap, error: "IMAP Sent folder append is not configured." };
+  }
+  return { ok: true, imap };
+}
+
 function validateSmtpConfig(config) {
   const smtp = normalizeSmtpConfig(config);
   if (!smtp.emailAddress) return { ok: false, error: "Email Address is required." };
@@ -265,6 +291,168 @@ function formatFromHeader(smtp) {
   return `"${safeName}" <${emailAddress}>`;
 }
 
+function parseEnvelopeRecipients(to) {
+  return String(to || "")
+    .split(/[;,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+async function buildMimeMessage({ smtp, to, subject, body, html, attachmentPaths, sentAt, messageId }) {
+  const builder = nodemailer.createTransport({
+    streamTransport: true,
+    buffer: true,
+    newline: "unix",
+  });
+  const info = await builder.sendMail({
+    from: formatFromHeader(smtp),
+    to,
+    subject,
+    text: body,
+    html,
+    date: sentAt,
+    messageId,
+    attachments: attachmentPaths.map((filePath) => ({
+      filename: path.basename(filePath),
+      path: filePath,
+    })),
+  });
+  return info.message;
+}
+
+function decodeModifiedUtf7(value) {
+  return String(value || "").replace(/&([^-]*)-/g, (match, encoded) => {
+    if (encoded === "") {
+      return "&";
+    }
+    try {
+      const base64 = encoded.replace(/,/g, "/");
+      const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+      const bytes = Buffer.from(padded, "base64");
+      const characters = [];
+      for (let index = 0; index + 1 < bytes.length; index += 2) {
+        characters.push(String.fromCharCode((bytes[index] << 8) + bytes[index + 1]));
+      }
+      return characters.join("");
+    } catch (_error) {
+      return match;
+    }
+  });
+}
+
+function normalizeMailboxName(value) {
+  return decodeModifiedUtf7(String(value || "").trim().replace(/^"|"$/g, ""));
+}
+
+function normalizeMailboxFlags(mailbox) {
+  const specialUseFlags = Array.isArray(mailbox?.specialUse)
+    ? mailbox.specialUse
+    : mailbox?.specialUse instanceof Set
+      ? [...mailbox.specialUse]
+      : [mailbox?.specialUse];
+  const mailboxFlags = Array.isArray(mailbox?.flags)
+    ? mailbox.flags
+    : mailbox?.flags instanceof Set
+      ? [...mailbox.flags]
+      : [mailbox?.flags];
+  const rawFlags = [...specialUseFlags, ...mailboxFlags];
+  return [...new Set(rawFlags
+    .map((flag) => String(flag || "").trim())
+    .filter(Boolean))];
+}
+
+function getMailboxAppendName(mailbox) {
+  return String(mailbox?.path || mailbox?.name || "").trim();
+}
+
+function parseListedMailboxes(listed) {
+  return (Array.isArray(listed) ? listed : [])
+    .map((mailbox) => ({
+      raw: mailbox,
+      name: normalizeMailboxName(getMailboxAppendName(mailbox)),
+      appendName: getMailboxAppendName(mailbox),
+      flags: normalizeMailboxFlags(mailbox),
+    }))
+    .filter((mailbox) => mailbox.appendName);
+}
+
+function hasSentSpecialUseFlag(mailbox) {
+  return mailbox.flags.some((flag) => String(flag || "").toLowerCase() === "\\sent");
+}
+
+function selectSentMailbox(mailboxes) {
+  const sentBySpecialUse = mailboxes.find(hasSentSpecialUseFlag);
+  if (sentBySpecialUse) {
+    return { mailbox: sentBySpecialUse, fallback: false };
+  }
+
+  const fallbackNames = ["Sent Items", "Sent", "[Gmail]/Sent Mail"];
+  for (const fallbackName of fallbackNames) {
+    const fallback = mailboxes.find((mailbox) => mailbox.name === fallbackName || mailbox.appendName === fallbackName);
+    if (fallback) {
+      console.warn("[IMAP_SENT_FALLBACK_USED]", JSON.stringify({ folder_name: fallback.appendName }));
+      return { mailbox: fallback, fallback: true };
+    }
+  }
+
+  return { mailbox: null, fallback: false };
+}
+
+async function appendMimeToSentFolder(imapConfig, rawMessage, sentAt) {
+  const validation = validateImapAppendConfig(imapConfig);
+  if (!validation.ok) {
+    console.warn("[APPEND_SENT_FAILED]", JSON.stringify({
+      provider: "",
+      folder_attempted: "",
+      error: validation.error,
+    }));
+    return { ok: false, skipped: true, error: validation.error };
+  }
+
+  const imap = validation.imap;
+  const provider = imap.host;
+  const client = new ImapFlow({
+    host: imap.host,
+    port: imap.port,
+    secure: imap.useSsl !== false,
+    auth: {
+      user: imap.username,
+      pass: imap.password,
+    },
+    logger: false,
+  });
+
+  let attemptedFolder = "";
+  try {
+    await client.connect();
+    const listed = await client.list().catch(() => []);
+    const mailboxes = parseListedMailboxes(listed);
+    const selected = selectSentMailbox(mailboxes);
+    if (!selected.mailbox) {
+      throw new Error("No IMAP Sent folder was advertised.");
+    }
+
+    attemptedFolder = selected.mailbox.appendName;
+    console.log("[IMAP_SENT_FOLDER_SELECTED]", JSON.stringify({
+      folder: attemptedFolder,
+      flags: selected.mailbox.flags,
+    }));
+    await client.append(attemptedFolder, rawMessage, ["\\Seen"], sentAt);
+    return { ok: true, folder: attemptedFolder, fallback: selected.fallback };
+  } catch (error) {
+    console.warn("[APPEND_SENT_FAILED]", JSON.stringify({
+      provider,
+      folder_attempted: attemptedFolder,
+      error: error?.message || String(error),
+    }));
+    return { ok: false, provider, folder: attemptedFolder, error: error?.message || "Could not save to Sent folder." };
+  } finally {
+    try {
+      await client.logout();
+    } catch (_) {}
+  }
+}
+
 function getSentEmailFolder(orderFolderPath = "") {
   const { root } = getWorkspaceDirs();
   const now = new Date();
@@ -272,6 +460,77 @@ function getSentEmailFolder(orderFolderPath = "") {
   const month = now.toLocaleString("en-US", { month: "long" }).toLowerCase();
   const orderFolderName = sanitizeFilenamePart(path.basename(String(orderFolderPath || "").trim()) || "email");
   return path.join(root, "sent", year, month, orderFolderName);
+}
+
+function getSentMessagesIndexPath() {
+  return path.join(getWorkspaceDirs().root, "sent_messages.json");
+}
+
+function normalizeSentMessageRecord(record = {}) {
+  const messageId = String(record.message_id || record.messageId || record.id || "").trim();
+  const timestamp = String(record.timestamp || "").trim();
+  const id = String(record.id || messageId || `outbound:${timestamp}:${record.subject || ""}`).trim();
+  return {
+    id,
+    message_id: messageId,
+    direction: "outbound",
+    order_number: String(record.order_number || "").trim(),
+    buyer_name: String(record.buyer_name || "").trim(),
+    buyer_email: String(record.buyer_email || "").trim(),
+    subject: String(record.subject || "").trim() || "(No subject)",
+    from: String(record.from || "").trim(),
+    sender: String(record.from || "").trim(),
+    to: String(record.to || "").trim(),
+    timestamp,
+    received_at: timestamp,
+    body: String(record.body || ""),
+    preview_text: String(record.preview_text || record.body || ""),
+    preview: String(record.preview || buildEmailPreview(record.preview_text || record.body || "")),
+    preview_html: String(record.preview_html || ""),
+    attachments: Array.isArray(record.attachments) ? record.attachments : [],
+    sent_folder: String(record.sent_folder || "").trim(),
+  };
+}
+
+function loadSentMessages() {
+  try {
+    const indexPath = getSentMessagesIndexPath();
+    if (!fs.existsSync(indexPath)) {
+      return [];
+    }
+    const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+    const records = Array.isArray(parsed?.messages) ? parsed.messages : parsed;
+    return (Array.isArray(records) ? records : [])
+      .map(normalizeSentMessageRecord)
+      .filter((message) => message.id)
+      .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
+  } catch (_error) {
+    return [];
+  }
+}
+
+function saveSentMessages(messages) {
+  const indexPath = getSentMessagesIndexPath();
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.writeFileSync(indexPath, JSON.stringify({
+    messages: messages.map(normalizeSentMessageRecord),
+    updated_at: new Date().toISOString(),
+  }, null, 2), "utf8");
+}
+
+function appendSentMessage(record) {
+  const nextRecord = normalizeSentMessageRecord(record);
+  if (!nextRecord.id) {
+    return null;
+  }
+  const messages = loadSentMessages();
+  const existing = messages.find((message) => message.id === nextRecord.id || message.message_id === nextRecord.message_id);
+  if (existing) {
+    return existing;
+  }
+  messages.unshift(nextRecord);
+  saveSentMessages(messages);
+  return nextRecord;
 }
 
 function copyFilesIntoFolder(filePaths, destinationFolder) {
@@ -289,18 +548,54 @@ function copyFilesIntoFolder(filePaths, destinationFolder) {
 }
 
 function decodeHeaderValue(value) {
-  return String(value || "").replace(/\r?\n[\t ]+/g, " ").trim();
+  return decodeMimeHeader(String(value || "").replace(/\r?\n[\t ]+/g, " ").trim());
 }
 
-function readEmailHeadersOnly(filePath) {
+function decodeBytesWithCharset(buffer, charset = "utf-8") {
+  const label = String(charset || "utf-8").trim().toLowerCase();
+  try {
+    return new TextDecoder(label).decode(buffer);
+  } catch (_error) {
+    try {
+      return new TextDecoder("utf-8").decode(buffer);
+    } catch {
+      return Buffer.from(buffer).toString("utf8");
+    }
+  }
+}
+
+function decodeMimeHeader(value) {
+  return String(value || "").replace(/=\?([^?]+)\?([bq])\?([^?]*)\?=/gi, (_match, charset, encoding, encoded) => {
+    try {
+      if (String(encoding).toLowerCase() === "b") {
+        return decodeBytesWithCharset(Buffer.from(encoded, "base64"), charset);
+      }
+      const bytes = [];
+      const text = String(encoded || "").replace(/_/g, " ");
+      for (let i = 0; i < text.length; i += 1) {
+        if (text[i] === "=" && /^[0-9a-f]{2}$/i.test(text.slice(i + 1, i + 3))) {
+          bytes.push(parseInt(text.slice(i + 1, i + 3), 16));
+          i += 2;
+        } else {
+          bytes.push(text.charCodeAt(i));
+        }
+      }
+      return decodeBytesWithCharset(Buffer.from(bytes), charset);
+    } catch (_error) {
+      return "";
+    }
+  }).trim();
+}
+
+function readEmailMetadataRaw(filePath) {
   const fd = fs.openSync(filePath, "r");
   try {
     const chunks = [];
-    const buffer = Buffer.alloc(4096);
+    const buffer = Buffer.alloc(8192);
     let totalLength = 0;
-    let headerEnd = -1;
+    const maxBytes = 262144;
 
-    while (headerEnd < 0 && totalLength < 65536) {
+    while (totalLength < maxBytes) {
       const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead <= 0) {
         break;
@@ -308,9 +603,9 @@ function readEmailHeadersOnly(filePath) {
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
       totalLength += bytesRead;
       const text = Buffer.concat(chunks, totalLength).toString("utf8");
-      headerEnd = text.search(/\r?\n\r?\n/);
-      if (headerEnd >= 0) {
-        return text.slice(0, headerEnd);
+      const headerEnd = text.search(/\r?\n\r?\n/);
+      if (headerEnd >= 0 && text.length - headerEnd > 65536) {
+        break;
       }
     }
 
@@ -339,6 +634,200 @@ function parseEmailHeaders(headers) {
   return parsed;
 }
 
+function getHiddenEmailsPath() {
+  return path.join(getWorkspaceDirs().root, "hidden_emails.json");
+}
+
+function loadHiddenEmailIds() {
+  try {
+    const hiddenPath = getHiddenEmailsPath();
+    if (!fs.existsSync(hiddenPath)) {
+      return new Set();
+    }
+    const parsed = JSON.parse(fs.readFileSync(hiddenPath, "utf8"));
+    const ids = Array.isArray(parsed?.hidden_emails) ? parsed.hidden_emails : parsed;
+    return new Set((Array.isArray(ids) ? ids : []).map((value) => String(value || "").trim()).filter(Boolean));
+  } catch (_error) {
+    return new Set();
+  }
+}
+
+function saveHiddenEmailIds(hiddenIds) {
+  const hiddenPath = getHiddenEmailsPath();
+  fs.mkdirSync(path.dirname(hiddenPath), { recursive: true });
+  fs.writeFileSync(hiddenPath, JSON.stringify({
+    hidden_emails: [...hiddenIds].sort(),
+    updated_at: new Date().toISOString(),
+  }, null, 2), "utf8");
+}
+
+function hideEmailId(emailId) {
+  const normalized = String(emailId || "").trim();
+  if (!normalized) {
+    throw new Error("Email id is required.");
+  }
+  const hiddenIds = loadHiddenEmailIds();
+  hiddenIds.add(normalized);
+  saveHiddenEmailIds(hiddenIds);
+}
+
+const ORDER_TOKEN_STOPWORDS = new Set([
+  "the", "and", "a", "an", "your", "you", "for", "with", "from", "that",
+  "this", "are", "was", "were", "have", "has", "had", "not", "but", "can",
+  "our", "out", "all", "new", "one", "two", "to", "of", "in", "on", "at",
+  "by", "or", "is", "it", "as", "be", "we", "us", "re", "fw",
+]);
+
+function getOrderLearningPath() {
+  return path.join(getWorkspaceDirs().root, "order_email_learning.json");
+}
+
+function createEmptyOrderLearning() {
+  return {
+    order_flags: {},
+    order_patterns: {
+      subject_tokens: {},
+      sender_tokens: {},
+      body_tokens: {},
+    },
+  };
+}
+
+function normalizeOrderLearningStore(store) {
+  const empty = createEmptyOrderLearning();
+  const next = {
+    order_flags: { ...(store?.order_flags || {}) },
+    order_patterns: {
+      subject_tokens: { ...(store?.order_patterns?.subject_tokens || {}) },
+      sender_tokens: { ...(store?.order_patterns?.sender_tokens || {}) },
+      body_tokens: { ...(store?.order_patterns?.body_tokens || {}) },
+    },
+  };
+  return {
+    order_flags: next.order_flags || empty.order_flags,
+    order_patterns: next.order_patterns || empty.order_patterns,
+  };
+}
+
+function loadOrderLearningStore() {
+  try {
+    const learningPath = getOrderLearningPath();
+    if (!fs.existsSync(learningPath)) {
+      return createEmptyOrderLearning();
+    }
+    return normalizeOrderLearningStore(JSON.parse(fs.readFileSync(learningPath, "utf8")));
+  } catch (_error) {
+    return createEmptyOrderLearning();
+  }
+}
+
+function saveOrderLearningStore(store) {
+  const learningPath = getOrderLearningPath();
+  fs.mkdirSync(path.dirname(learningPath), { recursive: true });
+  fs.writeFileSync(learningPath, JSON.stringify({
+    ...normalizeOrderLearningStore(store),
+    updated_at: new Date().toISOString(),
+  }, null, 2), "utf8");
+}
+
+function extractOrderTokens(value) {
+  const tokens = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !ORDER_TOKEN_STOPWORDS.has(token));
+  return [...new Set(tokens)].slice(0, 40);
+}
+
+function incrementOrderPattern(patterns, key, tokens) {
+  const bucket = patterns[key] || {};
+  for (const token of tokens) {
+    bucket[token] = (Number(bucket[token]) || 0) + 1;
+  }
+  patterns[key] = bucket;
+}
+
+function learnOrderPatterns(store, item) {
+  const patterns = store.order_patterns;
+  incrementOrderPattern(patterns, "subject_tokens", extractOrderTokens(item?.subject || ""));
+  incrementOrderPattern(patterns, "sender_tokens", extractOrderTokens(item?.sender || ""));
+  incrementOrderPattern(patterns, "body_tokens", extractOrderTokens(item?.preview || ""));
+}
+
+function scoreOrderSuggestion(store, item) {
+  const patterns = store.order_patterns || {};
+  let score = 0;
+  for (const token of extractOrderTokens(item?.subject || "")) {
+    if (patterns.subject_tokens?.[token]) score += 10;
+  }
+  for (const token of extractOrderTokens(item?.sender || "")) {
+    if (patterns.sender_tokens?.[token]) score += 14;
+  }
+  for (const token of extractOrderTokens(item?.preview || "")) {
+    if (patterns.body_tokens?.[token]) score += 5;
+  }
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function markInboxItemAsOrder(item) {
+  const emailId = String(item?.email_id || item?.emailId || "").trim();
+  if (!emailId) {
+    throw new Error("Email id is required.");
+  }
+  const store = loadOrderLearningStore();
+  const alreadyFlagged = store.order_flags[emailId] === true;
+  store.order_flags[emailId] = true;
+  if (!alreadyFlagged) {
+    learnOrderPatterns(store, item || {});
+  }
+  saveOrderLearningStore(store);
+  return { flagged: true, score: 100 };
+}
+
+function markInboxItemAsNotOrder(item) {
+  const emailId = String(item?.email_id || item?.emailId || "").trim();
+  if (!emailId) {
+    throw new Error("Email id is required.");
+  }
+  const store = loadOrderLearningStore();
+  store.order_flags[emailId] = false;
+  saveOrderLearningStore(store);
+  return { flagged: false, not_order: true, score: 0 };
+}
+
+function undoInboxOrderMark(item) {
+  const emailId = String(item?.email_id || item?.emailId || "").trim();
+  if (!emailId) {
+    throw new Error("Email id is required.");
+  }
+  const store = loadOrderLearningStore();
+  delete store.order_flags[emailId];
+  saveOrderLearningStore(store);
+  return { flagged: false, not_order: false, score: scoreOrderSuggestion(store, item || {}) };
+}
+
+function loadWorkspaceEmailSettings() {
+  try {
+    const settingsPath = path.join(getWorkspaceDirs().root, "email_settings.json");
+    if (!fs.existsSync(settingsPath)) {
+      return {};
+    }
+    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch (_error) {
+    return {};
+  }
+}
+
+function isImapConfigured() {
+  const settings = loadWorkspaceEmailSettings();
+  return !!(
+    String(settings.imapHost || settings.imap_host || "").trim()
+    && String(settings.imapUsername || settings.imap_user || "").trim()
+    && String(settings.imapPassword || settings.imap_pass || "")
+  );
+}
+
 function formatHeaderSender(fromHeader) {
   const value = decodeHeaderValue(fromHeader);
   if (!value) {
@@ -352,28 +841,227 @@ function formatHeaderSender(fromHeader) {
   return (emailMatch?.[1] || value).trim() || "(Unknown sender)";
 }
 
+function extractHeaderEmail(headerValue) {
+  const value = decodeHeaderValue(headerValue);
+  const bracketMatch = value.match(/<([^<>\s]+@[^<>\s]+)>/);
+  if (bracketMatch?.[1]) {
+    return bracketMatch[1].trim();
+  }
+  const emailMatch = value.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  return (emailMatch?.[0] || "").trim();
+}
+
+function decodeQuotedPrintable(value, charset = "utf-8") {
+  const bytes = [];
+  const text = String(value || "").replace(/=\r?\n/g, "");
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "=" && /^[0-9a-f]{2}$/i.test(text.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(text.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      bytes.push(text.charCodeAt(i));
+    }
+  }
+  return decodeBytesWithCharset(Buffer.from(bytes), charset);
+}
+
+function decodePreviewBody(bodyRaw, transferEncoding, charset = "utf-8") {
+  const encoding = String(transferEncoding || "").trim().toLowerCase();
+  const raw = String(bodyRaw || "");
+  if (encoding.includes("base64")) {
+    const base64 = raw
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*--/.test(line) && !/^\s*content-/i.test(line))
+      .join("");
+    try {
+      return decodeBytesWithCharset(Buffer.from(base64, "base64"), charset);
+    } catch (_error) {
+      return raw;
+    }
+  }
+  if (encoding.includes("quoted-printable")) {
+    return decodeQuotedPrintable(raw, charset);
+  }
+  return raw;
+}
+
+function sanitizeEmailHtml(value) {
+  let html = String(value || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<head[\s\S]*?<\/head>/gi, "")
+    .replace(/<meta[^>]*>/gi, "")
+    .replace(/<img[^>]*>/gi, "");
+
+  const allowed = new Set(["p", "br", "b", "strong", "i", "em", "ul", "ol", "li", "a"]);
+  html = html.replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (tag, tagName, attrs) => {
+    const name = String(tagName || "").toLowerCase();
+    if (!allowed.has(name)) {
+      return "";
+    }
+    if (tag.startsWith("</")) {
+      return name === "br" ? "" : `</${name}>`;
+    }
+    if (name === "br") {
+      return "<br>";
+    }
+    if (name === "a") {
+      const href = String(attrs || "").match(/\bhref\s*=\s*["']?([^"'\s>]+)/i)?.[1] || "";
+      if (!/^(https?:\/\/|mailto:)/i.test(href)) {
+        return "";
+      }
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+    }
+    return `<${name}>`;
+  });
+
+  return html
+    .replace(/\s+/g, " ")
+    .replace(/>\s+</g, "><")
+    .trim();
+}
+
+function getHeaderParameter(value, name) {
+  const pattern = new RegExp(`${name}\\s*=\\s*"?([^";\\r\\n]+)"?`, "i");
+  return String(value || "").match(pattern)?.[1]?.trim() || "";
+}
+
+function decodeBodyPart(bodyRaw, headers) {
+  const contentType = headers["content-type"] || "";
+  const charset = getHeaderParameter(contentType, "charset") || "utf-8";
+  return decodePreviewBody(bodyRaw, headers["content-transfer-encoding"] || "", charset);
+}
+
+function extractDisplayBody(bodyRaw, headers) {
+  const contentType = headers["content-type"] || "";
+  const boundary = getHeaderParameter(contentType, "boundary");
+  if (!boundary) {
+    return decodeBodyPart(bodyRaw, headers);
+  }
+
+  const parts = String(bodyRaw || "").split(`--${boundary}`);
+  const candidates = [];
+  for (const part of parts) {
+    const trimmed = String(part || "").replace(/--\s*$/, "").trim();
+    if (!trimmed) continue;
+    const headerEndMatch = trimmed.match(/\r?\n\r?\n/);
+    if (!headerEndMatch) continue;
+    const headerEnd = headerEndMatch.index;
+    const partHeaders = parseEmailHeaders(trimmed.slice(0, headerEnd));
+    const partBody = trimmed.slice(headerEnd + headerEndMatch[0].length);
+    const partType = String(partHeaders["content-type"] || "").toLowerCase();
+    if (/multipart\//i.test(partType)) {
+      candidates.push({ type: partType, text: extractDisplayBody(partBody, partHeaders) });
+      continue;
+    }
+    if (partType.includes("text/plain") || partType.includes("text/html")) {
+      candidates.push({ type: partType, text: decodeBodyPart(partBody, partHeaders) });
+    }
+  }
+
+  const cleanedPlain = candidates
+    .filter((candidate) => candidate.type.includes("text/plain"))
+    .map((candidate) => cleanPreviewText(candidate.text))
+    .find((text) => text.length > 20);
+  if (cleanedPlain) {
+    return cleanedPlain;
+  }
+  const html = candidates.find((candidate) => candidate.type.includes("text/html"))?.text;
+  return html || candidates[0]?.text || decodeBodyPart(bodyRaw, headers);
+}
+
+function extractDisplayHtml(bodyRaw, headers) {
+  const contentType = String(headers["content-type"] || "").toLowerCase();
+  const boundary = getHeaderParameter(headers["content-type"] || "", "boundary");
+  if (!boundary) {
+    return contentType.includes("text/html") ? decodeBodyPart(bodyRaw, headers) : "";
+  }
+
+  const parts = String(bodyRaw || "").split(`--${boundary}`);
+  for (const part of parts) {
+    const trimmed = String(part || "").replace(/--\s*$/, "").trim();
+    if (!trimmed) continue;
+    const headerEndMatch = trimmed.match(/\r?\n\r?\n/);
+    if (!headerEndMatch) continue;
+    const headerEnd = headerEndMatch.index;
+    const partHeaders = parseEmailHeaders(trimmed.slice(0, headerEnd));
+    const partBody = trimmed.slice(headerEnd + headerEndMatch[0].length);
+    const partType = String(partHeaders["content-type"] || "").toLowerCase();
+    if (/multipart\//i.test(partType)) {
+      const nested = extractDisplayHtml(partBody, partHeaders);
+      if (nested) return nested;
+    }
+    if (partType.includes("text/html")) {
+      return decodeBodyPart(partBody, partHeaders);
+    }
+  }
+  return "";
+}
+
+function inferInboxEmailId(filePath, headers) {
+  const filename = path.basename(filePath);
+  const messageId = decodeHeaderValue(headers?.["message-id"] || "").replace(/^<|>$/g, "").trim();
+  if (messageId) {
+    return messageId;
+  }
+  const savedIdMatch = filename.match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
+  if (savedIdMatch?.[1]) {
+    return savedIdMatch[1];
+  }
+  return `local:${filename}`;
+}
+
+function inferSavedInboxUid(filePath) {
+  const savedIdMatch = path.basename(filePath).match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
+  return savedIdMatch?.[1] || "";
+}
+
 function extractEmailMetadata(filePath) {
-  const stat = safeStat(filePath);
   let subject = "";
   let sender = "";
-  let timestamp = stat ? new Date(stat.mtimeMs).toISOString() : "";
+  let replyTo = "";
+  let timestamp = "";
+  let preview = "(No preview available)";
+  let previewText = "(No preview available)";
+  let previewHtml = "";
+  let emailId = `local:${path.basename(filePath)}`;
   try {
-    const headers = parseEmailHeaders(readEmailHeadersOnly(filePath));
+    const raw = readEmailMetadataRaw(filePath);
+    const headerEndMatch = raw.match(/\r?\n\r?\n/);
+    const headerEnd = headerEndMatch ? headerEndMatch.index : -1;
+    const headersText = headerEnd >= 0 ? raw.slice(0, headerEnd) : raw;
+    const bodyRaw = headerEnd >= 0 ? raw.slice(headerEnd + headerEndMatch[0].length) : "";
+    const headers = parseEmailHeaders(headersText);
     subject = decodeHeaderValue(headers.subject || "");
     sender = formatHeaderSender(headers.from || "");
+    replyTo = extractHeaderEmail(headers["reply-to"] || "") || extractHeaderEmail(headers.from || "");
+    emailId = inferInboxEmailId(filePath, headers);
     const parsedDate = Date.parse(decodeHeaderValue(headers.date || ""));
     if (Number.isFinite(parsedDate)) {
       timestamp = new Date(parsedDate).toISOString();
     }
+    const displayBody = extractDisplayBody(bodyRaw, headers);
+    previewText = cleanPreviewText(displayBody) || "(No preview available)";
+    preview = buildEmailPreview(previewText);
+    logPreviewTextIntegrity(displayBody, previewText);
+    previewHtml = sanitizeEmailHtml(extractDisplayHtml(bodyRaw, headers));
   } catch (_error) {
     // Fall back to header-free defaults below.
   }
 
   return {
     name: path.basename(filePath),
+    id: emailId,
+    email_id: emailId,
+    imap_uid: inferSavedInboxUid(filePath),
     subject: subject || "(No subject)",
     sender: sender || "(Unknown sender)",
+    reply_to: replyTo,
+    received_at: timestamp,
     timestamp,
+    preview,
+    preview_text: previewText,
+    preview_html: previewHtml,
   };
 }
 
@@ -491,17 +1179,35 @@ function listInboxItems(inboxPath) {
   } catch (_error) {
     return [];
   }
+  const hiddenIds = loadHiddenEmailIds();
+  const orderLearning = loadOrderLearningStore();
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".eml"))
     .map((entry) => {
       const fullPath = path.join(inboxPath, entry.name);
-      return {
+      const item = {
         path: fullPath,
         relativePath: relativeWorkspacePath(fullPath),
         ...extractEmailMetadata(fullPath),
       };
+      const itemId = String(item.email_id || "").trim();
+      const savedUid = String(item.imap_uid || "").trim();
+      const orderFlag = orderLearning.order_flags[itemId] ?? orderLearning.order_flags[savedUid];
+      const flagged = orderFlag === true;
+      const notOrder = orderFlag === false;
+      return {
+        ...item,
+        order_flagged: flagged,
+        order_not_order: notOrder,
+        order_score: flagged ? 100 : notOrder ? 0 : scoreOrderSuggestion(orderLearning, item),
+      };
     })
-    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+    .filter((item) => {
+      const itemId = String(item.email_id || "").trim();
+      const savedUid = String(item.imap_uid || "").trim();
+      return !hiddenIds.has(itemId) && !hiddenIds.has(savedUid);
+    })
+    .sort((a, b) => String(b.received_at || "").localeCompare(String(a.received_at || "")));
 }
 
 function getWorkspaceBucketPath(dirs, bucket) {
@@ -748,7 +1454,7 @@ function findWorkspaceFileByName(filePath) {
     return null;
   }
   const dirs = getWorkspaceDirs();
-  const roots = [dirs.Orders, dirs.Duplicates, dirs.Archive, dirs.Backup].filter(Boolean);
+  const roots = [dirs.Orders, dirs.Archive, dirs.Backup].filter(Boolean);
   for (const root of roots) {
     if (!fs.existsSync(root)) {
       continue;
@@ -918,6 +1624,26 @@ ipcMain.handle("parser:save-rejection", async (_event, payload) => {
   };
 });
 
+ipcMain.handle("parser:learning-summary", async () => {
+  const summary = await runBridge({ action: "learning_summary" });
+  if (summary.error) {
+    throw new Error(summary.error);
+  }
+  return summary;
+});
+
+ipcMain.handle("parser:reset-field-learning", async (_event, payload = {}) => {
+  const field = String(payload.field || "").trim();
+  if (!field) {
+    throw new Error("No learning field provided.");
+  }
+  const result = await runBridge({ action: "reset_field_learning", field });
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  return result;
+});
+
 ipcMain.handle("parser:resolve-path", async (_event, payload) => {
   const resolvedPath = await resolveParserPath(payload);
   return { path: resolvedPath };
@@ -957,6 +1683,15 @@ ipcMain.handle("app:set-title", (_event, title) => {
   const win = BrowserWindow.getAllWindows()[0];
   if (win) win.setTitle(nextTitle);
   return { ok: true, title: nextTitle };
+});
+
+ipcMain.handle("open-external", async (_event, url) => {
+  const targetUrl = String(url || "").trim();
+  if (!targetUrl) {
+    return { ok: false, error: "No URL provided." };
+  }
+  await shell.openExternal(targetUrl);
+  return { ok: true };
 });
 
 ipcMain.handle("orders:open-print-preview", async (event, payload = {}) => {
@@ -1264,7 +1999,8 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
   return {
     root: dirs.root,
     inboxPath: dirs.InboxModule,
-    buckets: ["Inbox", "Orders", "Duplicates", "Archive", "Backup"]
+    imapConfigured: isImapConfigured(),
+    buckets: ["Inbox", "Orders", "Archive", "Backup"]
       .map((key) => {
         const folderPath = getWorkspaceBucketPath(dirs, key);
         return {
@@ -1275,6 +2011,7 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
         };
       }),
     inboxItems: listInboxItems(dirs.InboxModule),
+    sentMessages: loadSentMessages(),
     currentBucket: bucket,
     currentPath,
     currentRelativePath: relativeWorkspacePath(currentPath),
@@ -1325,6 +2062,42 @@ ipcMain.handle("workspace:open-inbox-item", async (_event, payload = {}) => {
     return { ok: true, path: pathToOpen, relativePath: relativeWorkspacePath(pathToOpen) };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not open inbox email." };
+  }
+});
+
+ipcMain.handle("workspace:hide-inbox-item", async (_event, payload = {}) => {
+  try {
+    hideEmailId(payload.emailId || payload.email_id || "");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not remove inbox email." };
+  }
+});
+
+ipcMain.handle("workspace:mark-inbox-order", async (_event, payload = {}) => {
+  try {
+    const result = markInboxItemAsOrder(payload.item || payload);
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not mark inbox email as order." };
+  }
+});
+
+ipcMain.handle("workspace:mark-inbox-not-order", async (_event, payload = {}) => {
+  try {
+    const result = markInboxItemAsNotOrder(payload.item || payload);
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not mark inbox email as not order." };
+  }
+});
+
+ipcMain.handle("workspace:undo-inbox-order-mark", async (_event, payload = {}) => {
+  try {
+    const result = undoInboxOrderMark(payload.item || payload);
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not undo inbox order mark." };
   }
 });
 
@@ -1381,28 +2154,70 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
     .filter((value) => value && path.isAbsolute(value) && fs.existsSync(value));
 
   try {
-    const transport = createSmtpTransport(smtpValidation.smtp);
-    await transport.sendMail({
-      from: formatFromHeader(smtpValidation.smtp),
+    const sentAt = new Date();
+    const messageId = `<${crypto.randomUUID()}@spaila.local>`;
+    const mimeMessage = await buildMimeMessage({
+      smtp: smtpValidation.smtp,
       to,
       subject,
-      text: body,
+      body,
       html,
-      attachments: attachmentPaths.map((filePath) => ({
-        filename: path.basename(filePath),
-        path: filePath,
-      })),
+      attachmentPaths,
+      sentAt,
+      messageId,
     });
+    const transport = createSmtpTransport(smtpValidation.smtp);
+    await transport.sendMail({
+      envelope: {
+        from: smtpValidation.smtp.emailAddress,
+        to: parseEnvelopeRecipients(to),
+      },
+      raw: mimeMessage,
+    });
+    const appendResult = await appendMimeToSentFolder(payload.imap || {}, mimeMessage, sentAt);
 
     const sentFolder = getSentEmailFolder(payload.orderFolderPath || "");
     fs.mkdirSync(sentFolder, { recursive: true });
     fs.writeFileSync(path.join(sentFolder, "email.html"), html, "utf8");
+    fs.writeFileSync(path.join(sentFolder, "email.eml"), mimeMessage);
     copyFilesIntoFolder(attachmentPaths, sentFolder);
+    const sentMessage = appendSentMessage({
+      id: `outbound:${messageId.replace(/^<|>$/g, "")}`,
+      message_id: messageId.replace(/^<|>$/g, ""),
+      order_number: payload.orderNumber || payload.order_number || "",
+      buyer_name: payload.buyerName || payload.buyer_name || "",
+      buyer_email: payload.buyerEmail || payload.buyer_email || "",
+      from: formatFromHeader(smtpValidation.smtp),
+      to,
+      subject,
+      timestamp: sentAt.toISOString(),
+      body,
+      preview_text: body,
+      preview: buildEmailPreview(body),
+      preview_html: html,
+      attachments: attachmentPaths,
+      sent_folder: sentFolder,
+    });
+    console.log("[SEND_LOGGED]", JSON.stringify({
+      to,
+      subject,
+      message_id: messageId,
+      timestamp: sentAt.toISOString(),
+      snippet: body.slice(0, 160),
+      attachment_names: attachmentPaths.map((filePath) => path.basename(filePath)),
+      sent_status: "sent",
+      saved_to_sent: !!appendResult.ok,
+      sent_folder: appendResult.folder || "",
+    }));
 
     return {
       ok: true,
       message: "Email sent.",
+      messageId,
+      timestamp: sentAt.toISOString(),
       sentFolder,
+      appendToSent: appendResult,
+      sentMessage,
     };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not send email." };

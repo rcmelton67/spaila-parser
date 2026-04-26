@@ -156,11 +156,32 @@ body {
   font-weight: 700;
 }
 
-.field-flag-badge {
-  font-size: 13px;
-  line-height: 1;
-  cursor: default;
-  user-select: none;
+.gift-flag-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 119, 6, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 247, 237, 0.92);
+}
+
+.gift-flag-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9a3412;
+}
+
+.gift-flag-alert {
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 251, 235, 0.96);
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .split-view {
@@ -458,12 +479,45 @@ body {
 }
 
 
-.personalization-box {
-  border: 1px dashed rgba(200, 130, 0, 0.5);
-  padding: 6px 8px;
-  margin-bottom: 6px;
-  border-radius: 8px;
-  background: rgba(255, 243, 205, 0.35);
+.gift-option-row {
+  display: grid;
+  grid-template-columns: minmax(76px, 96px) minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(47, 38, 28, 0.05);
+}
+
+.gift-option-row::before {
+  content: "Gift";
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7a6a59;
+  text-align: left;
+}
+
+.gift-option-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gift-option-toggle + .gift-option-toggle {
+  grid-column: 2;
+}
+
+.gift-option-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #2563eb;
 }
 
 .field-row {
@@ -594,6 +648,18 @@ body {
   display: flex;
   gap: 3px;
   align-items: center;
+}
+
+.required-fields-hint {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(180, 83, 9, 0.24);
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.12);
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .action-button {
