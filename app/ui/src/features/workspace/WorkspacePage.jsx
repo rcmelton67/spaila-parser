@@ -32,6 +32,34 @@ function getInboxItemId(item) {
   return String(item?.id || item?.email_id || "").trim();
 }
 
+function sortByTimestamp(a, b) {
+  return new Date(a?.timestamp || 0) - new Date(b?.timestamp || 0);
+}
+
+function extractReply(text) {
+  const value = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!value) return "";
+  const lines = value.split("\n");
+  const quoteHeaderPatterns = [
+    /^\s*On\s.+\bwrote:\s*$/i,
+    /^\s*Begin forwarded message:\s*$/i,
+    /^\s*-{2,}\s*(Original Message|Forwarded message).*$/i,
+    /^\s*_{3,}\s*$/,
+    /^\s*From:\s*.+$/i,
+  ];
+  const boundaryIndex = lines.findIndex((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith(">")) return true;
+    if (quoteHeaderPatterns.some((pattern) => pattern.test(line))) {
+      return index > 0 || /^from:/i.test(trimmed) || /^begin forwarded/i.test(trimmed);
+    }
+    return false;
+  });
+  const currentLines = boundaryIndex >= 0 ? lines.slice(0, boundaryIndex) : lines.filter((line) => !line.trim().startsWith(">"));
+  return currentLines.join("\n").trim();
+}
+
 function getFilenameFromPath(filePath) {
   const value = String(filePath || "").trim();
   if (!value) return "";
@@ -129,6 +157,10 @@ function buildProcessedEmailRefs(orders = []) {
     for (const msg of messages) {
       const dir = String(msg?.type || msg?.direction || "").toLowerCase();
       if (dir !== "inbound") continue;
+      // order_update = customer reply appended to an existing order.
+      // These must remain visible in the inbox as new activity, so we do NOT
+      // add their identifiers to processedRefs.
+      if (String(msg?.inbox_type || "").toLowerCase() === "order_update") continue;
       for (const value of [msg?.email_id, msg?.message_id, msg?.id]) {
         for (const ref of getProcessedEmailRefVariants(value)) {
           refs.add(ref);
@@ -314,19 +346,35 @@ function resolveMessageOrderNumber(item, orderMetadata) {
   return "";
 }
 
+function extractSenderName(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const bracketIndex = raw.indexOf("<");
+  const candidate = (bracketIndex > 0 ? raw.slice(0, bracketIndex) : raw).replace(/["']/g, "").trim();
+  if (!candidate || /@/.test(candidate)) return "";
+  return candidate;
+}
+
 function normalizeInboundMessage(item, orderMetadata) {
   const id = getInboxItemId(item);
   const orderNumber = resolveMessageOrderNumber(item, orderMetadata);
   const orderInfo = orderNumber ? orderMetadata.byOrderNumber.get(orderNumber) : null;
+  const senderEmail = extractEmailAddress(item?.sender_email || item?.reply_to || item?.sender || item?.from || "").toLowerCase();
+  const senderName = String(item?.sender_name || "").trim() || extractSenderName(item?.sender || item?.from || "");
   return {
     ...item,
     id,
-    message_id: String(item?.message_id || item?.email_id || id),
+    message_id: String(item?.message_id || ""),
+    email_id: String(item?.email_id || id || ""),
+    imap_uid: String(item?.imap_uid || ""),
     direction: "inbound",
+    thread_source: "inbox",
     order_number: orderNumber,
     buyer_name: orderInfo?.buyer_name || "",
     buyer_email: orderInfo?.buyer_email || "",
-    from: item?.sender || item?.from || "",
+    sender_name: senderName,
+    sender_email: senderEmail,
+    from: senderEmail || item?.sender || item?.from || "",
     to: item?.to || "",
     body: item?.preview_text || item?.preview || "",
     timestamp: item?.timestamp || item?.received_at || "",
@@ -342,16 +390,21 @@ function normalizeOutboundMessage(item, orderMetadata) {
   const id = getMessageId(item);
   const orderNumber = resolveMessageOrderNumber(item, orderMetadata);
   const orderInfo = orderNumber ? orderMetadata.byOrderNumber.get(orderNumber) : null;
+  const senderEmail = extractEmailAddress(item?.sender_email || item?.from || "").toLowerCase();
+  const senderName = String(item?.sender_name || "").trim() || extractSenderName(item?.from || "") || "Spaila";
   return {
     ...item,
     id,
     message_id: String(item?.message_id || id),
     direction: "outbound",
+    thread_source: "sent",
     order_number: orderNumber,
     buyer_name: item?.buyer_name || orderInfo?.buyer_name || "",
     buyer_email: item?.buyer_email || orderInfo?.buyer_email || "",
-    sender: item?.from || "Spaila",
-    from: item?.from || "Spaila",
+    sender_name: senderName,
+    sender_email: senderEmail,
+    sender: senderName || senderEmail || "Spaila",
+    from: senderEmail || item?.from || "Spaila",
     to: item?.to || "",
     body: item?.body || item?.preview_text || "",
     timestamp: item?.timestamp || item?.received_at || "",
@@ -366,15 +419,23 @@ function normalizeOutboundMessage(item, orderMetadata) {
 function normalizePersistedOrderMessage(message, order) {
   const timestamp = message?.timestamp || "";
   const id = String(message?.id || `order-message:${order?.order_id || order?.id || order?.order_number}:${timestamp}:${String(message?.body || "").slice(0, 24)}`);
+  const senderEmail = extractEmailAddress(message?.sender_email || message?.sender || message?.from || order?.buyer_email || "").toLowerCase();
+  const senderName = String(message?.sender_name || "").trim() || extractSenderName(message?.sender || message?.from || "");
   return {
     ...message,
     id,
-    message_id: id,
+    message_id: String(message?.message_id || message?.id || ""),
+    email_id: String(message?.email_id || ""),
+    imap_uid: String(message?.imap_uid || ""),
     direction: message?.direction || message?.type || "outbound",
     type: message?.type || message?.direction || "outbound",
+    thread_source: "persisted",
     order_number: normalizeOrderNumber(order?.order_number),
     buyer_name: order?.buyer_name || "",
     buyer_email: order?.buyer_email || "",
+    sender_name: senderName,
+    sender_email: senderEmail,
+    from: senderEmail || message?.from || message?.sender || "",
     body: message?.body || "",
     preview_text: message?.body || "",
     preview: buildThreadPreview(message?.body || ""),
@@ -388,16 +449,23 @@ function normalizeSelectedMailboxMessage(item, linkedOrder, mode) {
   const id = mode === "sent" ? getMessageId(item) : getInboxItemId(item);
   const timestamp = item?.timestamp || item?.received_at || "";
   const direction = mode === "sent" ? "outbound" : "inbound";
+  const senderEmail = extractEmailAddress(item?.sender_email || item?.reply_to || item?.sender || item?.from || "").toLowerCase();
+  const senderName = String(item?.sender_name || "").trim() || extractSenderName(item?.sender || item?.from || "");
   return {
     ...item,
     id,
-    message_id: String(item?.message_id || item?.email_id || id),
+    message_id: String(item?.message_id || ""),
+    email_id: String(item?.email_id || id || ""),
+    imap_uid: String(item?.imap_uid || ""),
     direction,
     type: direction,
     order_number: normalizeOrderNumber(linkedOrder?.order_number),
     buyer_name: linkedOrder?.buyer_name || "",
     buyer_email: linkedOrder?.buyer_email || "",
-    from: item?.sender || item?.from || "",
+    thread_source: mode === "sent" ? "sent" : "inbox",
+    sender_name: senderName,
+    sender_email: senderEmail,
+    from: senderEmail || item?.sender || item?.from || "",
     to: item?.to || "",
     body: item?.preview_text || item?.body || item?.preview || "",
     preview_text: item?.preview_text || item?.body || item?.preview || "",
@@ -411,6 +479,8 @@ function normalizeSelectedMailboxMessage(item, linkedOrder, mode) {
 
 function normalizeSelectedOrderSentMessage(item, linkedOrder) {
   const messageId = getMessageId(item);
+  const senderEmail = extractEmailAddress(item?.sender_email || item?.from || "").toLowerCase();
+  const senderName = String(item?.sender_name || "").trim() || extractSenderName(item?.from || "") || "Spaila";
   return {
     ...item,
     id: messageId,
@@ -418,10 +488,13 @@ function normalizeSelectedOrderSentMessage(item, linkedOrder) {
     status: "sent",
     direction: "outbound",
     type: "outbound",
+    thread_source: "sent",
     order_number: normalizeOrderNumber(linkedOrder?.order_number),
     buyer_name: linkedOrder?.buyer_name || item?.buyer_name || "",
     buyer_email: linkedOrder?.buyer_email || item?.buyer_email || "",
-    from: item?.from || "Spaila",
+    sender_name: senderName,
+    sender_email: senderEmail,
+    from: senderEmail || item?.from || "Spaila",
     to: item?.to || linkedOrder?.buyer_email || "",
     body: item?.body || item?.preview_text || "",
     preview_text: item?.preview_text || item?.body || item?.preview || "",
@@ -433,16 +506,6 @@ function normalizeSelectedOrderSentMessage(item, linkedOrder) {
   };
 }
 
-function dedupeMessages(messages = []) {
-  const seen = new Set();
-  return messages.filter((message) => {
-    const key = String(message?.id || message?.message_id || `${message?.timestamp || ""}:${message?.body || ""}`).trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function parseMessageTimeMs(message) {
   const raw = message?.timestamp || message?.received_at || "";
   const ms = Date.parse(String(raw || ""));
@@ -451,6 +514,62 @@ function parseMessageTimeMs(message) {
 
 function normalizeMessageBodyForMatch(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function hashThreadBody(value) {
+  const text = normalizeMessageBodyForMatch(value).toLowerCase();
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return String(hash >>> 0);
+}
+
+function normalizeThreadTimestamp(value) {
+  const ms = Date.parse(String(value || ""));
+  if (!Number.isFinite(ms)) return "";
+  return new Date(Math.round(ms / 1000) * 1000).toISOString();
+}
+
+function getCanonicalMessageSignature(message) {
+  const normalizedMessageId = normalizeMessageIdForLink(message?.message_id || message?.id || "");
+  if (normalizedMessageId && normalizedMessageId.includes("@")) {
+    return `message-id:${normalizedMessageId}`;
+  }
+
+  for (const value of [
+    message?.email_id,
+    message?.imap_uid,
+    message?.source_item?.email_id,
+    message?.source_item?.imap_uid,
+    normalizedMessageId && !normalizedMessageId.startsWith("temp_") && !normalizedMessageId.startsWith("order-message:")
+      ? normalizedMessageId
+      : "",
+  ]) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized) return `mailbox-id:${normalized}`;
+  }
+
+  const senderEmail = extractEmailAddress(message?.sender_email || message?.from || message?.sender || "").toLowerCase();
+  const timestamp = normalizeThreadTimestamp(message?.timestamp || message?.received_at || "");
+  const body = message?.body || message?.preview_text || message?.preview || "";
+  const bodyHash = body ? hashThreadBody(body) : "";
+  if (senderEmail && timestamp && bodyHash) {
+    return `fallback:${senderEmail}:${timestamp}:${bodyHash}`;
+  }
+  return "";
+}
+
+function getThreadSource(message) {
+  return String(message?.thread_source || message?.source || "").trim().toLowerCase() || "unknown";
+}
+
+function getThreadSourcePriority(message) {
+  const source = getThreadSource(message);
+  if (source === "persisted" || source === "order") return 4;
+  if (source === "sent") return 3;
+  if (source === "inbox") return 2;
+  return 1;
 }
 
 function normalizeRecipientForMatch(value) {
@@ -478,6 +597,7 @@ function areLikelySameOutboundMessage(a, b) {
 
 function messageConfidenceScore(message) {
   let score = 0;
+  score += getThreadSourcePriority(message) * 10;
   if (!isTemporaryMessage(message)) score += 3;
   if (String(message?.status || "").toLowerCase() === "sent") score += 2;
   if (String(message?.message_id || "").trim()) score += 1;
@@ -491,22 +611,51 @@ function mergeMessageRecord(existing, incoming) {
   return keepIncoming ? { ...existing, ...incoming } : { ...incoming, ...existing };
 }
 
-function dedupeConversationMessages(messages = []) {
+function chooseRemovedDuplicate(existing, incoming) {
+  return messageConfidenceScore(incoming) >= messageConfidenceScore(existing) ? existing : incoming;
+}
+
+function logThreadDedupe({ signature, sourceRemoved, duplicatesRemoved }) {
+  if (!duplicatesRemoved) return;
+  console.log("[THREAD DEDUPE]", {
+    signature,
+    source_removed: sourceRemoved,
+    duplicates_removed: duplicatesRemoved,
+  });
+}
+
+function dedupeMessages(messages = []) {
   const merged = [];
+  const signatureIndexes = new Map();
   for (const candidate of messages) {
-    const candidateId = String(candidate?.id || candidate?.message_id || "").trim();
-    const index = merged.findIndex((existing) => {
-      const existingId = String(existing?.id || existing?.message_id || "").trim();
-      if (candidateId && existingId && candidateId === existingId) return true;
-      return areLikelySameOutboundMessage(existing, candidate);
-    });
+    const signature = getCanonicalMessageSignature(candidate);
+    let index = signature ? signatureIndexes.get(signature) : -1;
+    if (index === undefined) index = -1;
+    if (index === -1) {
+      index = merged.findIndex((existing) => areLikelySameOutboundMessage(existing, candidate));
+    }
     if (index === -1) {
       merged.push(candidate);
+      if (signature) signatureIndexes.set(signature, merged.length - 1);
       continue;
     }
-    merged[index] = mergeMessageRecord(merged[index], candidate);
+    const existing = merged[index];
+    const removed = chooseRemovedDuplicate(existing, candidate);
+    const mergedRecord = mergeMessageRecord(existing, candidate);
+    merged[index] = mergedRecord;
+    const nextSignature = getCanonicalMessageSignature(mergedRecord) || signature;
+    if (nextSignature) signatureIndexes.set(nextSignature, index);
+    logThreadDedupe({
+      signature: nextSignature || signature || "(likely-outbound)",
+      sourceRemoved: getThreadSource(removed),
+      duplicatesRemoved: 1,
+    });
   }
   return merged;
+}
+
+function dedupeConversationMessages(messages = []) {
+  return dedupeMessages(messages);
 }
 
 function getMailboxParticipantAddress(item, mode) {
@@ -604,13 +753,20 @@ function mergeThreads(previousThreads = [], builtThreads = []) {
 }
 
 function mergeUnlinkedMessages(previousMessages = [], builtMessages = []) {
-  const builtById = new Map((builtMessages || []).map((message) => [message.id, message]));
-  const previousIds = new Set(previousMessages.map((message) => message.id));
-  const newMessages = (builtMessages || []).filter((message) => !previousIds.has(message.id));
+  const messageKey = (message) => getCanonicalMessageSignature(message) || String(message?.id || "").trim();
+  const builtById = new Map((builtMessages || []).map((message) => [messageKey(message), message]).filter(([key]) => key));
+  const previousIds = new Set(previousMessages.map(messageKey).filter(Boolean));
+  const newMessages = (builtMessages || []).filter((message) => {
+    const key = messageKey(message);
+    return key && !previousIds.has(key);
+  });
   const updatedMessages = previousMessages
-    .map((message) => builtById.has(message.id) ? { ...message, ...builtById.get(message.id) } : null)
+    .map((message) => {
+      const key = messageKey(message);
+      return key && builtById.has(key) ? mergeMessageRecord(message, builtById.get(key)) : null;
+    })
     .filter(Boolean);
-  return [...newMessages, ...updatedMessages];
+  return dedupeMessages([...newMessages, ...updatedMessages]);
 }
 
 function normalizeReplySubject(subject) {
@@ -663,43 +819,6 @@ function getReplySubject({ selectedThread, selectedThreadMessages, selectedMailb
   return normalizeReplySubject(selectedMailboxItem?.subject || "");
 }
 
-function formatReplyDate(value) {
-  if (!value) return "an unknown date";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function buildReplyBody(item) {
-  const cleanedText = String(item?.preview_text || item?.preview || "").trim();
-  const quotedText = cleanedText
-    .split(/\r?\n/)
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return [
-    "",
-    "",
-    "--------------------------------",
-    `On ${formatReplyDate(item?.timestamp)}, ${item?.sender || "the sender"} wrote:`,
-    "",
-    quotedText,
-  ].join("\n");
-}
-
-function buildMailtoLink(item) {
-  const target = String(item?.reply_to || "").trim();
-  if (!target) return "";
-  const subject = normalizeReplySubject(item?.subject || "");
-  const body = buildReplyBody(item);
-  return `mailto:${target}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
 function normalizeMessageIdForLink(value) {
   return String(value || "").trim().replace(/^<|>$/g, "").toLowerCase();
 }
@@ -724,6 +843,51 @@ function parseMsForMatch(value) {
   if (!s) return Number.NaN;
   const ms = Date.parse(s);
   return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function normalizeTextForActivityMatch(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getInboxItemLinkedOrder(item, orders, orderUpdateLinks) {
+  const emailId = getInboxItemId(item);
+  const imapUid = String(item?.imap_uid || "").trim().toLowerCase();
+  const messageId = normalizeMessageIdForLink(item?.message_id || "");
+  return (
+    (emailId && orderUpdateLinks?.get(String(emailId).toLowerCase())) ||
+    (imapUid && orderUpdateLinks?.get(imapUid)) ||
+    (messageId && orderUpdateLinks?.get(messageId)) ||
+    buildOrderLinkState(item, orders).linkedOrder ||
+    null
+  );
+}
+
+function doOrdersReferToSameOrder(left, right) {
+  const leftId = String(left?.order_id || left?.id || "").trim();
+  const rightId = String(right?.order_id || right?.id || "").trim();
+  if (leftId && rightId && leftId === rightId) return true;
+  const leftNumber = normalizeOrderNumber(left?.order_number);
+  const rightNumber = normalizeOrderNumber(right?.order_number);
+  return Boolean(leftNumber && rightNumber && leftNumber === rightNumber);
+}
+
+function doesInboxItemMatchActivityEvent(item, event, orders, orderUpdateLinks) {
+  if (String(event?.type || "").toLowerCase() !== "order_update") return false;
+  const linkedOrder = getInboxItemLinkedOrder(item, orders, orderUpdateLinks);
+  if (!doOrdersReferToSameOrder(linkedOrder, event)) return false;
+
+  const eventPreview = normalizeTextForActivityMatch(event?.preview);
+  const itemPreview = normalizeTextForActivityMatch(item?.preview_text || item?.preview || item?.body);
+  if (eventPreview && itemPreview) {
+    const shortPreview = eventPreview.slice(0, Math.min(80, Math.max(24, eventPreview.length)));
+    const shortItemPreview = itemPreview.slice(0, Math.min(80, Math.max(24, itemPreview.length)));
+    return itemPreview.includes(shortPreview) || eventPreview.includes(shortItemPreview);
+  }
+
+  const eventMs = parseMsForMatch(event?.timestamp || event?.created_at);
+  const itemMs = parseMsForMatch(item?.timestamp || item?.received_at || item?.created_at);
+  const SAME_REPLY_WINDOW_MS = 5 * 60 * 1000;
+  return !Number.isNaN(eventMs) && !Number.isNaN(itemMs) && Math.abs(eventMs - itemMs) <= SAME_REPLY_WINDOW_MS;
 }
 
 function getInboxItemHandledState(item, orders) {
@@ -771,6 +935,10 @@ function getInboxItemHandledState(item, orders) {
     for (const msg of messages) {
       const dir = String(msg?.type || msg?.direction || "").toLowerCase();
       if (dir !== "inbound") continue;
+      // order_update messages are customer replies that must remain visible in the
+      // inbox as new activity.  Skip them in all handled-state checks so they are
+      // never silently hidden.
+      if (String(msg?.inbox_type || "").toLowerCase() === "order_update") continue;
       // me = msg.email_id = IMAP UID string as stored by Python inbox_service
       const me = String(msg?.email_id || "").trim().toLowerCase();
       // Pair A-1: both sides are Message-ID (when Electron falls back to filename token same as UID)
@@ -1140,6 +1308,34 @@ function getAttachmentType(attachment) {
   return String(attachment?.type || attachment?.mimeType || attachment?.contentType || "").toLowerCase();
 }
 
+function isAbsoluteLocalPath(value) {
+  const raw = String(value || "").trim();
+  return /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\\\");
+}
+
+function getAttachmentOpenPath(attachment) {
+  if (typeof attachment === "string") return attachment;
+  const direct = String(attachment?.path || attachment?.filePath || "").trim();
+  if (isAbsoluteLocalPath(direct)) return direct;
+  const original = String(attachment?.original_path || attachment?.originalPath || "").trim();
+  if (isAbsoluteLocalPath(original)) return original;
+  const sentCopy = String(attachment?.sent_copy_path || attachment?.sentCopyPath || "").trim();
+  if (isAbsoluteLocalPath(sentCopy)) return sentCopy;
+  return direct || original || sentCopy;
+}
+
+function isImageAttachment(attachment) {
+  const name = getAttachmentDisplayName(attachment).toLowerCase();
+  const type = getAttachmentType(attachment);
+  return type.includes("image") || /\.(png|jpe?g|gif|webp|svg)$/i.test(name);
+}
+
+function attachmentPreviewSrc(attachment) {
+  const openPath = getAttachmentOpenPath(attachment);
+  if (!openPath || !isAbsoluteLocalPath(openPath) || !isImageAttachment(attachment)) return "";
+  return `file:///${openPath.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+}
+
 function getAttachmentIcon(attachment) {
   const name = getAttachmentDisplayName(attachment).toLowerCase();
   const type = getAttachmentType(attachment);
@@ -1165,8 +1361,27 @@ function getEmailAttachments(item) {
       ...attachment,
       name: getAttachmentDisplayName(attachment),
       type: getAttachmentType(attachment),
+      path: getAttachmentOpenPath(attachment),
     };
   }) : [];
+}
+
+function normalizeOutboundAttachmentsForHistory(paths, timestamp = new Date().toISOString()) {
+  return (Array.isArray(paths) ? paths : [])
+    .map((filePath) => String(filePath || "").trim())
+    .filter(Boolean)
+    .map((filePath) => ({
+      file: getAttachmentDisplayName(filePath),
+      filename: getAttachmentDisplayName(filePath),
+      name: getAttachmentDisplayName(filePath),
+      path: filePath,
+      original_path: filePath,
+      mime_type: getAttachmentType(filePath),
+      type: getAttachmentType(filePath),
+      source: "outbound_send",
+      direction: "outbound",
+      timestamp,
+    }));
 }
 
 function formatLastUpdated(value, now = Date.now()) {
@@ -1215,14 +1430,19 @@ function WorkspaceIdentityPanel({ shopName }) {
       textAlign: "center",
     }}>
       <div style={{ width: "100%", maxWidth: 520 }}>
-        <h1 style={{ margin: 0, fontSize: 36, lineHeight: 1.15, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em" }}>
+        <h1 style={{
+          margin: 0,
+          fontSize: 36,
+          lineHeight: 1.15,
+          fontWeight: 800,
+          color: "#0f172a",
+          letterSpacing: "-0.03em",
+          textShadow: "0 3px 5px rgba(0,0,0,0.28)",
+        }}>
           {shopName}
         </h1>
         <div style={{ marginTop: 8, fontSize: 13, fontWeight: 650, color: "#94a3b8" }}>
           Powered by Spaila
-        </div>
-        <div style={{ marginTop: 20, fontSize: 15, fontWeight: 650, color: "#cbd5e1" }}>
-          Select an email to begin
         </div>
         <div style={{ maxWidth: 540, margin: "28px auto 0", fontSize: 13, lineHeight: 1.55, color: "#6b7280", textAlign: "center" }}>
           <p style={{ margin: 0 }}>
@@ -1231,6 +1451,10 @@ function WorkspaceIdentityPanel({ shopName }) {
           <p style={{ margin: "9px 0 0" }}>
             Use it to review emails, manage orders, and respond efficiently—while your full email client remains available when needed.
           </p>
+        </div>
+        <div style={{ marginTop: 28, fontSize: 15, fontWeight: 650, color: "#cbd5e1", display: "inline-flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 24, lineHeight: 1, color: "#94a3b8" }}>←</span>
+          <span>Select an email to begin</span>
         </div>
       </div>
     </div>
@@ -1266,9 +1490,17 @@ function AttachmentList({ attachments, onOpen, compact = false }) {
               maxWidth: compact ? 240 : 320,
             }}
           >
-            <span style={{ color: "#64748b", fontSize: 12, lineHeight: 1 }}>
-              {getAttachmentIcon(attachment)}
-            </span>
+            {attachmentPreviewSrc(attachment) ? (
+              <img
+                src={attachmentPreviewSrc(attachment)}
+                alt=""
+                style={{ width: compact ? 22 : 28, height: compact ? 22 : 28, objectFit: "cover", borderRadius: 6, border: "1px solid #e5e7eb" }}
+              />
+            ) : (
+              <span style={{ color: "#64748b", fontSize: 12, lineHeight: 1 }}>
+                {getAttachmentIcon(attachment)}
+              </span>
+            )}
             <span style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere" }}>
               {attachment.name}
             </span>
@@ -1290,6 +1522,7 @@ function InlineReplyBox({
   onCloseOrderFilePicker,
   orderFilePicker = { open: false, loading: false, files: [], error: "" },
   onRemoveAttachment,
+  onOpenAttachment,
   isSending = false,
 }) {
   const fileInputRef = React.useRef(null);
@@ -1351,9 +1584,14 @@ function InlineReplyBox({
                   maxWidth: 260,
                 }}
               >
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <button
+                  type="button"
+                  onClick={() => onOpenAttachment?.(file)}
+                  title={file.path || file.name || "Open attachment"}
+                  style={{ border: "none", background: "transparent", color: "#334155", cursor: "pointer", padding: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "inherit", fontWeight: 700 }}
+                >
                   {file.name || "Attachment"}
-                </span>
+                </button>
                 <button
                   type="button"
                   onClick={() => onRemoveAttachment?.(index)}
@@ -1518,6 +1756,37 @@ function InlineReplyBox({
   );
 }
 
+// ── Email trash (localStorage) ───────────────────────────────────────────────
+const TRASH_KEY = "spaila.emailTrash";
+const DEFAULT_TRASH_RETENTION_DAYS = 30;
+const TRASH_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+const TRASH_DELETE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+const MAIL_SERVICE_STATUS_INTERVAL_MS = 90 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function loadTrashFromStorage() {
+  try {
+    const raw = localStorage.getItem(TRASH_KEY);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch { return {}; }
+}
+
+function saveTrashToStorage(map) {
+  try { localStorage.setItem(TRASH_KEY, JSON.stringify(map)); } catch {}
+}
+
+function getExpiredTrashEntries(trashMap, retentionDays, now = Date.now()) {
+  const retentionMs = (Number(retentionDays) || DEFAULT_TRASH_RETENTION_DAYS) * DAY_MS;
+  return Object.entries(trashMap || {}).filter(([, entry]) => {
+    if (!entry?.deleted_at) return false;
+    const deletedAt = new Date(entry.deleted_at).getTime();
+    if (Number.isNaN(deletedAt)) return false;
+    if (deletedAt > now) return false;
+    const ageMs = now - deletedAt;
+    return ageMs >= retentionMs;
+  });
+}
+
 export default function WorkspacePage({
   onOpenFile,
   onOpenOrder,
@@ -1526,7 +1795,6 @@ export default function WorkspacePage({
   onOrders,
   activeCount = 0,
   completedCount = 0,
-  archivedCount = 0,
 }) {
   const [workspaceState, setWorkspaceState] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -1536,16 +1804,19 @@ export default function WorkspacePage({
   const [mode, setMode] = React.useState("inbox");
   const [selectedEmailId, setSelectedEmailId] = React.useState("");
   const [selectedSentId, setSelectedSentId] = React.useState("");
+  const [mailSearchQuery, setMailSearchQuery] = React.useState("");
+  const [searchSelectedSource, setSearchSelectedSource] = React.useState("inbox");
   const [checkedEmailIds, setCheckedEmailIds] = React.useState(() => new Set());
   const [showEmlInstructions, setShowEmlInstructions] = React.useState(false);
   const [inboxContextMenu, setInboxContextMenu] = React.useState(null);
   const [previewContextMenu, setPreviewContextMenu] = React.useState(null);
-  const [previewMode, setPreviewMode] = React.useState("clean");
   const [imapConnected, setImapConnected] = React.useState(false);
   const [imapChecking, setImapChecking] = React.useState(false);
+  const [mailServiceState, setMailServiceState] = React.useState(null);
   const [lastInboxFetchAt, setLastInboxFetchAt] = React.useState(null);
   const [clockTick, setClockTick] = React.useState(() => Date.now());
   const [ordersForLinking, setOrdersForLinking] = React.useState([]);
+  const [inboxEvents, setInboxEvents] = React.useState([]);
   const [threadState, setThreadState] = React.useState({ threads: [], unlinkedMessages: [] });
   const [selectedThreadId, setSelectedThreadId] = React.useState("");
   const [shopConfig, setShopConfig] = React.useState(() => loadShopConfig());
@@ -1565,22 +1836,50 @@ export default function WorkspacePage({
   const [replyMessagesByConversation, setReplyMessagesByConversation] = React.useState({});
   const [isSendingReply, setIsSendingReply] = React.useState(false);
   const [pendingRemovals, setPendingRemovals] = React.useState({});
-  const inboxFetchInFlightRef = React.useRef(false);
-  const lastAutoFetchAtRef = React.useRef(0);
+  const [emailTrash, setEmailTrash] = React.useState({});
+  const trashRef = React.useRef({});
   const previousImapConnectedRef = React.useRef(false);
   const previewScrollRef = React.useRef(null);
+  const bottomRef = React.useRef(null);
+  const lastConversationKeyRef = React.useRef("");
+  const lastMessageCountRef = React.useRef(0);
   const hasRestoredSelectionRef = React.useRef(false);
 
   const loadWorkspace = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [nextState, ordersRaw] = await Promise.all([
+      const [nextState, ordersRaw, refsData, eventsRaw] = await Promise.all([
         window.parserApp?.getWorkspaceState?.({
           bucket: "Inbox",
           relativePath: "",
         }),
         fetchOrdersForLinking().catch(() => []),
+        fetch("http://127.0.0.1:8055/inbox/processed-refs")
+          .then((r) => r.json())
+          .catch(() => ({})),
+        fetch("http://127.0.0.1:8055/inbox/events")
+          .then((r) => r.json())
+          .catch(() => []),
       ]);
+      if (Array.isArray(eventsRaw)) setInboxEvents(eventsRaw);
+
+      // Merge backend-persisted refs (written during filesystem archive offloads)
+      // into localStorage BEFORE buildProcessedEmailRefs seeds from it.
+      // This guarantees inbox filtering works even when the Workspace never
+      // loaded the order that was archived.
+      if (Array.isArray(refsData?.refs) && refsData.refs.length > 0) {
+        const mem = loadProcessedInboxMemory();
+        let added = 0;
+        for (const ref of refsData.refs) {
+          const n = String(ref || "").trim().toLowerCase();
+          if (n && !mem.has(n)) { mem.add(n); added += 1; }
+        }
+        if (added > 0) {
+          saveProcessedInboxMemory(mem);
+          console.log("[INBOX_REFS_MERGED_FROM_BACKEND]", { added, total: mem.size });
+        }
+      }
+
       const orders = (Array.isArray(ordersRaw) ? ordersRaw : []).filter(
         (o) => String(o?.status || "").toLowerCase() !== "archived"
       );
@@ -1614,8 +1913,44 @@ export default function WorkspacePage({
     try {
       const raw = await fetchOrdersForLinking();
       const orders = raw.filter((o) => String(o?.status || "").toLowerCase() !== "archived");
+
+      // Before updating state, persist all email refs belonging to orders that are
+      // about to disappear from the active list (e.g. hard-deleted by filesystem archive).
+      // This ensures inbox filtering keeps working even after those DB rows are gone.
+      setOrdersForLinking((prevOrders) => {
+        const newIds = new Set(orders.map((o) => o.order_id));
+        const departed = prevOrders.filter((o) => !newIds.has(o.order_id));
+        if (departed.length > 0) {
+          const existingRefs = loadProcessedInboxMemory();
+          for (const order of departed) {
+            for (const emlPath of [order?.source_eml_path, order?.eml_path]) {
+              for (const ref of getProcessedEmailRefVariants(emlPath)) {
+                existingRefs.add(ref);
+              }
+              const uid = extractEmlUid(emlPath);
+              if (uid) existingRefs.add(uid);
+            }
+            const messages = Array.isArray(order?.messages) ? order.messages : [];
+            for (const msg of messages) {
+              const dir = String(msg?.type || msg?.direction || "").toLowerCase();
+              if (dir !== "inbound") continue;
+              for (const value of [msg?.email_id, msg?.message_id, msg?.id]) {
+                for (const ref of getProcessedEmailRefVariants(value)) {
+                  existingRefs.add(ref);
+                }
+              }
+            }
+          }
+          saveProcessedInboxMemory(existingRefs);
+          console.log("[INBOX_ARCHIVE_REFS_SAVED]", {
+            departed_orders: departed.length,
+            total_refs: existingRefs.size,
+          });
+        }
+        return orders;
+      });
+
       const processedRefs = buildProcessedEmailRefs(orders);
-      setOrdersForLinking(orders);
       setWorkspaceState((prev) => {
         if (!prev?.inboxItems) return prev;
         return {
@@ -1654,6 +1989,7 @@ export default function WorkspacePage({
   const checkImapConnection = React.useCallback(async ({ showError = false } = {}) => {
     if (!workspaceState?.imapConfigured) {
       setImapConnected(false);
+      setMailServiceState(null);
       if (showError) {
         setDropMessage("Email connection unavailable. Cannot delete from account.");
       }
@@ -1661,9 +1997,10 @@ export default function WorkspacePage({
     }
     setImapChecking(true);
     try {
-      const response = await fetch("http://127.0.0.1:8055/inbox/check", { method: "GET" });
+      const response = await fetch("http://127.0.0.1:8055/inbox/service/status", { method: "GET" });
       const payload = await response.json().catch(() => ({}));
       const connected = !!(response.ok && payload?.connected);
+      setMailServiceState(payload);
       setImapConnected(connected);
       if (!connected && showError) {
         setDropMessage("Email connection unavailable. Cannot delete from account.");
@@ -1671,6 +2008,7 @@ export default function WorkspacePage({
       return connected;
     } catch (_error) {
       setImapConnected(false);
+      setMailServiceState(null);
       if (showError) {
         setDropMessage("Email connection unavailable. Cannot delete from account.");
       }
@@ -1681,34 +2019,37 @@ export default function WorkspacePage({
   }, [workspaceState?.imapConfigured]);
 
   const fetchInbox = React.useCallback(async ({ manual = false, reason = "auto" } = {}) => {
-    if (!workspaceState?.imapConfigured || !imapConnected) {
+    if (!workspaceState?.imapConfigured) {
       if (manual) {
         setDropMessage("Email connection unavailable. Cannot refresh inbox.");
       }
       return false;
     }
-    const now = Date.now();
-    if (!manual && now - lastAutoFetchAtRef.current < 30000) {
-      return false;
-    }
-    if (inboxFetchInFlightRef.current) {
-      return false;
-    }
 
-    inboxFetchInFlightRef.current = true;
-    lastAutoFetchAtRef.current = now;
     setRefreshingInbox(true);
     try {
-      const response = await fetch("http://127.0.0.1:8055/inbox/fetch", { method: "POST" });
+      if (!imapConnected) {
+        await fetch("http://127.0.0.1:8055/inbox/service/start", { method: "POST" }).catch(() => null);
+      }
+      const response = await fetch("http://127.0.0.1:8055/inbox/fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
+
       const payload = await response.json().catch(() => ({}));
+
       if (!response.ok) {
         throw new Error(payload?.detail || payload?.error || "Could not refresh inbox.");
       }
+
       setLastInboxFetchAt(Date.now());
       setClockTick(Date.now());
+
       if (manual) {
         setDropMessage(`${payload?.saved || 0} email${payload?.saved === 1 ? "" : "s"} saved to Inbox`);
       }
+
       await loadWorkspace();
       await checkImapConnection();
       try {
@@ -1717,19 +2058,34 @@ export default function WorkspacePage({
         /* ignore */
       }
       return true;
-    } catch (nextError) {
-      await checkImapConnection();
-      if (manual || reason === "focus") {
-        setDropMessage(nextError.message || "Could not refresh inbox.");
-      }
+    } catch (err) {
+      console.error("[INBOX FETCH ERROR]", err);
+      setDropMessage(err.message || "Could not refresh inbox.");
       return false;
     } finally {
-      inboxFetchInFlightRef.current = false;
       setRefreshingInbox(false);
     }
   }, [checkImapConnection, imapConnected, loadWorkspace, workspaceState?.imapConfigured]);
 
   const inboxItems = workspaceState?.inboxItems || [];
+
+  // Map: normalised email_id / imap_uid → order, built from inbox_type='order_update' messages.
+  // Used by renderUnlinkedRow to show "Reply for Order #XXX" and offer a direct link.
+  const orderUpdateLinks = React.useMemo(() => {
+    const map = new Map();
+    for (const order of ordersForLinking || []) {
+      const messages = Array.isArray(order?.messages) ? order.messages : [];
+      for (const msg of messages) {
+        if (String(msg?.inbox_type || "").toLowerCase() !== "order_update") continue;
+        for (const key of [msg?.email_id, msg?.message_id, msg?.id, normalizeMessageIdForLink(msg?.message_id || msg?.id)]) {
+          const k = String(key || "").trim().toLowerCase();
+          if (k) map.set(k, order);
+        }
+      }
+    }
+    return map;
+  }, [ordersForLinking]);
+
   const displayInboxItems = React.useMemo(() => {
     const out = [];
     for (const item of inboxItems) {
@@ -1752,6 +2108,10 @@ export default function WorkspacePage({
     () => displayInboxItems.map(getInboxItemId).filter(Boolean).join("|"),
     [displayInboxItems],
   );
+  const visibleInboxActivityEvents = React.useMemo(
+    () => inboxEvents.filter((event) => !displayInboxItems.some((item) => doesInboxItemMatchActivityEvent(item, event, ordersForLinking, orderUpdateLinks))),
+    [displayInboxItems, inboxEvents, orderUpdateLinks, ordersForLinking],
+  );
   const sentMessages = workspaceState?.sentMessages || [];
   const buckets = workspaceState?.buckets || [];
   const inboxPath = workspaceState?.inboxPath || buckets.find((item) => item.key === "Inbox")?.path || "";
@@ -1759,16 +2119,62 @@ export default function WorkspacePage({
   const canFetchInbox = imapConfigured && imapConnected;
   const canDeleteFromAccount = canFetchInbox;
   const lastUpdatedLabel = formatLastUpdated(lastInboxFetchAt, clockTick);
+  const mailServiceRunning = !!mailServiceState?.running;
+  const mailServiceBusy = !!mailServiceState?.in_flight || refreshingInbox;
   const showInboxEmptyState = !loading && inboxItems.length === 0 && sentMessages.length === 0;
   const displayInboxPath = inboxPath || "C:\\Spaila\\Inbox";
   const inboxModeItems = displayInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
   const sentItems = sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound");
   const checkedInboxItems = displayInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
-  const selectedInboxItem = displayInboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null;
+
+  const mailSearchResults = React.useMemo(() => {
+    const q = mailSearchQuery.toLowerCase().trim();
+    if (!q) return [];
+    const seen = new Set();
+    const results = [];
+    function matchItem(item, source) {
+      if (!item) return false;
+      const linkedOrder = source === "inbox" || source === "trash"
+        ? getInboxItemLinkedOrder(item, ordersForLinking, orderUpdateLinks)
+        : null;
+      return [
+        item.subject,
+        item.sender,
+        item.from,
+        item.to,
+        item.preview_text,
+        item.preview,
+        item.name,
+        item.buyer_name,
+        item.order_number,
+        linkedOrder?.order_number,
+        linkedOrder?.buyer_name,
+        linkedOrder?.buyer_email,
+      ]
+        .some((f) => String(f || "").toLowerCase().includes(q));
+    }
+    for (const item of displayInboxItems) {
+      const id = getInboxItemId(item);
+      if (id && !seen.has(id) && matchItem(item, "inbox")) { seen.add(id); results.push({ item, source: "inbox" }); }
+    }
+    for (const item of sentItems) {
+      const id = getMessageId(item);
+      if (id && !seen.has(id) && matchItem(item, "sent")) { seen.add(id); results.push({ item, source: "sent" }); }
+    }
+    for (const [emailId, entry] of Object.entries(emailTrash)) {
+      if (!seen.has(emailId) && matchItem(entry.item, "trash")) { seen.add(emailId); results.push({ item: entry.item, source: "trash" }); }
+    }
+    return results;
+  }, [mailSearchQuery, displayInboxItems, sentItems, emailTrash, ordersForLinking, orderUpdateLinks]);
+
+  const effectivePreviewSource = mode === "search" ? searchSelectedSource : mode;
+  const selectedInboxItem = (mode === "trash" || (mode === "search" && searchSelectedSource === "trash"))
+    ? (emailTrash[selectedEmailId]?.item || null)
+    : (displayInboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null);
   const selectedSentItem = sentItems.find((item) => getMessageId(item) === selectedSentId) || null;
-  const selectedMailboxItem = mode === "sent" ? selectedSentItem : selectedInboxItem;
+  const selectedMailboxItem = effectivePreviewSource === "sent" ? selectedSentItem : selectedInboxItem;
   const selectedOrderLinkState = buildOrderLinkState(selectedMailboxItem, ordersForLinking);
-  const selectedMessageClassification = mode === "inbox" ? getMessageClassification(selectedInboxItem, selectedOrderLinkState) : null;
+  const selectedMessageClassification = effectivePreviewSource === "inbox" ? getMessageClassification(selectedInboxItem, selectedOrderLinkState) : null;
   const selectedEmailAttachments = getEmailAttachments(selectedMailboxItem);
   const selectedLinkedOrder = selectedOrderLinkState.linkedOrder || null;
   const selectedLinkedOrderNumber = normalizeOrderNumber(selectedLinkedOrder?.order_number);
@@ -1818,6 +2224,25 @@ export default function WorkspacePage({
   const selectedMailboxThreadMessagesWithReplies = selectedMailboxThreadMessages.length
     ? dedupeConversationMessages([...selectedMailboxThreadMessages, ...selectedMailboxReplies])
     : [];
+
+  // Conditional auto-scroll: when a new message arrives in the *same* open conversation,
+  // scroll to bottom only if the user is already near it.
+  const _conversationMessageCount = selectedThreadMessagesWithReplies.length + selectedMailboxThreadMessagesWithReplies.length;
+  React.useEffect(() => {
+    const key = currentConversationKey;
+    const count = _conversationMessageCount;
+    const isSame = key && key === lastConversationKeyRef.current;
+    const isNew = count > lastMessageCountRef.current;
+    lastConversationKeyRef.current = key;
+    lastMessageCountRef.current = count;
+    if (!isSame || !isNew) return;
+    const node = previewScrollRef.current;
+    if (!node) return;
+    if (node.scrollHeight - node.scrollTop - node.clientHeight < 200) {
+      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    }
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
   const assignableOrders = React.useMemo(() => {
     const q = assignToOrderQuery.trim().toLowerCase();
     const byId = new Map();
@@ -1936,6 +2361,14 @@ export default function WorkspacePage({
     return () => node.removeEventListener("scroll", handleScroll);
   }, [selectedEmailId, selectedSentId, selectedThreadId]);
 
+  // Scroll to newest message instantly whenever a conversation is opened.
+  React.useEffect(() => {
+    window.requestAnimationFrame(() => {
+      const node = previewScrollRef.current;
+      if (node) node.scrollTop = node.scrollHeight;
+    });
+  }, [selectedEmailId, selectedSentId, selectedThreadId]);
+
   React.useEffect(() => {
     function handleShopConfigChange() {
       setShopConfig(loadShopConfig());
@@ -1961,19 +2394,41 @@ export default function WorkspacePage({
 
   React.useEffect(() => {
     function handleFocus() {
-      fetchInbox({ reason: "focus" });
+      checkImapConnection();
+      loadWorkspace();
     }
     window.addEventListener("focus", handleFocus);
     return () => {
       window.removeEventListener("focus", handleFocus);
     };
-  }, [fetchInbox]);
+  }, [checkImapConnection, loadWorkspace]);
 
   React.useEffect(() => {
     if (!dropMessage) return undefined;
     const timer = window.setTimeout(() => setDropMessage(""), 2800);
     return () => window.clearTimeout(timer);
   }, [dropMessage]);
+
+  // Keep trashRef current so the purge interval never reads stale state
+  React.useEffect(() => {
+    trashRef.current = emailTrash;
+  }, [emailTrash]);
+
+  // On mount: restore trash into pendingRemovals so trashed items stay hidden from inbox
+  React.useEffect(() => {
+    const stored = loadTrashFromStorage();
+    if (!Object.keys(stored).length) return;
+    setEmailTrash(stored);
+    setPendingRemovals((prev) => {
+      const next = { ...prev };
+      for (const [emailId, entry] of Object.entries(stored)) {
+        next[emailId] = true;
+        const imapUid = String(entry.item?.imap_uid || "").trim();
+        if (imapUid) next[imapUid] = true;
+      }
+      return next;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
     if (inboxItems.length > 0) {
@@ -1990,7 +2445,7 @@ export default function WorkspacePage({
       }
       return new Set(nextValues);
     });
-    if (selectedEmailId && !visibleIds.has(selectedEmailId)) {
+    if (selectedEmailId && !visibleIds.has(selectedEmailId) && !emailTrash[selectedEmailId]) {
       setSelectedEmailId("");
     }
     if (inboxContextMenu?.emailId && !visibleIds.has(inboxContextMenu.emailId)) {
@@ -1999,12 +2454,10 @@ export default function WorkspacePage({
   }, [displayInboxIdKey, selectedEmailId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
-    setPreviewMode("clean");
     setPreviewContextMenu(null);
   }, [selectedEmailId]);
 
   React.useEffect(() => {
-    setPreviewMode("clean");
     setPreviewContextMenu(null);
   }, [selectedSentId, mode]);
 
@@ -2055,7 +2508,7 @@ export default function WorkspacePage({
   React.useEffect(() => {
     const interval = window.setInterval(() => {
       checkImapConnection();
-    }, 15000);
+    }, MAIL_SERVICE_STATUS_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [checkImapConnection]);
 
@@ -2067,18 +2520,11 @@ export default function WorkspacePage({
   }, []);
 
   React.useEffect(() => {
-    const interval = window.setInterval(() => {
-      fetchInbox({ reason: "interval" });
-    }, 45000);
-    return () => window.clearInterval(interval);
-  }, [fetchInbox]);
-
-  React.useEffect(() => {
     if (imapConnected && !previousImapConnectedRef.current) {
-      fetchInbox({ reason: "connection-restored" });
+      loadWorkspace();
     }
     previousImapConnectedRef.current = imapConnected;
-  }, [fetchInbox, imapConnected]);
+  }, [imapConnected, loadWorkspace]);
 
   async function handleOpenInboxFolder() {
     if (!inboxPath) {
@@ -2095,8 +2541,50 @@ export default function WorkspacePage({
     await fetchInbox({ manual: true, reason: "manual" });
   }
 
+  async function handleResyncInbox() {
+    if (!workspaceState?.imapConfigured) {
+      setDropMessage("Email connection unavailable. Cannot resync inbox.");
+      return;
+    }
+    setRefreshingInbox(true);
+    try {
+      const response = await fetch("http://127.0.0.1:8055/inbox/resync?limit=100", { method: "GET" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.detail || payload?.error || "Could not resync inbox.");
+      }
+      setLastInboxFetchAt(Date.now());
+      setClockTick(Date.now());
+      setDropMessage(`${payload?.saved || 0} email${payload?.saved === 1 ? "" : "s"} saved to Inbox`);
+      await loadWorkspace();
+      await checkImapConnection();
+      window.dispatchEvent(new CustomEvent("order-thread-updated", { detail: {} }));
+    } catch (err) {
+      console.error("[INBOX RESYNC ERROR]", err);
+      setDropMessage(err.message || "Could not resync inbox.");
+    } finally {
+      setRefreshingInbox(false);
+    }
+  }
+
+  async function handleDisconnectInboxService() {
+    try {
+      await fetch("http://127.0.0.1:8055/inbox/service/stop", { method: "POST" });
+      setImapConnected(false);
+      await checkImapConnection();
+      setDropMessage("Mail service disconnected.");
+    } catch (err) {
+      setDropMessage(err.message || "Could not disconnect mail service.");
+    }
+  }
+
   async function handleOpenAttachment(attachment) {
     try {
+      console.log("[ATTACHMENT_RENDER]", {
+        action: "open",
+        name: getAttachmentDisplayName(attachment),
+        path: getAttachmentOpenPath(attachment),
+      });
       const result = await window.parserApp?.openAttachment?.({ attachment });
       if (!result?.ok) {
         setDropMessage(result?.error || "Could not open attachment.");
@@ -2243,6 +2731,7 @@ export default function WorkspacePage({
     }
     const optimisticId = `temp_${Date.now()}`;
     const optimisticTimestamp = new Date().toISOString();
+    const attachmentMetadata = normalizeOutboundAttachmentsForHistory(attachmentPaths, optimisticTimestamp);
     const optimisticMessage = {
       id: optimisticId,
       client_temp_id: optimisticId,
@@ -2251,7 +2740,7 @@ export default function WorkspacePage({
       to,
       subject,
       body,
-      attachments: attachmentPaths,
+      attachments: attachmentMetadata,
       timestamp: optimisticTimestamp,
       status: "sending",
     };
@@ -2314,7 +2803,7 @@ export default function WorkspacePage({
       to,
       subject,
       body,
-      attachments: attachmentPaths,
+      attachments: normalizeOutboundAttachmentsForHistory(attachmentPaths, result.timestamp || new Date().toISOString()),
       timestamp: result.timestamp || new Date().toISOString(),
       status: "sent",
     };
@@ -2400,23 +2889,23 @@ export default function WorkspacePage({
     });
   }
 
-  async function handleViewInboxItem(item) {
-    const result = await window.parserApp?.openFile?.({ filePath: item.path });
-    if (!result?.ok) {
-      setDropMessage(result?.error || "Could not view email.");
-    }
-  }
-
-  async function handleReplyInEmail(item) {
-    const mailtoLink = buildMailtoLink(item);
-    if (!mailtoLink) {
-      setDropMessage("No reply email address found.");
-      return;
-    }
-    const result = await window.electronAPI?.openExternal?.(mailtoLink);
-    if (!result?.ok) {
-      setDropMessage(result?.error || "Could not open email client.");
-    }
+  function restoreInboxItemInState(item, previousIndex = 0) {
+    const emailId = getInboxItemId(item);
+    if (!emailId) return;
+    setWorkspaceState((prev) => {
+      if (!prev?.inboxItems) return prev;
+      if (prev.inboxItems.some((candidate) => getInboxItemId(candidate) === emailId)) {
+        return prev;
+      }
+      const nextInboxItems = [...prev.inboxItems];
+      nextInboxItems.splice(Math.max(0, previousIndex), 0, item);
+      console.log("[INBOX_UPDATE]", {
+        item_id: emailId,
+        changed_fields: ["undo_removed"],
+      });
+      console.log("[INBOX_NO_REORDER]", { verified: true });
+      return { ...prev, inboxItems: nextInboxItems };
+    });
   }
 
   function handleOpenLinkedOrder(order) {
@@ -2516,92 +3005,257 @@ export default function WorkspacePage({
     }
   }
 
-  async function handleRemoveInboxItem(item) {
-    const emailId = getInboxItemId(item);
-    if (!emailId) {
-      setDropMessage("Email id is missing.");
-      return;
+  // ── Trash purge: permanently IMAP-delete items whose retention period has expired ─
+  const executeTrashPurge = React.useCallback(async (emailId, entry, { force = false } = {}) => {
+    const now = Date.now();
+    const lastAttemptAt = Number(entry?.last_delete_attempt_at || 0);
+    if (!force && lastAttemptAt && now - lastAttemptAt < TRASH_DELETE_RETRY_COOLDOWN_MS) {
+      return "skipped";
     }
-    const imapUid = String(item?.imap_uid || "").trim();
-    const previousIndex = inboxItems.findIndex((candidate) => getInboxItemId(candidate) === emailId);
-    setPendingRemovals((prev) => {
-      const next = { ...prev };
-      next[emailId] = true;
-      if (imapUid) next[imapUid] = true;
+    let deleted = false;
+    try {
+      const alreadySourceDeleted = entry?.source_deleted === true || entry?.item?.source_deleted === true || entry?.server_delete_status === "deleted";
+      setEmailTrash((prev) => {
+        if (!prev[emailId]) return prev;
+        const next = {
+          ...prev,
+          [emailId]: {
+            ...prev[emailId],
+            last_delete_attempt_at: now,
+          },
+        };
+        saveTrashToStorage(next);
+        return next;
+      });
+      if (alreadySourceDeleted) {
+        console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, already_source_deleted: true });
+        await removeInboxFromSpailaStorage(entry.item);
+        deleted = true;
+      } else {
+        const serverEmailId = String(entry?.item?.imap_uid || entry?.item?.email_id || emailId || "").trim();
+        console.log("[TRASH_SERVER_DELETE]", { email_id: emailId, server_email_id: serverEmailId, purge: true });
+        const response = await fetch(
+          `http://127.0.0.1:8055/inbox?email_id=${encodeURIComponent(serverEmailId)}`,
+          { method: "DELETE" }
+        );
+        if (response.ok) {
+          console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, server_email_id: serverEmailId, purge: true });
+          await removeInboxFromSpailaStorage(entry.item);
+          deleted = true;
+        } else {
+          console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, server_email_id: serverEmailId, status: response.status, purge: true });
+        }
+      }
+    } catch (err) {
+      console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, error: err?.message || String(err), purge: true });
+    }
+    if (deleted) {
+      setEmailTrash((prev) => {
+        const next = { ...prev };
+        delete next[emailId];
+        saveTrashToStorage(next);
+        return next;
+      });
+      setPendingRemovals((prev) => {
+        const next = { ...prev };
+        delete next[emailId];
+        const imapUid = String(entry.item?.imap_uid || "").trim();
+        if (imapUid) delete next[imapUid];
+        return next;
+      });
+    }
+    return deleted;
+  }, [removeInboxFromSpailaStorage]);
+
+  const runTrashPurge = React.useCallback(async ({ force = false } = {}) => {
+    console.log("[TRASH PURGE] starting");
+    const current = trashRef.current || {};
+    const expired = force
+      ? Object.entries(current)
+      : getExpiredTrashEntries(current, shopConfig?.trashRetentionDays);
+    let deletedCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+    for (const [emailId, entry] of expired) {
+      const didDelete = await executeTrashPurge(emailId, entry, { force });
+      if (didDelete) deletedCount += 1;
+      else if (didDelete === "skipped") skippedCount += 1;
+      else errorCount += 1;
+    }
+    console.log("[TRASH PURGE] deleted count =", deletedCount);
+    if (skippedCount) {
+      console.log("[TRASH PURGE] skipped retry count =", skippedCount);
+    }
+    if (errorCount) {
+      console.error("[TRASH PURGE] errors", errorCount);
+    }
+    return { deletedCount, errorCount, skippedCount };
+  }, [executeTrashPurge, shopConfig?.trashRetentionDays]);
+
+  const requestTrashServerDelete = React.useCallback(async (emailId, item) => {
+    const serverEmailId = String(item?.imap_uid || item?.email_id || emailId || "").trim();
+    if (!serverEmailId) return false;
+    const now = Date.now();
+    console.log("[TRASH_SERVER_DELETE]", { email_id: emailId, server_email_id: serverEmailId });
+    setEmailTrash((prev) => {
+      if (!prev[emailId]) return prev;
+      const next = {
+        ...prev,
+        [emailId]: {
+          ...prev[emailId],
+          source_deleted: false,
+          server_delete_status: "pending",
+          last_delete_attempt_at: now,
+        },
+      };
+      saveTrashToStorage(next);
       return next;
     });
-    hideInboxItemInState(item);
-    const result = await removeInboxFromSpailaStorage(item);
-    if (!result?.ok) {
-      setDropMessage(result?.error || "Could not remove email from Spaila.");
-      setPendingRemovals((prev) => {
-        const next = { ...prev };
-        delete next[emailId];
-        if (imapUid) delete next[imapUid];
-        return next;
-      });
-      setWorkspaceState((prev) => {
-        if (!prev?.inboxItems || prev.inboxItems.some((candidate) => getInboxItemId(candidate) === emailId)) {
-          return prev;
-        }
-        const inboxItemsWithRestoredItem = [...prev.inboxItems];
-        inboxItemsWithRestoredItem.splice(Math.max(0, previousIndex), 0, item);
-        console.log("[INBOX_UPDATE]", {
-          item_id: emailId,
-          changed_fields: ["restore_removed"],
-        });
-        console.log("[INBOX_NO_REORDER]", { verified: true });
-        return { ...prev, inboxItems: inboxItemsWithRestoredItem };
-      });
-    } else {
-      setPendingRemovals((prev) => {
-        const next = { ...prev };
-        delete next[emailId];
-        if (imapUid) delete next[imapUid];
-        return next;
-      });
-      setDropMessage(
-        result.workspaceOnly
-          ? "Email hidden from Inbox. It stays on the order conversation."
-          : "Email removed from Spaila.",
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8055/inbox?email_id=${encodeURIComponent(serverEmailId)}`,
+        { method: "DELETE" },
       );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.detail || payload?.error || `Server delete failed (${response.status})`);
+      }
+      console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, server_email_id: serverEmailId });
+      console.log("[SOURCE_DELETED_UPDATE]", { email_id: emailId, server_email_id: serverEmailId, source_deleted: true });
+      setEmailTrash((prev) => {
+        if (!prev[emailId]) return prev;
+        const entry = prev[emailId];
+        const nextItem = { ...(entry.item || item), source_deleted: true };
+        const next = {
+          ...prev,
+          [emailId]: {
+            ...entry,
+            item: nextItem,
+            source_deleted: true,
+            source_deleted_at: Date.now(),
+            server_delete_status: "deleted",
+            last_server_delete_error: "",
+          },
+        };
+        saveTrashToStorage(next);
+        return next;
+      });
+      return true;
+    } catch (err) {
+      console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, server_email_id: serverEmailId, error: err?.message || String(err) });
+      console.log("[SOURCE_DELETED_UPDATE]", { email_id: emailId, server_email_id: serverEmailId, source_deleted: false });
+      setEmailTrash((prev) => {
+        if (!prev[emailId]) return prev;
+        const entry = prev[emailId];
+        const next = {
+          ...prev,
+          [emailId]: {
+            ...entry,
+            source_deleted: false,
+            server_delete_status: "failed",
+            last_delete_attempt_at: Date.now(),
+            last_server_delete_error: err?.message || "Server delete failed",
+          },
+        };
+        saveTrashToStorage(next);
+        return next;
+      });
+      setDropMessage("Moved to Trash. Server delete failed and will retry.");
+      return false;
+    }
+  }, []);
+
+  // Background purge: runs on startup and hourly for items past their retention window.
+  React.useEffect(() => {
+    runTrashPurge();
+    const interval = window.setInterval(runTrashPurge, TRASH_PURGE_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [runTrashPurge]);
+
+  async function emptyTrashNow() {
+    const result = await runTrashPurge({ force: true });
+    if (result.deletedCount > 0 && result.errorCount === 0) {
+      setDropMessage(`${result.deletedCount} email${result.deletedCount === 1 ? "" : "s"} permanently deleted.`);
+    } else if (result.deletedCount > 0) {
+      setDropMessage(`${result.deletedCount} email${result.deletedCount === 1 ? "" : "s"} permanently deleted. Some items could not be deleted.`);
+    } else if (result.errorCount > 0) {
+      setDropMessage("Could not empty Trash. Items were kept for retry.");
+    } else {
+      setDropMessage("Trash is already empty.");
     }
   }
 
-  async function handleDeleteInboxItem(item) {
-    if (!imapConfigured) {
-      setDropMessage("Email connection unavailable. Cannot delete from account.");
-      return;
-    }
+  function handleMoveToTrash(item) {
     const emailId = getInboxItemId(item);
-    if (!emailId) {
-      setDropMessage("Email id is missing.");
-      return;
-    }
-    if (!window.confirm("Delete this email from your email account?")) {
-      return;
-    }
-    const connected = await checkImapConnection({ showError: true });
-    if (!connected) {
-      return;
-    }
-    try {
-      const response = await fetch("http://127.0.0.1:8055/inbox/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email_id: emailId }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.detail || payload?.error || "Could not delete email from account.");
-      }
-      hideInboxItemInState(item);
-      await removeInboxFromSpailaStorage(item);
-      setDropMessage("Email deleted from account.");
-    } catch (nextError) {
-      await checkImapConnection();
-      setDropMessage(nextError.message || "Could not delete email from account.");
-    }
+    if (!emailId) { setDropMessage("Email id is missing."); return; }
+
+    console.log("[TRASH_REQUEST]", { email_id: emailId, imap_uid: item?.imap_uid || "" });
+    const previousIndex = inboxItems.findIndex((c) => getInboxItemId(c) === emailId);
+
+    // Remove from inbox immediately
+    hideInboxItemInState(item);
+    setPendingRemovals((prev) => {
+      const next = { ...prev };
+      next[emailId] = true;
+      const imapUid = String(item?.imap_uid || "").trim();
+      if (imapUid) next[imapUid] = true;
+      return next;
+    });
+
+    // Add to trash
+    setEmailTrash((prev) => {
+      const next = {
+        ...prev,
+        [emailId]: {
+          item,
+          deleted_at: Date.now(),
+          source_deleted: false,
+          server_delete_status: "pending",
+          last_delete_attempt_at: 0,
+          previousIndex,
+        },
+      };
+      saveTrashToStorage(next);
+      return next;
+    });
+    console.log("[TRASH_LOCAL]", { email_id: emailId });
+
+    setDropMessage("Moved to Trash.");
+    requestTrashServerDelete(emailId, item);
+  }
+
+  // Keep the old name as an alias so all call sites work unchanged
+  function handleDeleteInboxItem(item) {
+    handleMoveToTrash(item);
+  }
+
+  function handleRestoreFromTrash(emailId) {
+    const entry = trashRef.current[emailId];
+    if (!entry) return;
+    console.log("[TRASH_RESTORE]", {
+      email_id: emailId,
+      source_deleted: entry.source_deleted === true || entry.item?.source_deleted === true,
+    });
+
+    setEmailTrash((prev) => {
+      const next = { ...prev };
+      delete next[emailId];
+      saveTrashToStorage(next);
+      return next;
+    });
+    setPendingRemovals((prev) => {
+      const next = { ...prev };
+      delete next[emailId];
+      const imapUid = String(entry.item?.imap_uid || "").trim();
+      if (imapUid) delete next[imapUid];
+      return next;
+    });
+    restoreInboxItemInState(entry.item, entry.previousIndex);
+    setDropMessage(
+      entry.source_deleted === true || entry.item?.source_deleted === true
+        ? "Email restored locally. Server inbox copy was already removed."
+        : "Email restored to Inbox.",
+    );
   }
 
   async function handleMarkInboxOrder(item) {
@@ -2698,78 +3352,37 @@ export default function WorkspacePage({
     await openInboxItem(firstItem);
   }
 
-  async function handleBulkRemove() {
+  function handleBulkDelete() {
     if (!checkedInboxItems.length) return;
-    const itemsToRemove = [...checkedInboxItems];
+    const itemsToDelete = [...checkedInboxItems];
+    const now = Date.now();
+
+    setEmailTrash((prev) => {
+      const next = { ...prev };
+      for (const item of itemsToDelete) {
+        const emailId = getInboxItemId(item);
+        if (!emailId) continue;
+        const previousIndex = inboxItems.findIndex((c) => getInboxItemId(c) === emailId);
+        next[emailId] = { item, deleted_at: now, previousIndex };
+      }
+      saveTrashToStorage(next);
+      return next;
+    });
     setPendingRemovals((prev) => {
       const next = { ...prev };
-      for (const item of itemsToRemove) {
-        const eid = getInboxItemId(item);
-        const uid = String(item?.imap_uid || "").trim();
-        if (eid) next[eid] = true;
-        if (uid) next[uid] = true;
+      for (const item of itemsToDelete) {
+        const emailId = getInboxItemId(item);
+        const imapUid = String(item?.imap_uid || "").trim();
+        if (emailId) next[emailId] = true;
+        if (imapUid) next[imapUid] = true;
       }
       return next;
     });
-    for (const item of itemsToRemove) {
+    for (const item of itemsToDelete) {
       hideInboxItemInState(item);
     }
-    for (const item of itemsToRemove) {
-      const emailId = getInboxItemId(item);
-      const imapUid = String(item?.imap_uid || "").trim();
-      if (emailId) {
-        await removeInboxFromSpailaStorage(item);
-      }
-      setPendingRemovals((prev) => {
-        const next = { ...prev };
-        if (emailId) delete next[emailId];
-        if (imapUid) delete next[imapUid];
-        return next;
-      });
-    }
-    setDropMessage(`${itemsToRemove.length} email${itemsToRemove.length === 1 ? "" : "s"} removed from Spaila.`);
-  }
-
-  async function handleBulkDelete() {
-    if (!checkedInboxItems.length) return;
-    if (!imapConfigured) {
-      setDropMessage("Email connection unavailable. Cannot delete from account.");
-      return;
-    }
-    const itemsToDelete = [...checkedInboxItems];
-    if (!window.confirm(`Delete ${itemsToDelete.length} selected email${itemsToDelete.length === 1 ? "" : "s"} from your email account?`)) {
-      return;
-    }
-    const connected = await checkImapConnection({ showError: true });
-    if (!connected) {
-      return;
-    }
-    let deleted = 0;
-    for (const item of itemsToDelete) {
-      const emailId = getInboxItemId(item);
-      if (!emailId) continue;
-      try {
-        const response = await fetch("http://127.0.0.1:8055/inbox/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email_id: emailId }),
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload?.detail || payload?.error || "Could not delete email from account.");
-        }
-        deleted += 1;
-        hideInboxItemInState(item);
-        await removeInboxFromSpailaStorage(item);
-      } catch (nextError) {
-        await checkImapConnection();
-        setDropMessage(nextError.message || "Could not delete email from account.");
-        break;
-      }
-    }
-    if (deleted > 0) {
-      setDropMessage(`${deleted} email${deleted === 1 ? "" : "s"} deleted from account.`);
-    }
+    const count = itemsToDelete.length;
+    setDropMessage(`${count} email${count === 1 ? "" : "s"} moved to Trash.`);
   }
 
   function renderThreadRow(thread) {
@@ -2795,14 +3408,15 @@ export default function WorkspacePage({
         style={{
           width: "100%",
           textAlign: "left",
-          border: `1px solid ${isSelected ? "#93c5fd" : "#e5e7eb"}`,
-          borderLeft: `4px solid ${isSelected ? "#3b82f6" : "#cbd5e1"}`,
-          background: isSelected ? "#eff6ff" : "#fff",
+          border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#3b82f6" : "#e5e7eb"}`,
+          borderLeft: `4px solid ${isSelected ? "#2563eb" : "#cbd5e1"}`,
+          background: isSelected ? "#dbeafe" : "#fff",
           borderRadius: 12,
-          padding: 14,
+          padding: isSelected ? 13 : 14,
           marginBottom: 10,
           cursor: "pointer",
           boxSizing: "border-box",
+          boxShadow: isSelected ? "0 2px 12px rgba(37,99,235,0.18)" : "none",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -2838,38 +3452,57 @@ export default function WorkspacePage({
     const isChecked = emailId && checkedEmailIds.has(emailId);
     const orderScore = Number(item.order_score || 0);
     const isFlaggedOrder = item.order_flagged === true;
-    const cardTint = isFlaggedOrder ? "#f0fdf4" : orderScore > 70 ? "#f7fee7" : orderScore >= 40 ? "#fbfdf2" : "#fff";
-    const borderColor = isFlaggedOrder ? "#86efac" : orderScore > 70 ? "#bef264" : orderScore >= 40 ? "#e2e8a8" : "#e5e7eb";
+
+    const linkedOrder = getInboxItemLinkedOrder(item, ordersForLinking, orderUpdateLinks);
+    const linkedOrderNumber = linkedOrder
+      ? (normalizeOrderNumber(linkedOrder.order_number) || String(linkedOrder.order_id || linkedOrder.id || "").trim())
+      : "";
+    const linkedOrderBadge = linkedOrderNumber ? `#${linkedOrderNumber}` : "Linked Order";
+
+    function openInboxCard() {
+      if (linkedOrder) {
+        handleOpenLinkedOrder(linkedOrder);
+        return;
+      }
+      selectInboxItem(item);
+      setSelectedThreadId("");
+    }
+
+    const cardTint = linkedOrder ? "#eff6ff" : isFlaggedOrder ? "#f0fdf4" : orderScore > 70 ? "#f7fee7" : orderScore >= 40 ? "#fbfdf2" : "#fff";
+    const borderColor = linkedOrder ? "#93c5fd" : isFlaggedOrder ? "#86efac" : orderScore > 70 ? "#bef264" : orderScore >= 40 ? "#e2e8a8" : "#e5e7eb";
     return (
       <div
         key={emailId}
         role="button"
         tabIndex={0}
-        onClick={() => {
-          selectInboxItem(item);
-          setSelectedThreadId("");
+        onClick={openInboxCard}
+        onDoubleClick={() => {
+          if (linkedOrder) {
+            handleOpenLinkedOrder(linkedOrder);
+            return;
+          }
+          openInboxItem(item);
         }}
-        onDoubleClick={() => openInboxItem(item)}
         onContextMenu={(event) => openInboxContextMenu(event, item)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            selectInboxItem(item);
-            setSelectedThreadId("");
+            openInboxCard();
           }
         }}
         title={item.name}
         style={{
           width: "100%",
           textAlign: "left",
-          border: `1px solid ${isSelected ? "#93c5fd" : borderColor}`,
-          borderLeft: orderScore >= 40 || isFlaggedOrder ? `4px solid ${borderColor}` : `1px solid ${borderColor}`,
-          background: isSelected ? "#eff6ff" : cardTint,
+          border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#3b82f6" : borderColor}`,
+          borderLeft: isSelected ? "4px solid #2563eb" : orderScore >= 40 || isFlaggedOrder ? `4px solid ${borderColor}` : `1px solid ${borderColor}`,
+          background: isSelected ? "#dbeafe" : cardTint,
           borderRadius: 12,
-          padding: 14,
+          padding: isSelected ? 13 : 14,
           marginBottom: 10,
           cursor: "pointer",
           boxSizing: "border-box",
+          boxShadow: isSelected ? "0 2px 12px rgba(37,99,235,0.18)" : "none",
         }}
       >
         <div className="email-card" style={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 10, alignItems: "start" }}>
@@ -2882,22 +3515,57 @@ export default function WorkspacePage({
             style={{ marginTop: 2 }}
           />
           <div style={{ minWidth: 0 }}>
-            <div className="subject" style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {subject}
-              {isFlaggedOrder ? (
-                <span style={{ marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 4, color: "#166534", fontSize: 10, fontWeight: 800, verticalAlign: "middle", cursor: "default" }}>
+            <div className="subject" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {subject}
+              </span>
+              {linkedOrder ? (
+                <span
+                  title={linkedOrderNumber ? `Linked to Order #${linkedOrderNumber}` : "Linked to an existing order"}
+                  style={{
+                    flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: "1px solid #bfdbfe",
+                    background: "#dbeafe",
+                    color: "#1d4ed8",
+                    borderRadius: 999,
+                    padding: "2px 7px",
+                    fontSize: 10,
+                    fontWeight: 850,
+                    lineHeight: 1.2,
+                    cursor: "pointer",
+                  }}
+                >
+                  Order Reply {linkedOrderBadge}
+                </span>
+              ) : isFlaggedOrder ? (
+                <span style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, color: "#166534", fontSize: 10, fontWeight: 800, verticalAlign: "middle", cursor: "default" }}>
                   <span style={{ fontSize: 9 }}>●</span> Order Created
                 </span>
               ) : orderScore > 70 ? (
-                <span title={`Suggested order score: ${orderScore}`} style={{ marginLeft: 8, color: "#84cc16", fontSize: 11 }}>●</span>
+                <span title={`Suggested order score: ${orderScore}`} style={{ flexShrink: 0, color: "#84cc16", fontSize: 11 }}>●</span>
               ) : orderScore >= 40 ? (
-                <span title={`Suggested order score: ${orderScore}`} style={{ marginLeft: 8, color: "#a3e635", fontSize: 11 }}>●</span>
+                <span title={`Suggested order score: ${orderScore}`} style={{ flexShrink: 0, color: "#a3e635", fontSize: 11 }}>●</span>
+              ) : null}
+              {item.source_deleted === true ? (
+                <span
+                  title="This email no longer exists in the connected email account."
+                  style={{ flexShrink: 0, color: "#94a3b8", fontSize: 10, fontWeight: 750, verticalAlign: "middle" }}
+                >
+                  Deleted from email account
+                </span>
               ) : null}
             </div>
             <div className="meta" style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, fontSize: 11, color: "#64748b" }}>
               <span className="sender" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sender}</span>
               <span className="time" style={{ flexShrink: 0, color: "#94a3b8" }}>{formatTimestamp(item.timestamp)}</span>
             </div>
+            {linkedOrder && linkedOrderNumber ? (
+              <div style={{ marginTop: 5, color: "#2563eb", fontSize: 11, fontWeight: 700 }}>
+                Linked to Order #{linkedOrderNumber}
+              </div>
+            ) : null}
             <div className="preview" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.4, color: "#94a3b8", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
               {preview}
             </div>
@@ -2935,11 +3603,12 @@ export default function WorkspacePage({
         style={{
           width: "100%",
           textAlign: "left",
-          border: `1px solid ${isSelected ? "#86efac" : "#e5e7eb"}`,
-          borderLeft: `4px solid ${isSelected ? "#22c55e" : "#dcfce7"}`,
-          background: isSelected ? "#f0fdf4" : "#fff",
+          border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#22c55e" : "#e5e7eb"}`,
+          borderLeft: `4px solid ${isSelected ? "#16a34a" : "#dcfce7"}`,
+          background: isSelected ? "#dcfce7" : "#fff",
           borderRadius: 12,
-          padding: 14,
+          padding: isSelected ? 13 : 14,
+          boxShadow: isSelected ? "0 2px 12px rgba(22,163,74,0.18)" : "none",
           marginBottom: 10,
           cursor: "pointer",
           boxSizing: "border-box",
@@ -3026,11 +3695,245 @@ export default function WorkspacePage({
         >
           Sent
         </button>
+        <span style={{ color: "#cbd5e1", fontSize: 13 }}>|</span>
+        <button
+          type="button"
+          className={mode === "trash" ? "active" : ""}
+          onClick={() => {
+            setMode("trash");
+            setSelectedEmailId("");
+            setSelectedSentId("");
+            setCheckedEmailIds(new Set());
+            setSelectedThreadId("");
+          }}
+          style={{
+            ...toggleButtonStyle(mode === "trash"),
+            color: mode === "trash" ? "#dc2626" : "#64748b",
+            borderBottom: `2px solid ${mode === "trash" ? "#dc2626" : "transparent"}`,
+          }}
+        >
+          Trash
+        </button>
+        <span style={{ color: "#cbd5e1", fontSize: 13 }}>|</span>
+        <button
+          type="button"
+          className={mode === "search" ? "active" : ""}
+          onClick={() => {
+            setMode("search");
+            setSelectedEmailId("");
+            setSelectedSentId("");
+            setCheckedEmailIds(new Set());
+            setSelectedThreadId("");
+          }}
+          style={{
+            ...toggleButtonStyle(mode === "search"),
+            color: mode === "search" ? "#7c3aed" : "#64748b",
+            borderBottom: `2px solid ${mode === "search" ? "#7c3aed" : "transparent"}`,
+          }}
+        >
+          Search
+        </button>
+      </div>
+    );
+  }
+
+  function markEventRead(eventId) {
+    // Optimistic: flip flag immediately so badge count updates instantly.
+    setInboxEvents((prev) => prev.map((e) => e.id === eventId ? { ...e, unread: false } : e));
+    fetch(`http://127.0.0.1:8055/inbox/events/${eventId}/read`, { method: "PATCH" })
+      .catch((err) => console.error("[INBOX] mark-read failed", eventId, err));
+  }
+
+  function dismissEvent(eventId) {
+    // Optimistic: remove from UI immediately so the × feels instant.
+    setInboxEvents((prev) => prev.filter((e) => e.id !== eventId));
+    fetch(`http://127.0.0.1:8055/inbox/events/${eventId}`, { method: "DELETE" })
+      .then((res) => {
+        if (!res.ok) console.error("[INBOX] delete failed", eventId, res.status);
+      })
+      .catch((err) => console.error("[INBOX] delete error", eventId, err));
+  }
+
+  function renderActivityFeed() {
+    if (!visibleInboxActivityEvents.length) return null;
+    const unreadCount = visibleInboxActivityEvents.filter((e) => e.unread).length;
+    return (
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: 1, textTransform: "uppercase" }}>
+            Activity {unreadCount > 0 && (
+              <span style={{ background: "#2563eb", color: "#fff", borderRadius: 8, padding: "1px 6px", fontSize: 10, marginLeft: 4 }}>
+                {unreadCount}
+              </span>
+            )}
+          </span>
+        </div>
+        {visibleInboxActivityEvents.map((ev) => {
+          const linkedOrder = ordersForLinking.find((o) => o.order_id === ev.order_id || o.id === ev.order_id);
+          const isUpdate = ev.type === "order_update";
+          const ts = ev.timestamp || ev.created_at || "";
+          const displayTs = ts ? new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+          return (
+            <div
+              key={ev.id}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                border: `1px solid ${ev.unread ? "#bfdbfe" : "#e5e7eb"}`,
+                borderLeft: `4px solid ${isUpdate ? "#2563eb" : "#16a34a"}`,
+                borderRadius: 10,
+                padding: "10px 12px",
+                marginBottom: 8,
+                background: ev.unread ? "#eff6ff" : "#fafafa",
+                cursor: linkedOrder ? "pointer" : "default",
+              }}
+              onClick={() => {
+                markEventRead(ev.id);
+                if (linkedOrder) onOpenOrder?.(linkedOrder);
+              }}
+            >
+              <span style={{
+                flexShrink: 0,
+                marginTop: 2,
+                fontSize: 10,
+                fontWeight: 800,
+                padding: "2px 7px",
+                borderRadius: 6,
+                background: isUpdate ? "#dbeafe" : "#dcfce7",
+                color: isUpdate ? "#1d4ed8" : "#15803d",
+                whiteSpace: "nowrap",
+              }}>
+                {isUpdate ? "Reply" : "New Order"}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: ev.unread ? 700 : 500, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ev.buyer_name || "(Unknown)"}{ev.order_number ? ` — #${ev.order_number}` : ""}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{displayTs}</span>
+                </div>
+                {ev.preview && (
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ev.preview}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); dismissEvent(ev.id); }}
+                title="Dismiss"
+                style={{
+                  flexShrink: 0,
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#94a3b8",
+                  fontSize: 18,
+                  width: 32,
+                  height: 32,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: 6,
+                  padding: 0,
+                  lineHeight: 1,
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.06)"; e.currentTarget.style.color = "#475569"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "#94a3b8"; }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+        <div style={{ borderBottom: "1px solid #e5e7eb", marginBottom: 14 }} />
       </div>
     );
   }
 
   function renderMailboxListContent() {
+    if (mode === "search") {
+      if (!mailSearchQuery.trim()) {
+        return (
+          <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 18, color: "#94a3b8", fontSize: 13, textAlign: "center" }}>
+            Type above to search all mailboxes.
+          </div>
+        );
+      }
+      if (!mailSearchResults.length) {
+        return (
+          <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
+            No results for &ldquo;{mailSearchQuery}&rdquo;.
+          </div>
+        );
+      }
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {mailSearchResults.map(({ item, source }, idx) => {
+            const emailId = source === "sent" ? getMessageId(item) : getInboxItemId(item);
+            const isSelected = source === "sent" ? selectedSentId === emailId : selectedEmailId === emailId;
+            const subject = String(item?.subject || item?.preview_text || "(no subject)").trim();
+            const sender = String(item?.sender || item?.from || item?.to || "Unknown").trim();
+            const preview = String(item?.preview_text || item?.preview || "").trim();
+            const tag = source === "inbox"
+              ? { text: "Inbox", color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe" }
+              : source === "sent"
+                ? { text: "Sent", color: "#166534", bg: "#f0fdf4", border: "#bbf7d0" }
+                : { text: "Trash", color: "#dc2626", bg: "#fff1f2", border: "#fecaca" };
+            function selectResult() {
+              if (source === "sent") {
+                setSelectedSentId(emailId);
+                setSelectedEmailId("");
+              } else {
+                setSelectedEmailId(emailId);
+                setSelectedSentId("");
+              }
+              setSearchSelectedSource(source);
+            }
+            return (
+              <div
+                key={`${source}-${emailId || idx}`}
+                role="button"
+                tabIndex={0}
+                onClick={selectResult}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectResult(); } }}
+                style={{
+                  border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#7c3aed" : "#e5e7eb"}`,
+                  borderLeft: `4px solid ${isSelected ? "#6d28d9" : tag.border}`,
+                  borderRadius: 10,
+                  padding: isSelected ? "9px 11px" : "10px 12px",
+                  background: isSelected ? "#ede9fe" : "#fff",
+                  cursor: "pointer",
+                  boxShadow: isSelected ? "0 2px 12px rgba(124,58,237,0.18)" : "none",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                }}
+              >
+                <div style={{ marginBottom: 2 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: tag.color, background: tag.bg, border: `1px solid ${tag.border}`, borderRadius: 4, padding: "1px 5px" }}>
+                    {tag.text}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {subject}
+                </div>
+                <div style={{ fontSize: 11, color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {sender}
+                </div>
+                {preview && (
+                  <div style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {preview}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     if (mode === "sent") {
       return sentItems.length ? sentItems.map(renderSentRow) : (
         <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
@@ -3038,10 +3941,92 @@ export default function WorkspacePage({
         </div>
       );
     }
-    return inboxModeItems.length ? inboxModeItems.map(renderUnlinkedRow) : (
-      <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
-        No inbox emails.
-      </div>
+    if (mode === "trash") {
+      const trashEntries = Object.entries(emailTrash);
+      if (!trashEntries.length) {
+        return (
+          <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
+            Trash is empty.
+          </div>
+        );
+      }
+      const retentionDays = shopConfig?.trashRetentionDays || 30;
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
+            <div style={{ fontSize: 11, color: "#9ca3af" }}>
+              Items are permanently deleted after {retentionDays} day{retentionDays === 1 ? "" : "s"}.
+            </div>
+            <button
+              type="button"
+              onClick={emptyTrashNow}
+              style={{
+                border: "1px solid #fecaca",
+                background: "#fff",
+                color: "#991b1b",
+                borderRadius: 7,
+                padding: "4px 8px",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 800,
+                flexShrink: 0,
+              }}
+            >
+              Empty Trash
+            </button>
+          </div>
+          {trashEntries
+            .sort((a, b) => b[1].deleted_at - a[1].deleted_at)
+            .map(([emailId, entry]) => {
+              const subject = String(entry.item?.subject || entry.item?.preview_text || "(no subject)").trim();
+              const sender = String(entry.item?.sender || entry.item?.from || "Unknown").trim();
+              const daysAgo = Math.floor((Date.now() - entry.deleted_at) / (1000 * 60 * 60 * 24));
+              const daysLeft = retentionDays - daysAgo;
+              const isSelected = selectedEmailId === emailId;
+              return (
+                <div
+                  key={emailId}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedEmailId(emailId)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedEmailId(emailId); } }}
+                  style={{
+                    border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#3b82f6" : "#fee2e2"}`,
+                    borderLeft: `4px solid ${isSelected ? "#2563eb" : "#fca5a5"}`,
+                    borderRadius: 10,
+                    padding: isSelected ? "9px 11px" : "10px 12px",
+                    background: isSelected ? "#dbeafe" : "#fff",
+                    boxShadow: isSelected ? "0 2px 12px rgba(37,99,235,0.18)" : "none",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {subject}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {sender}
+                  </div>
+                  <div style={{ fontSize: 11, color: daysLeft <= 3 ? "#dc2626" : "#9ca3af" }}>
+                    {daysAgo === 0 ? "deleted today" : `deleted ${daysAgo}d ago`} · {daysLeft > 0 ? `${daysLeft}d left` : "expires soon"}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      );
+    }
+    return (
+      <>
+        {renderActivityFeed()}
+        {inboxModeItems.length ? inboxModeItems.map(renderUnlinkedRow) : (
+          <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
+            No inbox emails.
+          </div>
+        )}
+      </>
     );
   }
 
@@ -3050,17 +4035,13 @@ export default function WorkspacePage({
     const outboundStatus = isOutbound ? String(message.status || "sent") : "";
     const orderLinkState = buildOrderLinkState(message, ordersForLinking);
     const attachments = getEmailAttachments(message);
-    const contentText = String(message.preview_text || message.body || message.preview || "").trim();
+    const rawText = String(message.preview_text || message.body || message.preview || "").trim();
+    const contentText = extractReply(rawText) || rawText;
     const fallbackText = attachments.length ? "Attachment sent" : "";
     const displayText = contentText || fallbackText;
-    const inboundLabel = String(
-      message.sender
-      || message.from
-      || message.reply_to
-      || message.buyer_name
-      || message.buyer_email
-      || ""
-    ).trim();
+    const senderEmail = extractEmailAddress(message.sender_email || message.from || message.sender || message.reply_to || message.buyer_email || "").toLowerCase();
+    const senderName = String(message.sender_name || "").replace(/<[^<>]+>/g, "").trim();
+    const inboundLabel = senderName || senderEmail || String(message.buyer_name || message.buyer_email || "").trim();
     const bubbleLabel = isOutbound ? "You" : inboundLabel || "Unknown sender";
     return (
       <div
@@ -3086,12 +4067,7 @@ export default function WorkspacePage({
           boxShadow: "0 6px 16px rgba(15, 23, 42, 0.06)",
         }}
       >
-        {previewMode === "original" && message.preview_html && contentText ? (
-          <div
-            style={{ color: isOutbound ? "#1f2937" : "#334155", fontSize: 14, lineHeight: 1.6, wordBreak: "break-word", overflowWrap: "anywhere" }}
-            dangerouslySetInnerHTML={{ __html: message.preview_html }}
-          />
-        ) : displayText ? (
+        {displayText ? (
           <div style={{ color: isOutbound ? "#1f2937" : "#1f2937", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 0 }}>
             {renderReadableMessageBody(displayText, orderLinkState, handleOpenLinkedOrder)}
           </div>
@@ -3124,7 +4100,6 @@ export default function WorkspacePage({
         onSelectTab={onOrders}
         activeCount={activeCount}
         completedCount={completedCount}
-        archivedCount={archivedCount}
         selectedNav="workspace"
         rightContent={
           <>
@@ -3132,8 +4107,8 @@ export default function WorkspacePage({
               <button
                 type="button"
                 onClick={handleRefreshInbox}
-                disabled={!canFetchInbox || refreshingInbox}
-                title={canFetchInbox ? "Refresh inbox now" : "Email connection unavailable. Cannot refresh inbox."}
+                disabled={!imapConfigured || refreshingInbox}
+                title={imapConfigured ? "Refresh inbox now" : "Email connection unavailable. Cannot refresh inbox."}
                 aria-label="Refresh inbox"
                 style={{
                   width: 34,
@@ -3142,38 +4117,38 @@ export default function WorkspacePage({
                   background: "#fff",
                   color: "#0f172a",
                   borderRadius: 999,
-                  cursor: canFetchInbox && !refreshingInbox ? "pointer" : "not-allowed",
+                  cursor: imapConfigured && !refreshingInbox ? "pointer" : "not-allowed",
                   fontSize: 15,
                   fontWeight: 800,
-                  opacity: canFetchInbox ? (refreshingInbox ? 0.7 : 1) : 0.5,
+                  opacity: imapConfigured ? (refreshingInbox ? 0.7 : 1) : 0.5,
                   display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                {refreshingInbox ? "…" : "🔄"}
+                {refreshingInbox ? "..." : "↻"}
               </button>
               <span style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>
                 {refreshingInbox ? "Updating..." : lastUpdatedLabel}
               </span>
             </div>
             <div
-              title={canDeleteFromAccount ? "Email account is reachable" : "Email connection unavailable. Cannot delete from account."}
+              title={canDeleteFromAccount ? "Mail service connected" : mailServiceRunning ? "Mail service running, account offline" : "Mail service stopped"}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
                 border: "1px solid #e5e7eb",
                 background: "#fff",
-                color: canDeleteFromAccount ? "#166534" : "#64748b",
+                color: canDeleteFromAccount ? "#166534" : mailServiceRunning ? "#92400e" : "#64748b",
                 borderRadius: 999,
                 padding: "6px 10px",
                 fontSize: 12,
                 fontWeight: 700,
               }}
             >
-              <span style={{ color: canDeleteFromAccount ? "#16a34a" : "#ef4444", fontSize: 13 }}>●</span>
-              {imapChecking ? "Checking..." : canDeleteFromAccount ? "Connected" : "Offline"}
+              <span style={{ color: canDeleteFromAccount ? "#16a34a" : mailServiceRunning ? "#f59e0b" : "#ef4444", fontSize: 13 }}>●</span>
+              {imapChecking ? "Checking..." : canDeleteFromAccount ? "Connected" : mailServiceRunning ? "Sync Ready" : "Offline"}
             </div>
           </>
         }
@@ -3183,10 +4158,28 @@ export default function WorkspacePage({
         <section style={{ ...panelStyle, display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid #e5e7eb" }}>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#0f172a" }}>Mail</div>
-            <div style={{ marginTop: 4, fontSize: 12, color: "#64748b" }}>
-              Select an inbox or sent email to preview.
-            </div>
             {renderModeToggle()}
+            {mode === "search" && (
+              <div style={{ marginTop: 10 }}>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Search subject, sender, name, order…"
+                  value={mailSearchQuery}
+                  onChange={(e) => setMailSearchQuery(e.target.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 8,
+                    padding: "7px 10px",
+                    fontSize: 13,
+                    outline: "none",
+                    color: "#0f172a",
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {dropMessage && (
@@ -3216,27 +4209,22 @@ export default function WorkspacePage({
                 <button type="button" onClick={handleBulkProcess} style={{ border: "1px solid #bfdbfe", background: "#fff", color: "#0f172a", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
                   Process
                 </button>
-                <button type="button" onClick={handleBulkRemove} style={{ border: "1px solid #bfdbfe", background: "#fff", color: "#475569", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-                  Remove
-                </button>
                 <button
                   type="button"
                   onClick={handleBulkDelete}
-                  disabled={!canDeleteFromAccount}
-                  title={canDeleteFromAccount ? "Delete selected emails from account" : "Email connection unavailable. Cannot delete from account."}
+                  title="Move selected emails to Trash"
                   style={{
                     border: "1px solid #fecaca",
                     background: "#fff",
-                    color: canDeleteFromAccount ? "#991b1b" : "#94a3b8",
+                    color: "#991b1b",
                     borderRadius: 8,
                     padding: "6px 10px",
-                    cursor: canDeleteFromAccount ? "pointer" : "not-allowed",
-                    opacity: canDeleteFromAccount ? 1 : 0.5,
+                    cursor: "pointer",
                     fontSize: 12,
                     fontWeight: 700,
                   }}
                 >
-                  Delete
+                  🗑 Trash
                 </button>
               </div>
             </div>
@@ -3245,7 +4233,7 @@ export default function WorkspacePage({
           <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 16px 16px" }}>
             {loading && !workspaceState ? (
               <div style={{ fontSize: 13, color: "#64748b" }}>Loading workspace…</div>
-            ) : showInboxEmptyState ? (
+            ) : showInboxEmptyState && mode !== "search" ? (
               <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 8px" }}>
                 <div style={{
                   width: "100%",
@@ -3312,25 +4300,63 @@ export default function WorkspacePage({
                       Open Inbox Folder
                     </button>
                     {imapConfigured && (
-                      <button
-                        type="button"
-                        onClick={handleRefreshInbox}
-                        disabled={!canFetchInbox || refreshingInbox}
-                        title={canFetchInbox ? "Refresh inbox now" : "Email connection unavailable. Cannot refresh inbox."}
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          background: "#fff",
-                          color: "#475569",
-                          borderRadius: 12,
-                          padding: "10px 14px",
-                          cursor: canFetchInbox && !refreshingInbox ? "pointer" : "not-allowed",
-                          fontSize: 13,
-                          fontWeight: 700,
-                          opacity: canFetchInbox ? (refreshingInbox ? 0.7 : 1) : 0.5,
-                        }}
-                      >
-                        {refreshingInbox ? "Updating..." : "🔄 Refresh now"}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleRefreshInbox}
+                          disabled={refreshingInbox}
+                          title="Refresh inbox now"
+                          style={{
+                            border: "1px solid #cbd5e1",
+                            background: "#fff",
+                            color: "#475569",
+                            borderRadius: 12,
+                            padding: "10px 14px",
+                            cursor: !refreshingInbox ? "pointer" : "not-allowed",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            opacity: refreshingInbox ? 0.7 : 1,
+                          }}
+                        >
+                          {refreshingInbox ? "Updating..." : "Refresh now"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleResyncInbox}
+                          disabled={mailServiceBusy}
+                          title="Force a larger inbox resync"
+                          style={{
+                            border: "1px solid #cbd5e1",
+                            background: "#fff",
+                            color: "#475569",
+                            borderRadius: 12,
+                            padding: "10px 14px",
+                            cursor: !mailServiceBusy ? "pointer" : "not-allowed",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            opacity: mailServiceBusy ? 0.7 : 1,
+                          }}
+                        >
+                          Resync
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDisconnectInboxService}
+                          title="Disconnect background mail service"
+                          style={{
+                            border: "1px solid #fecaca",
+                            background: "#fff",
+                            color: "#991b1b",
+                            borderRadius: 12,
+                            padding: "10px 14px",
+                            cursor: "pointer",
+                            fontSize: 13,
+                            fontWeight: 700,
+                          }}
+                        >
+                          Disconnect
+                        </button>
+                      </>
                     )}
                   </div>
                   {showEmlInstructions && (
@@ -3387,7 +4413,7 @@ export default function WorkspacePage({
                   </div>
                 </div>
               </div>
-              <div style={{ borderBottom: "1px solid #f1f5f9", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#fff" }}>
+              <div style={{ borderBottom: "1px solid #f1f5f9", padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#fff" }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ border: "1px solid #dbeafe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "5px 10px", fontSize: 12, fontWeight: 800 }}>
                     {selectedThread.inbound_count} inbound
@@ -3396,19 +4422,12 @@ export default function WorkspacePage({
                     {selectedThread.outbound_count} outbound
                   </span>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" onClick={() => setPreviewMode("clean")} style={{ border: `1px solid ${previewMode === "clean" ? "#93c5fd" : "#e5e7eb"}`, background: previewMode === "clean" ? "#eff6ff" : "#fff", color: "#0f172a", borderRadius: 999, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 800 }}>
-                    Clean View
-                  </button>
-                  <button type="button" onClick={() => setPreviewMode("original")} disabled={!selectedThreadMessages.some((message) => message.preview_html)} style={{ border: `1px solid ${previewMode === "original" ? "#93c5fd" : "#e5e7eb"}`, background: previewMode === "original" ? "#eff6ff" : "#fff", color: selectedThreadMessages.some((message) => message.preview_html) ? "#0f172a" : "#94a3b8", borderRadius: 999, padding: "5px 10px", cursor: selectedThreadMessages.some((message) => message.preview_html) ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 800 }}>
-                    Original Email
-                  </button>
-                </div>
               </div>
               <div ref={previewScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 18px", background: "#ffffff" }}>
                 <div style={conversationStackStyle}>
-                  {selectedThreadMessagesWithReplies.map(renderTimelineMessage)}
+                  {[...selectedThreadMessagesWithReplies].sort(sortByTimestamp).map(renderTimelineMessage)}
                 </div>
+                <div ref={bottomRef} style={{ height: 0 }} />
                 <InlineReplyBox
                   value={replyText}
                   onChange={setReplyText}
@@ -3420,6 +4439,7 @@ export default function WorkspacePage({
                   onCloseOrderFilePicker={closeOrderFilePicker}
                   orderFilePicker={orderFilePicker}
                   onRemoveAttachment={handleRemoveInlineReplyAttachment}
+                  onOpenAttachment={handleOpenAttachment}
                   isSending={isSendingReply}
                 />
               </div>
@@ -3437,33 +4457,36 @@ export default function WorkspacePage({
                     flexWrap: "wrap",
                   }}
                 >
-                  {mode === "inbox" ? (
+                  {mode === "trash" ? (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => { handleRestoreFromTrash(selectedEmailId); setMode("inbox"); }}
+                        style={{ border: "1px solid #bbf7d0", background: "#fff", color: "#166534", borderRadius: 7, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+                      >
+                        Restore to Inbox
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm("Permanently delete this email from your account now?")) return;
+                          const didDelete = await executeTrashPurge(selectedEmailId, emailTrash[selectedEmailId], { force: true });
+                          if (didDelete) {
+                            setSelectedEmailId("");
+                          } else {
+                            setDropMessage("Could not delete email. Item was kept in Trash.");
+                          }
+                        }}
+                        style={{ border: "1px solid #fecaca", background: "#fff", color: "#dc2626", borderRadius: 7, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+                      >
+                        Delete Now
+                      </button>
+                    </div>
+                  ) : effectivePreviewSource === "inbox" ? (
                     <>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button type="button" onClick={() => openInboxItem(selectedInboxItem)} style={{ border: "1px solid #dbeafe", background: "#fff", color: "#0f172a", borderRadius: 7, padding: "5px 8px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
                           Process Order
-                        </button>
-                        <button type="button" onClick={() => handleViewInboxItem(selectedInboxItem)} style={{ border: "1px solid #e5e7eb", background: "#fff", color: "#0f172a", borderRadius: 7, padding: "5px 8px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-                          View Email
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!selectedInboxItem.reply_to}
-                          title={selectedInboxItem.reply_to ? `Reply to ${selectedInboxItem.reply_to}` : "No reply email address found"}
-                          onClick={() => handleReplyInEmail(selectedInboxItem)}
-                          style={{
-                            border: "1px solid #dbeafe",
-                            background: "#fff",
-                            color: selectedInboxItem.reply_to ? "#1d4ed8" : "#94a3b8",
-                            borderRadius: 7,
-                            padding: "5px 8px",
-                            cursor: selectedInboxItem.reply_to ? "pointer" : "not-allowed",
-                            opacity: selectedInboxItem.reply_to ? 1 : 0.55,
-                            fontSize: 12,
-                            fontWeight: 700,
-                          }}
-                        >
-                          Reply in Email
                         </button>
                         <button
                           type="button"
@@ -3483,27 +4506,22 @@ export default function WorkspacePage({
                         </button>
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        <button type="button" onClick={() => handleRemoveInboxItem(selectedInboxItem)} style={{ border: "1px solid #e5e7eb", background: "#fff", color: "#475569", borderRadius: 7, padding: "5px 8px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-                          Remove from Spaila
-                        </button>
                         <button
                           type="button"
-                          disabled={!canDeleteFromAccount}
-                          title={canDeleteFromAccount ? "Delete from email account" : "Email connection unavailable. Cannot delete from account."}
+                          title="Move to Trash"
                           onClick={() => handleDeleteInboxItem(selectedInboxItem)}
                           style={{
                             border: "1px solid #fecaca",
                             background: "#fff",
-                            color: canDeleteFromAccount ? "#991b1b" : "#94a3b8",
+                            color: "#991b1b",
                             borderRadius: 7,
                             padding: "5px 8px",
-                            cursor: canDeleteFromAccount ? "pointer" : "not-allowed",
-                            opacity: canDeleteFromAccount ? 1 : 0.5,
+                            cursor: "pointer",
                             fontSize: 12,
                             fontWeight: 700,
                           }}
                         >
-                          Delete from all
+                          🗑 Trash
                         </button>
                         {!selectedInboxItem.order_flagged ? (
                           <button type="button" onClick={() => handleMarkInboxOrder(selectedInboxItem)} style={{ border: "1px solid #bbf7d0", background: "#fff", color: "#166534", borderRadius: 7, padding: "5px 8px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
@@ -3524,8 +4542,8 @@ export default function WorkspacePage({
                     {renderSubjectWithOrderLinks(selectedMailboxItem.subject || "(No subject)", ordersForLinking, handleOpenLinkedOrder)}
                   </div>
                   <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 14, color: "#6b7280" }}>
-                    <span>{mode === "sent" ? `To: ${selectedMailboxItem.to || "(Unknown recipient)"}` : selectedMailboxItem.sender || "(Unknown sender)"} • {formatTimestamp(selectedMailboxItem.timestamp)}</span>
-                    {mode === "inbox" && selectedMailboxItem.order_flagged ? (
+                    <span>{effectivePreviewSource === "sent" ? `To: ${selectedMailboxItem.to || "(Unknown recipient)"}` : selectedMailboxItem.sender || "(Unknown sender)"} • {formatTimestamp(selectedMailboxItem.timestamp)}</span>
+                    {effectivePreviewSource === "inbox" && selectedMailboxItem.order_flagged ? (
                       <span
                         style={{
                           display: "inline-flex",
@@ -3541,11 +4559,24 @@ export default function WorkspacePage({
                         Order Created
                       </span>
                     ) : null}
+                    {effectivePreviewSource === "inbox" && selectedMailboxItem.source_deleted === true ? (
+                      <span
+                        title="This email no longer exists in the connected email account."
+                        style={{
+                          color: "#94a3b8",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: "default",
+                        }}
+                      >
+                        Deleted from email account
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </div>
-              <div style={{ borderBottom: "1px solid #f1f5f9", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#fff" }}>
-                {selectedMessageClassification ? (
+              {selectedMessageClassification ? (
+                <div style={{ borderBottom: "1px solid #f1f5f9", padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#fff" }}>
                   <div
                     title={selectedMessageClassification.detail}
                     style={{
@@ -3565,67 +4596,22 @@ export default function WorkspacePage({
                     <span style={{ fontSize: 10 }}>●</span>
                     {selectedMessageClassification.label}
                   </div>
-                ) : (
-                  <div />
-                )}
-                <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => setPreviewMode("clean")}
-                  style={{
-                    border: `1px solid ${previewMode === "clean" ? "#93c5fd" : "#e5e7eb"}`,
-                    background: previewMode === "clean" ? "#eff6ff" : "#fff",
-                    color: "#0f172a",
-                    borderRadius: 999,
-                    padding: "5px 10px",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    fontWeight: 800,
-                  }}
-                >
-                  Clean View
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedMailboxItem.preview_html}
-                  title={selectedMailboxItem.preview_html ? "Show sanitized original email" : "Original email view is not available"}
-                  onClick={() => setPreviewMode("original")}
-                  style={{
-                    border: `1px solid ${previewMode === "original" ? "#93c5fd" : "#e5e7eb"}`,
-                    background: previewMode === "original" ? "#eff6ff" : "#fff",
-                    color: selectedMailboxItem.preview_html ? "#0f172a" : "#94a3b8",
-                    borderRadius: 999,
-                    padding: "5px 10px",
-                    cursor: selectedMailboxItem.preview_html ? "pointer" : "not-allowed",
-                    fontSize: 12,
-                    fontWeight: 800,
-                  }}
-                >
-                  Original Email
-                </button>
                 </div>
-              </div>
+              ) : null}
               <div ref={previewScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 18px", background: "#ffffff" }}>
                 {selectedMailboxThreadMessagesWithReplies.length ? (
                   <div style={conversationStackStyle}>
-                    {selectedMailboxThreadMessagesWithReplies.map(renderTimelineMessage)}
+                    {[...selectedMailboxThreadMessagesWithReplies].sort(sortByTimestamp).map(renderTimelineMessage)}
                   </div>
                 ) : (
                   <>
-                    {previewMode === "original" && selectedMailboxItem.preview_html ? (
-                      <div
-                        style={{ maxWidth: "100%", color: "#334155", fontSize: 14, lineHeight: 1.6, wordBreak: "break-word", overflowWrap: "anywhere" }}
-                        dangerouslySetInnerHTML={{ __html: selectedMailboxItem.preview_html }}
-                      />
-                    ) : (
-                      <div style={{ maxWidth: "100%", minWidth: 0 }}>
-                        {renderReadableMessageBody(
-                          selectedMailboxItem.preview_text || selectedMailboxItem.body || selectedMailboxItem.preview || "(No preview available)",
-                          selectedOrderLinkState,
-                          handleOpenLinkedOrder
-                        )}
-                      </div>
-                    )}
+                    <div style={{ maxWidth: "100%", minWidth: 0 }}>
+                      {renderReadableMessageBody(
+                        selectedMailboxItem.preview_text || selectedMailboxItem.body || selectedMailboxItem.preview || "(No preview available)",
+                        selectedOrderLinkState,
+                        handleOpenLinkedOrder
+                      )}
+                    </div>
                     {selectedMailboxReplies.length ? (
                       <div style={conversationStackStyle}>
                         {selectedMailboxReplies.map(renderTimelineMessage)}
@@ -3633,6 +4619,7 @@ export default function WorkspacePage({
                     ) : null}
                   </>
                 )}
+                <div ref={bottomRef} style={{ height: 0 }} />
                 <InlineReplyBox
                   value={replyText}
                   onChange={setReplyText}
@@ -3644,6 +4631,7 @@ export default function WorkspacePage({
                   onCloseOrderFilePicker={closeOrderFilePicker}
                   orderFilePicker={orderFilePicker}
                   onRemoveAttachment={handleRemoveInlineReplyAttachment}
+                  onOpenAttachment={handleOpenAttachment}
                   isSending={isSendingReply}
                 />
               </div>
@@ -3678,33 +4666,11 @@ export default function WorkspacePage({
           <PreviewMenuItem onClick={() => runInboxContextAction(() => openInboxItem(inboxContextMenuItem))}>
             Process Order
           </PreviewMenuItem>
-          <PreviewMenuItem onClick={() => runInboxContextAction(() => handleViewInboxItem(inboxContextMenuItem))}>
-            View Email
-          </PreviewMenuItem>
-          <PreviewMenuItem
-            disabled={!inboxContextMenuItem.reply_to}
-            onClick={() => {
-              if (inboxContextMenuItem.reply_to) {
-                runInboxContextAction(() => handleReplyInEmail(inboxContextMenuItem));
-              }
-            }}
-          >
-            Reply in Email
-          </PreviewMenuItem>
-          <div style={{ height: 1, background: "#f1f5f9", margin: "4px 0" }} />
-          <PreviewMenuItem onClick={() => runInboxContextAction(() => handleRemoveInboxItem(inboxContextMenuItem))}>
-            Remove from Spaila
-          </PreviewMenuItem>
           <PreviewMenuItem
             danger
-            disabled={!canDeleteFromAccount}
-            onClick={() => {
-              if (canDeleteFromAccount) {
-                runInboxContextAction(() => handleDeleteInboxItem(inboxContextMenuItem));
-              }
-            }}
+            onClick={() => runInboxContextAction(() => handleDeleteInboxItem(inboxContextMenuItem))}
           >
-            Delete from all
+            Move to Trash
           </PreviewMenuItem>
           {inboxContextMenuItem.order_flagged !== true ? (
             <>
@@ -3762,23 +4728,11 @@ export default function WorkspacePage({
           <PreviewMenuItem onClick={() => runPreviewContextAction(() => openInboxItem(selectedInboxItem))}>
             Process Order
           </PreviewMenuItem>
-          <PreviewMenuItem onClick={() => runPreviewContextAction(() => handleViewInboxItem(selectedInboxItem))}>
-            View Email
-          </PreviewMenuItem>
-          <div style={{ height: 1, background: "#f1f5f9", margin: "4px 0" }} />
-          <PreviewMenuItem onClick={() => runPreviewContextAction(() => handleRemoveInboxItem(selectedInboxItem))}>
-            Remove from Spaila
-          </PreviewMenuItem>
           <PreviewMenuItem
             danger
-            disabled={!canDeleteFromAccount}
-            onClick={() => {
-              if (canDeleteFromAccount) {
-                runPreviewContextAction(() => handleDeleteInboxItem(selectedInboxItem));
-              }
-            }}
+            onClick={() => runPreviewContextAction(() => handleDeleteInboxItem(selectedInboxItem))}
           >
-            Delete from all
+            Move to Trash
           </PreviewMenuItem>
           {selectedInboxItem.order_flagged !== true ? (
             <>

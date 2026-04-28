@@ -1,10 +1,18 @@
 import sys
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from .orders import router as orders_router
 from .db import init_db
 from server.inbox.inbox_routes import router as inbox_router
+from server.inbox.mail_service import mail_service
 from workspace_paths import ensure_workspace_layout
 import json as _json
 import os as _os
@@ -29,6 +37,7 @@ app.include_router(inbox_router)
 def startup():
     init_db()
     ensure_workspace_layout()
+    mail_service.start(auto=True)
 
     # ── Count every learning store precisely (absolute paths; no cwd drift) ───
     def _load_json(path: str) -> dict:
@@ -94,6 +103,11 @@ def startup():
         print("  Run: py reset_learning.py", file=sys.stderr, flush=True)
         print("=" * 60, file=sys.stderr, flush=True)
         print("", file=sys.stderr, flush=True)
+
+
+@app.on_event("shutdown")
+def shutdown():
+    mail_service.stop(reason="app_shutdown")
 
 
 @app.get("/", include_in_schema=False)

@@ -353,7 +353,38 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
         if is_manual_assignment:
             context = {**context, "assignment_source": "manual"}
         save_assignment(template_id, field, value, context)
-        reset_field(template_id, field, source=result.get("learning_source", "unknown") if field == "quantity" else "")
+
+        # Emit a structured proof log whenever a manual correction is saved so
+        # that live debugging can confirm the synthesis path is active.
+        if is_manual_assignment:
+            print(
+                "[CORRECTION_SYNTHESIS] "
+                + json.dumps({
+                    "field": field,
+                    "value": value,
+                    "start": context.get("start"),
+                    "end": context.get("end"),
+                    "source": context.get("source", ""),
+                    "role": context.get("role", ""),
+                    "role_pattern": context.get("role_pattern", ""),
+                    "template_id": template_id,
+                    "family_id": result.get("template_family_id", ""),
+                    "adaptive_family_id": result.get("adaptive_family_id", ""),
+                }, ensure_ascii=False),
+                file=sys.stderr,
+                flush=True,
+            )
+
+        # Phase 2 — Confidence lifecycle fix:
+        # Only reset confidence for quantity (source-scoped, volatile field that
+        # must be re-evaluated after each assignment change).  Core structural
+        # fields (buyer_name, buyer_email, order_date, ship_by, order_number,
+        # price, shipping_address) should NOT have their confidence streak wiped
+        # on manual acceptance — that would prevent them from ever reaching
+        # autopromotion.  An explicit reset_learning_field call (UI action) is
+        # the correct mechanism when the user intentionally clears learning.
+        if field == "quantity":
+            reset_field(template_id, field, source=result.get("learning_source", "unknown"))
     elif action_name == "save_rejection":
         save_rejection(template_id, field, {
             "value": value,
@@ -361,6 +392,25 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
         })
     else:
         raise ValueError(f"Unsupported action: {action_name}")
+
+    # When an address-block assignment carries role information (billing vs
+    # shipping source), log the implicit role rule so auditors can confirm the
+    # correct block type is being reinforced.
+    if action_name == "save_assignment" and is_manual_assignment:
+        block_source = context.get("source", "")
+        if field in {"shipping_address", "buyer_name"} and block_source:
+            print(
+                "[ROLE_RULE_WRITTEN] "
+                + json.dumps({
+                    "field": field,
+                    "role": block_source,
+                    "rule_scope": template_id,
+                    "polarity": "positive",
+                    "learned_signature": context.get("learned_signature", ""),
+                }, ensure_ascii=False),
+                file=sys.stderr,
+                flush=True,
+            )
 
     assignment_lock = None
     if action_name == "save_assignment" and is_manual_assignment:

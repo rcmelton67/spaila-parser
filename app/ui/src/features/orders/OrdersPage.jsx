@@ -554,7 +554,7 @@ function SortableHeader({
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-export default function OrdersPage({ onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, focusOrderRequest, isActive, onCountsChange }) {
+export default function OrdersPage({ onWorkspace, onSettings, refreshKey, columnOrder, onColumnOrderChange, activeTab, onActiveTabChange, focusOrderRequest, isActive, onCountsChange, onDirectOrderModalClose }) {
   const [rows, setRows] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
@@ -568,11 +568,57 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   // Dirty flag — false on startup, true only after something changes this session
   const [sessionDirty, setSessionDirty] = React.useState(false);
   const mountedRef = React.useRef(false);
+  const directOpenActiveRef = React.useRef(false);
   React.useEffect(() => {
     if (!mountedRef.current) { mountedRef.current = true; return; }
     // refreshKey increments when a new order is imported
     setSessionDirty(true);
   }, [refreshKey]);
+
+  React.useEffect(() => {
+    if (activeTab === "archived") {
+      onActiveTabChange?.("active");
+    }
+  }, [activeTab, onActiveTabChange]);
+
+  const [archiveResults, setArchiveResults] = React.useState([]);
+  const [archiveSearching, setArchiveSearching] = React.useState(false);
+
+  React.useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) { setArchiveResults([]); setArchiveSearching(false); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setArchiveSearching(true);
+      try {
+        const res = await fetch(`${API}/orders/archive/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setArchiveResults(Array.isArray(data) ? data : []);
+      } catch (_) {}
+      if (!cancelled) setArchiveSearching(false);
+    }, 400);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [searchQuery]);
+
+  async function handleRestoreFromSearch(folderPath) {
+    const confirmed = window.confirm("Restore this archived order?");
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`${API}/orders/restore-from-archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_path: folderPath }),
+      });
+      if (!res.ok) { alert("Restore failed"); return; }
+      setArchiveResults([]);
+      setSearchQuery("");
+      await loadOrders();
+    } catch (err) {
+      alert(`Restore failed: ${err.message}`);
+    }
+  }
+
   const [emailToast, setEmailToast] = React.useState(null); // { warnings: string[] }
   const [mailDock, setMailDock] = React.useState(null);
   const [mailDockLoadingId, setMailDockLoadingId] = React.useState("");
@@ -725,8 +771,13 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const [orderStatuses, setOrderStatuses] = React.useState(() => loadOrderStatuses());
   React.useEffect(() => {
     function onStatusChange() { setStatusConfig(loadStatusConfig()); }
+    function onOrderStatusesChange() { setOrderStatuses(loadOrderStatuses()); }
     window.addEventListener("spaila:statusconfig", onStatusChange);
-    return () => window.removeEventListener("spaila:statusconfig", onStatusChange);
+    window.addEventListener("spaila:orderstatuses", onOrderStatusesChange);
+    return () => {
+      window.removeEventListener("spaila:statusconfig", onStatusChange);
+      window.removeEventListener("spaila:orderstatuses", onOrderStatusesChange);
+    };
   }, []);
 
   // Date config — display format, showYear, flexibleSearch
@@ -1086,22 +1137,49 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     }
   }
 
-  function handleOpenEmailInOrderModal(row) {
+  async function handleOpenEmailInOrderModal(row) {
+    setMailDockLoadingId(row.id);
     const labelMap = Object.fromEntries(fieldConfig.map((f) => [f.key, f.label]));
     const template = selectEmailTemplate(emailTemplates, row);
     const { text: subject } = renderEmailTemplate(template.subject_template, row, labelMap);
     const { text: body } = renderEmailTemplate(template.body_template, row, labelMap);
-    setEditOrderLaunchContext({
-      orderId: String(row?.order_id || row?.id || ""),
-      action: "email",
-      template: {
-        id: template?.id || "default",
-        name: template?.name || "Default",
-      },
-      draftSubject: subject,
-      draftBody: body,
-    });
-    setEditingOrder(row);
+    try {
+      const attachmentResult = await window.parserApp?.resolveAttachments?.({
+        orderFolderPath: row.order_folder_path || "",
+        sourceEmlPath: row.source_eml_path || "",
+        mode: template.attachment_mode,
+        extensions: template.attachment_extensions || [],
+      });
+      const attachmentPaths = attachmentResult?.files || [];
+      const attachmentSourceLabel = attachmentResult?.source === "order_folder_path"
+        ? "Source: order folder"
+        : attachmentResult?.source === "source_eml_path"
+          ? "Source: source_eml_path"
+          : attachmentResult?.source === "none"
+            ? "Source: none"
+            : "Source: not ready";
+      setEditOrderLaunchContext({
+        orderId: String(row?.order_id || row?.id || ""),
+        action: "email",
+        template: {
+          id: template?.id || "default",
+          name: template?.name || "Default",
+          attachmentMode: template?.attachment_mode || "none",
+        },
+        draftSubject: subject,
+        draftBody: body,
+        attachmentPaths,
+        attachmentSource: attachmentResult?.source || "none",
+        attachmentSourceLabel,
+        attachmentSourcePath: attachmentResult?.sourcePath || "",
+        attachmentWarnings: attachmentResult?.warnings || [],
+      });
+      setEditingOrder(row);
+    } catch (error) {
+      setEmailToast({ warnings: [error.message || "Could not prepare email preview."] });
+    } finally {
+      setMailDockLoadingId("");
+    }
   }
 
   async function handleLaunchMailDock(draft = {}) {
@@ -1213,20 +1291,39 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     setSessionDirty(true);
   }
 
-  async function handleRestoreFromArchive() {
+  async function handleOffloadToFilesystem() {
     const targets = getTargetRows();
     closeContextMenu();
     if (!targets.length) return;
     const orderIds = [...new Set(targets.map((r) => r.order_id).filter(Boolean))];
+    const archiveRoot = String(loadShopConfig().orderArchiveRoot || "").trim();
+    const failures = [];
     await Promise.all(
-      orderIds.map((oid) =>
-        fetch(`${API}/orders/${encodeURIComponent(oid)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "active" }),
-        })
-      )
+      orderIds.map(async (oid) => {
+        try {
+          const res = await fetch(`${API}/orders/${encodeURIComponent(oid)}/offload-to-filesystem`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ archive_root: archiveRoot }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            const detail = body?.detail || `HTTP ${res.status}`;
+            console.error("[OFFLOAD_FS] archive failed", { oid, detail });
+            failures.push({ oid, detail });
+          }
+        } catch (err) {
+          console.error("[OFFLOAD_FS] request error", { oid, err });
+          failures.push({ oid, detail: err.message });
+        }
+      })
     );
+    if (failures.length) {
+      alert(
+        `Archive failed for ${failures.length} order(s):\n` +
+        failures.map((f) => `• ${f.oid}: ${f.detail}`).join("\n")
+      );
+    }
     loadOrders();
     setSessionDirty(true);
   }
@@ -1372,16 +1469,32 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   React.useEffect(() => {
     const orderNumber = String(focusOrderRequest?.orderNumber || "").trim();
-    if (orderNumber) {
+    const orderId = String(focusOrderRequest?.orderId || "").trim();
+    if (!orderNumber && !orderId) return;
+
+    if (focusOrderRequest?.directOpen) {
+      // Find the row in the already-loaded table; fall back to the passed object.
+      const row =
+        safeOrders.find(
+          (o) =>
+            (orderId && (o.order_id === orderId || o.id === orderId)) ||
+            (orderNumber && o.order_number === orderNumber)
+        ) ||
+        focusOrderRequest?.orderData ||
+        null;
+      if (row) {
+        directOpenActiveRef.current = true;
+        setEditOrderLaunchContext(null);
+        setEditingOrder(row);
+      }
+    } else {
       setSearchQuery(orderNumber);
     }
-  }, [focusOrderRequest?.key, focusOrderRequest?.orderNumber]);
+  }, [focusOrderRequest?.key, focusOrderRequest?.orderNumber, focusOrderRequest?.orderId]);
 
   const filteredOrders = React.useMemo(() => {
     let base;
-    if (activeTab === "archived") {
-      base = safeOrders.filter((row) => isArchivedOrder(row));
-    } else if (activeTab === "completed") {
+    if (activeTab === "completed") {
       base = safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row));
     } else {
       base = safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row));
@@ -1412,7 +1525,6 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const totalCounts = React.useMemo(() => ({
     active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row)).length,
     completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row)).length,
-    archived: safeOrders.filter((row) => isArchivedOrder(row)).length,
   }), [safeOrders]);
 
   React.useEffect(() => {
@@ -1426,7 +1538,6 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     return {
       active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row) && matches(row)).length,
       completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row) && matches(row)).length,
-      archived: safeOrders.filter((row) => isArchivedOrder(row) && matches(row)).length,
     };
   }, [getRowSearchValues, safeOrders, searchQuery]);
 
@@ -1678,7 +1789,6 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         onSelectTab={onActiveTabChange}
         activeCount={totalCounts.active}
         completedCount={totalCounts.completed}
-        archivedCount={totalCounts.archived}
         tabCounts={tabCounts}
         rightContent={
           <>
@@ -1878,11 +1988,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                 <span>
                   {searchQuery.trim()
                     ? "No orders match your search. Double-click a blank row below to add a manual order."
-                    : activeTab === "archived"
-                      ? "No archived orders. Orders auto-archive after the inactivity period set in Settings → General (when enabled)."
-                      : activeTab === "completed"
-                        ? "No completed orders yet. Double-click a blank row below to add a manual order."
-                        : "Double-click a blank row below to add a manual order."}
+                    : activeTab === "completed"
+                      ? "No completed orders yet. Double-click a blank row below to add a manual order."
+                      : "Double-click a blank row below to add a manual order."}
                 </span>
                 {!searchQuery.trim() && activeTab === "active" && <button onClick={onWorkspace} style={primaryButton}>Go to Workspace</button>}
               </div>
@@ -2274,12 +2382,110 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         )}
       </div>
 
+      {/* Archive search results */}
+      {hasActiveSearch && (archiveSearching || archiveResults.length > 0) && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{
+            padding: "8px 14px",
+            background: "#1e1b4b",
+            color: "#c7d2fe",
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            borderRadius: "6px 6px 0 0",
+          }}>
+            {archiveSearching ? "Searching archive…" : `Archived Orders (${archiveResults.length})`}
+          </div>
+          {archiveResults.length > 0 && (
+            <div style={{
+              border: "1px solid #c7d2fe",
+              borderTop: "none",
+              borderRadius: "0 0 6px 6px",
+              overflow: "hidden",
+            }}>
+              {archiveResults.map((order) => (
+                <div key={order.order_id || order.folder_path} style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 14px",
+                  borderBottom: "1px solid #e0e7ff",
+                  background: "#fafafa",
+                  fontSize: 13,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontWeight: 700, color: "#1e1b4b" }}>
+                      {order.buyer_name || "—"}
+                    </span>
+                    {order.order_number && (
+                      <span style={{ marginLeft: 6, color: "#6366f1", fontWeight: 600 }}>
+                        #{order.order_number}
+                      </span>
+                    )}
+                    {order.buyer_email && (
+                      <span style={{ marginLeft: 8, color: "#64748b", fontSize: 12 }}>
+                        {order.buyer_email}
+                      </span>
+                    )}
+                  </div>
+                  {order.archived_at && (
+                    <div style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>
+                      Archived {new Date(order.archived_at).toLocaleString()}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => handleRestoreFromSearch(order.folder_path)}
+                    style={{
+                      padding: "5px 12px",
+                      background: "#6366f1",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 5,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {editingOrder && (
         <EditOrderModal
           order={editingOrder}
           launchContext={editOrderLaunchContext}
-          onClose={() => { setEditOrderLaunchContext(null); setEditingOrder(null); }}
-          onSaved={() => { setEditOrderLaunchContext(null); setEditingOrder(null); loadOrders(); setSessionDirty(true); }}
+          onClose={() => {
+            const wasDirectOpen = directOpenActiveRef.current;
+            directOpenActiveRef.current = false;
+            setEditOrderLaunchContext(null);
+            setEditingOrder(null);
+            if (wasDirectOpen) onDirectOrderModalClose?.();
+          }}
+          onSaved={() => {
+            const wasDirectOpen = directOpenActiveRef.current;
+            directOpenActiveRef.current = false;
+            setEditOrderLaunchContext(null);
+            setEditingOrder(null);
+            loadOrders();
+            setSessionDirty(true);
+            if (wasDirectOpen) onDirectOrderModalClose?.();
+          }}
+          onRefresh={() => {
+            const wasDirectOpen = directOpenActiveRef.current;
+            directOpenActiveRef.current = false;
+            setEditOrderLaunchContext(null);
+            setEditingOrder(null);
+            loadOrders();
+            if (wasDirectOpen) onDirectOrderModalClose?.();
+          }}
         />
       )}
 
@@ -2349,20 +2555,17 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         >
           {(() => {
             const n = contextMenu.row && selectedIds.has(contextMenu.row.id) && selectedIds.size > 1 ? selectedIds.size : 1;
-            const menuItems = activeTab === "archived"
+            const menuItems = activeTab === "completed"
               ? [
-                  { label: n > 1 ? `Restore ${n} from archive` : "Restore from archive", action: handleRestoreFromArchive, color: "#111" },
-                  { label: n > 1 ? `Delete ${n} Orders` : "Delete Order", action: handleDelete, color: "#dc2626" },
+                  { label: n > 1 ? `Archive ${n} to filesystem` : "Archive to filesystem", action: handleOffloadToFilesystem, color: "#6366f1" },
+                  { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
+                  { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
                 ]
-              : activeTab === "completed"
-                ? [
-                    { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
-                    { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
-                  ]
-                : [
-                    { label: n > 1 ? `Move ${n} to Completed` : "Move to Completed", action: handleMoveToCompleted, color: "#111" },
-                    { label: n > 1 ? `Delete ${n} Orders`     : "Delete Order",       action: handleDelete,          color: "#dc2626" },
-                  ];
+              : [
+                  { label: n > 1 ? `Archive ${n} to filesystem` : "Archive to filesystem", action: handleOffloadToFilesystem, color: "#6366f1" },
+                  { label: n > 1 ? `Move ${n} to Completed` : "Move to Completed", action: handleMoveToCompleted, color: "#111" },
+                  { label: n > 1 ? `Delete ${n} Orders`     : "Delete Order",       action: handleDelete,          color: "#dc2626" },
+                ];
             return menuItems;
           })().map(({ label, action, color }) => (
             <div

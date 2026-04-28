@@ -57,6 +57,20 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS inbox_events (
+        id          TEXT PRIMARY KEY,
+        type        TEXT NOT NULL,   -- "new_order" | "order_update"
+        order_id    TEXT,
+        order_number TEXT,
+        buyer_name  TEXT,
+        preview     TEXT,
+        timestamp   TEXT,
+        unread      INTEGER DEFAULT 1,
+        created_at  TEXT
+    )
+    """)
+
     # Migrate existing databases that predate these columns
     _ensure_columns(cur, "orders", [
         ("order_folder_path", "TEXT"),
@@ -68,6 +82,7 @@ def init_db():
         ("gift_wrap",         "INTEGER DEFAULT 0"),
         ("last_activity_at",  "TEXT"),
         ("updated_at",        "TEXT"),
+        ("pet_name",          "TEXT"),   # primary personalisation field for archive/search
         # gift_message intentionally NOT here — it lives in items (per-item)
     ])
     _ensure_columns(cur, "items", [

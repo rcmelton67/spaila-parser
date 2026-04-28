@@ -18,9 +18,12 @@ def _apply_anchor_boost(candidates: List[Candidate]) -> None:
 
 
 def _decision_label(candidate: Candidate) -> str:
+    # "assigned" only when the decision is span-authoritative (learning store
+    # injection) or the structural anchor match is overwhelmingly strong.
+    # Value repetition boost (assigned_value signal) assists scoring but is
+    # NOT sufficient alone to declare an assignment — that would be greedy.
     if (
         getattr(candidate, "source", "") == "learned"
-        or any(signal.startswith("assigned_value(") for signal in candidate.signals)
         or getattr(candidate, "anchor_match", 0.0) >= ANCHOR_FORCE_THRESHOLD
     ):
         return "assigned"

@@ -494,15 +494,30 @@ def load_assignments(template_id: str, field: Optional[str] = None, source: Opti
     return assignments
 
 
-def load_shipping_address_line_type_assignments(template_id: str) -> List[Dict]:
-    """Load active shipping line-type learning without relying on address text."""
+def load_shipping_address_line_type_assignments(
+    template_id: str,
+    source: str = "",
+) -> List[Dict]:
+    """Load active shipping line-type learning for the current template.
+
+    Falls back to cross-template records only when no same-template records
+    exist, but restricts the fallback by source (platform) so that Etsy
+    patterns never bleed into WooCommerce templates and vice versa.  When
+    source is empty/unknown the fallback is unrestricted (preserving backward
+    compatibility for templates without an explicit platform tag).
+    """
     local_records = [
         record for record in load_assignments(template_id, "shipping_address")
         if record.get("learned_line_types")
     ]
     if local_records:
+        if source:
+            source_matched = [r for r in local_records if r.get("source", "") in {"", source}]
+            if source_matched:
+                return source_matched
         return local_records
 
+    # Fallback: search all templates, restricted by source when available.
     records: List[Dict] = []
     for store_records in load_store().values():
         for raw_record in store_records:
@@ -512,6 +527,8 @@ def load_shipping_address_line_type_assignments(template_id: str) -> List[Dict]:
             if record.get("type") != "assign" or not record.get("active", True):
                 continue
             if not record.get("learned_line_types"):
+                continue
+            if source and record.get("source", "") not in {"", source}:
                 continue
             records.append(record)
     return records

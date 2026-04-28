@@ -227,10 +227,24 @@ def build_extraction_signature(candidate, segment_map: Dict) -> str:
 
 # ── Quantity-specific signature (stricter, context-anchored) ──────────────────
 
+# Etsy sale-header quantity pattern.  Group 1 captures the item count.
+# "Congratulations on your Etsy sale of N item(s)" is the ORDER-LEVEL source.
+# Defined here (before _QUANTITY_BLOCK_SIGNALS) so the regex can be referenced
+# as the first, highest-priority entry in the signal list.
+_ETSY_SALE_HEADER_QTY_RE = re.compile(
+    r"\b(?:sale of|you sold|congratulations[^.]*?sale)\s+(\d+)\s+items?\b",
+    re.IGNORECASE,
+)
+# Alias for downstream code that checks without using the capture group.
+_SALE_HEADER_RE = _ETSY_SALE_HEADER_QTY_RE
+
 # Ordered list of (pattern, anchor_label).  First match in the ±50-char window
 # wins.  Anchors are deliberately platform-specific so Etsy and Woo signatures
 # never collide on the generic "number_regex|none|body" fallback.
 _QUANTITY_BLOCK_SIGNALS: list = [
+    # Etsy sale-header is the highest-priority, most specific anchor.
+    # Always checked first so it can't be shadowed by generic order/purchase.
+    (_ETSY_SALE_HEADER_QTY_RE, "sale_header"),
     (re.compile(r"\b(?:qty|quantity|item\s*count|how\s*many|number\s+of\s+items?)\b", re.IGNORECASE), "qty_label"),
     (re.compile(r"\bline\s*item\b", re.IGNORECASE), "line_item"),
     (re.compile(r"\bshopping\s*cart\b|\bcart\b", re.IGNORECASE), "cart_block"),
@@ -252,10 +266,80 @@ _GENERIC_QUANTITY_SIGS: frozenset = frozenset({
 })
 
 
+# ---------------------------------------------------------------------------
+# Structural validity gate (Phase 2)
+# Identifies candidates that must NOT earn confidence streaks, replay
+# promotion, or auto-assignment regardless of their score.
+# ---------------------------------------------------------------------------
+
+_BAD_BUYER_NAME_VALUES: frozenset = frozenset({
+    "purchase shipping label",
+    "shipping label",
+    "print shipping label",
+    "buy shipping label",
+})
+
+# Fields whose "assigned" decisions (from structural anchor, not from
+# confidence_promotion or learned replay) are also allowed to build confidence
+# streaks.  This enables header/subject date fields to reach autopromotion.
+_CONF_ALLOW_ASSIGNED_STREAK: frozenset = frozenset({"order_date", "ship_by"})
+
+_ORDER_NUMBER_MIN_LEN = 3
+
+
+def _is_structurally_valid(candidate, field: str) -> bool:
+    """Return False for candidates that should never trigger streak promotion.
+
+    Candidates that fail this gate may still WIN on score (they can be
+    suggested), but they will NOT increment confidence streaks and will NOT
+    be eligible for replay promotion or auto-assignment.
+    """
+    value = (getattr(candidate, "value", None) or "").strip()
+    if not value:
+        return False
+
+    if field == "quantity":
+        seg_text = getattr(candidate, "segment_text", "") or ""
+        left = getattr(candidate, "left_context", "") or ""
+        # Sale-header counts ARE the authoritative Etsy order-level quantity.
+        # Explicitly allow them so they can earn confidence streaks.
+        if _ETSY_SALE_HEADER_QTY_RE.search(seg_text) or re.search(
+            r"\bsale of\b", left, re.IGNORECASE
+        ):
+            return True
+
+    elif field == "order_number":
+        if len(value) < _ORDER_NUMBER_MIN_LEN:
+            return False
+        if "." in value:
+            return False
+
+    elif field == "buyer_name":
+        if " " not in value and "&" not in value:
+            return False
+        if len(value) < 4:
+            return False
+        if value.lower() in _BAD_BUYER_NAME_VALUES:
+            return False
+
+    return True
+
+
 _ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
 _STATE_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
 _STREET_LINE_RE = re.compile(
-    r"^\d[\d\-]*\s+.+\b(?:dr|drive|rd|road|st|street|ave|avenue|blvd|boulevard|ln|lane|way|ct|court|pl|place|ter|terrace|pkwy|hwy|cir|circle|loop|sq)\.?\b",
+    r"^\d[\d\-]*\s+.+\b(?:"
+    r"dr|drive|rd|road|st|street|ave|avenue|blvd|boulevard|"
+    r"ln|lane|way|ct|court|cv|cove|"
+    r"pl|place|ter|terrace|trl|trail|"
+    r"pkwy|parkway|hwy|highway|fwy|freeway|"
+    r"cir|circle|loop|sq|sqr|square|"
+    r"pt|point|aly|alley|crk|creek|"
+    r"grv|grove|hl|hill|vly|valley|"
+    r"mnr|manor|mdws|meadows|rdg|ridge|"
+    r"lndg|landing|run|walk|row|pass|"
+    r"bnd|bend|xing|crossing|close|gate"
+    r")\.?\b",
     re.IGNORECASE,
 )
 _COUNTRY_LINE_RE = re.compile(r"\b(?:united states|usa|canada|australia|united kingdom|uk)\b", re.IGNORECASE)
@@ -663,10 +747,20 @@ def build_quantity_signature(candidate, segment_map: Dict, clean_text: str) -> _
     in *_GENERIC_QUANTITY_SIGS* or has no label and no context anchor).
     Callers that receive *None* MUST NOT store a learned_signature and MUST NOT
     update confidence streaks for that parse.
+
+    Special case: if the candidate sits inside an Etsy sale-header context
+    ("Congratulations on your Etsy sale of N items."), the signature is
+    always the platform-specific sentinel "etsy_sale_header_count" regardless
+    of the extractor or label — this ensures correct replay and confidence
+    tracking across emails with different item counts.
     """
     extractor = candidate.extractor or "unknown"
     label_key = _infer_label_key(candidate)
     context_anchor = _derive_quantity_context_anchor(candidate, clean_text)
+
+    # Sale-header context → dedicated, non-generic Etsy signature.
+    if context_anchor == "sale_header":
+        return "etsy_sale_header_count"
 
     if context_anchor:
         sig = f"{extractor}|{label_key}|{context_anchor}"
@@ -700,14 +794,18 @@ def _apply_signature_scoring(
     """
     from .learning.store import load_records  # local import avoids circular dependency
     records = load_records(template_id, field=field, record_type="assign", source=source)
-    if not records:
+    # Only active records contribute to signature scoring — inactive/deactivated
+    # records must not boost candidates using stale learned signatures.
+    active_records = [r for r in records if r.get("active", True)]
+    if not active_records:
         return candidates
 
-    learned_sigs = {r["learned_signature"] for r in records if r.get("learned_signature")}
+    learned_sigs = {r["learned_signature"] for r in active_records if r.get("learned_signature")}
     if not learned_sigs:
         return candidates
 
     # Pre-compute extractor+role/anchor pairs for partial matching (parts 0 and 2).
+    # Still derived from learned_sigs which is already active-filtered.
     learned_ext_anchor = {
         f"{sig.split('|')[0]}|{sig.split('|')[2]}"
         for sig in learned_sigs
@@ -980,6 +1078,16 @@ def _apply_price_rejections(
     return candidates
 
 
+# Price types that represent aggregate / summary totals rather than a line-item
+# price.  A price assignment derived from one of these rows must NOT replay as
+# the authoritative item price — doing so causes Woo subtotal contamination
+# where the order subtotal (e.g. $59.99) gets locked in even when there are
+# separate line-item prices on the same email.
+_SUMMARY_PRICE_TYPES: frozenset = frozenset({
+    "order_total", "item_total", "subtotal", "tax", "shipping", "discount",
+})
+
+
 def _select_price_structural_candidate(
     template_id: str,
     candidates: List,
@@ -989,6 +1097,22 @@ def _select_price_structural_candidate(
     assigned_records = load_assignments(template_id, "price")
     if not assigned_records:
         return None
+
+    # Phase 4 — filter out records that were learned from a subtotal / total
+    # context.  These should never be authoritative for the item price.
+    item_records = [
+        r for r in assigned_records
+        if (r.get("price_type") or r.get("context_class", "")) not in _SUMMARY_PRICE_TYPES
+    ]
+    if not item_records:
+        print(
+            "[PRICE_STRUCTURAL_SKIP] all assigned price records are summary/total type"
+            " — falling back to score-based selection",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    assigned_records = item_records
 
     learned_price_type = assigned_records[0].get("price_type") or assigned_records[0].get("context_class", "")
     print(
@@ -1102,8 +1226,9 @@ def _select_shipping_address_line_type_candidate(
     template_id: str,
     candidates: List,
     buyer_name: str = "",
+    source: str = "",
 ) -> _Opt[Any]:
-    records = load_shipping_address_line_type_assignments(template_id)
+    records = load_shipping_address_line_type_assignments(template_id, source=source)
     if not records:
         return None
 
@@ -1115,10 +1240,23 @@ def _select_shipping_address_line_type_candidate(
         learned_set = set(learned_types)
         for candidate in candidates:
             lines = split_shipping_address_candidate_lines(candidate, buyer_name)
-            selected_lines = [line for line in lines if line["type"] in learned_set]
+            # Primary selection: lines whose type is explicitly learned.
+            primary_indices = [i for i, line in enumerate(lines) if line["type"] in learned_set]
+            selected_lines = [lines[i] for i in primary_indices]
             present_types = {line["type"] for line in selected_lines}
             if not selected_lines or not learned_set.issubset(present_types):
                 continue
+            # Include "unknown"-typed lines that fall BETWEEN the first and last
+            # explicitly recognized line (e.g. apartment/unit/suite numbers).
+            # These are structural continuation lines, not buyer-name or country.
+            if primary_indices:
+                first_idx, last_idx = primary_indices[0], primary_indices[-1]
+                if last_idx > first_idx:
+                    selected_lines = [
+                        line for i, line in enumerate(lines)
+                        if line["type"] in learned_set
+                        or (first_idx < i < last_idx and line["type"] == "unknown")
+                    ]
             score = len(selected_lines) * 10.0 + len(present_types) + (candidate.score or 0.0) / 100.0
             if best is None or score > best["score"]:
                 best = {
@@ -1201,6 +1339,59 @@ def _trim_address_duplicate_buyer_name(address_decision: _Opt[DecisionRow], buye
     return address_decision
 
 
+# ── Phase 3: Canonical address formatting ─────────────────────────────────────
+_CITY_STATE_ZIP_NORM_RE = re.compile(
+    r"^([A-Za-z][A-Za-z\s\-\.]+?)\s*,\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$"
+)
+
+
+def _canonical_address_value(value: str) -> str:
+    """Normalise each line of a shipping address for consistent DB storage.
+
+    Applies:
+    - Collapse internal runs of spaces to single space
+    - Strip leading/trailing whitespace per line
+    - Title-case the city component in "CITY , ST ZIP" lines
+    - Normalise "CITY , ST" → "City, ST" (remove space before comma)
+    - Remove standalone "United States" / "USA" country line (already excluded
+      by line-type learning; belt-and-suspenders for un-learned addresses)
+    """
+    lines = value.splitlines()
+    normalised = []
+    for line in lines:
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if not line:
+            continue
+        # Remove standalone country line (belt-and-suspenders)
+        if _COUNTRY_LINE_RE.search(line) and len(line.split()) <= 3:
+            continue
+        # Normalise "CITY , ST ZIP" or "CITY,ST ZIP" → "City, ST ZIP"
+        m = _CITY_STATE_ZIP_NORM_RE.match(line)
+        if m:
+            city_raw, state, zipcode = m.group(1), m.group(2), m.group(3)
+            city_title = city_raw.title()
+            line = f"{city_title}, {state} {zipcode}"
+        normalised.append(line)
+    return "\n".join(normalised)
+
+
+def _canonicalize_address_decision(
+    address_decision: _Opt["DecisionRow"],
+) -> _Opt["DecisionRow"]:
+    """Apply canonical formatting to the address decision value in-place."""
+    if address_decision is None:
+        return None
+    raw = address_decision.value or ""
+    canonical = _canonical_address_value(raw)
+    if canonical != raw:
+        address_decision.value = canonical
+        address_decision.provenance.setdefault("signals", []).append(
+            "address_canonicalized"
+        )
+        address_decision.provenance["snippet"] = canonical
+    return address_decision
+
+
 def _inject_assigned_candidates(
     template_id: str,
     field: str,
@@ -1225,9 +1416,54 @@ def _inject_assigned_candidates(
     assigned_records = load_assignments(template_id, field, source=source)
     if not assigned_records:
         if field == "shipping_address":
-            selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name)
+            selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name, source=source or "")
             return [selected] if selected is not None else []
         return candidates
+
+    # Etsy sale-header quantity — pattern-based injection.
+    # Records with learned_signature "etsy_sale_header_count" use the sale-header
+    # regex to extract the order-level count from the current email rather than
+    # an exact position match (which would only work for a single email).
+    if field == "quantity":
+        for record in assigned_records:
+            if record.get("learned_signature") == "etsy_sale_header_count":
+                m = _ETSY_SALE_HEADER_QTY_RE.search(clean_text)
+                if m:
+                    qty_value = m.group(1)
+                    # Locate where the number appears in the sale-header line.
+                    match_start = m.start(1)
+                    match_end = m.end(1)
+                    seg_id = record.get("segment_id") or ""
+                    print(
+                        f"[SALE_HEADER_QTY_INJECT] value={qty_value!r}"
+                        f" pos={match_start}:{match_end}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return [Candidate(
+                        id="learned_quantity_sale_header_0001",
+                        field_type="quantity",
+                        value=qty_value,
+                        raw_text=qty_value,
+                        start=match_start,
+                        end=match_end,
+                        segment_id=seg_id,
+                        extractor="etsy_sale_header_count",
+                        signals=["etsy_sale_header_injection(authoritative)"],
+                        penalties=[],
+                        score=999,
+                        segment_text=m.group(0),
+                        left_context=clean_text[max(0, match_start - 15): match_start],
+                        right_context=clean_text[match_end: match_end + 15],
+                        source="learned",
+                    )]
+                print(
+                    "[SALE_HEADER_QTY_INJECT] sale-header not found in email"
+                    " — falling back to score-based path",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return candidates  # fallback: no sale-header → score-based
 
     for i, record in enumerate(assigned_records):
         manual_candidate = _manual_record_exact_candidate(field, i, record, clean_text)
@@ -1235,7 +1471,7 @@ def _inject_assigned_candidates(
             return [manual_candidate]
 
     if field == "shipping_address":
-        selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name)
+        selected = _select_shipping_address_line_type_candidate(template_id, candidates, buyer_name, source=source or "")
         return [selected] if selected is not None else []
 
     if field == "price":
@@ -1268,6 +1504,9 @@ def _inject_assigned_candidates(
         best_score = -1.0
         best_record = None
         trace_rows = []
+
+        # assigned_records already filtered (sale-header gate above the manual
+        # exact replay loop ensures no bypass path exists).
 
         for record in assigned_records:
             learned_signature = record.get("learned_signature") or record.get("extractor") or "UNKNOWN"
@@ -1660,7 +1899,7 @@ def _apply_assignment_policy(
     active assignment exists but its stored span no longer resolves.
     """
     if field == "shipping_address":
-        if not load_assignments(template_id, field, source=source) and not load_shipping_address_line_type_assignments(template_id):
+        if not load_assignments(template_id, field, source=source) and not load_shipping_address_line_type_assignments(template_id, source=source or ""):
             return candidates, False
     elif not load_assignments(template_id, field, source=source):
         return candidates, False
@@ -1912,6 +2151,25 @@ def parse_eml(
     addr_decision = decide_shipping_address(addr_candidates)
     addr_decision = _trim_address_duplicate_buyer_name(addr_decision, name_decision)
 
+    # Phase 1 — Conflict diagnostics: compare sale-header count with summed
+    # item-line quantities.  A mismatch usually indicates a multi-item order
+    # where the sale-header says "2 items" but two separate item rows each
+    # show "Quantity: 1".  Log a warning for transparency; the sale-header
+    # value remains authoritative.
+    _sh_match = _ETSY_SALE_HEADER_QTY_RE.search(clean_text)
+    if _sh_match:
+        _sh_count = int(_sh_match.group(1))
+        _item_qty_re = re.compile(r"\bquantity\s*[:]\s*(\d+)\b", re.IGNORECASE)
+        _summed = sum(int(m.group(1)) for m in _item_qty_re.finditer(clean_text))
+        if _summed > 0 and _sh_count != _summed:
+            print(
+                f"[QTY_CONFLICT_WARNING] sale_header_count={_sh_count}"
+                f" summed_item_qty={_summed} — multi-item order detected;"
+                f" sale-header value is authoritative",
+                file=sys.stderr,
+                flush=True,
+            )
+
     _log_field_decision_proof(path, "quantity", quantity_candidates, quantity_decision, 5.0)
     _log_field_decision_proof(path, "price", price_candidates, price_decision, 8.0)
     _log_field_decision_proof(path, "order_number", order_candidates, order_decision, 10.0)
@@ -1971,6 +2229,21 @@ def parse_eml(
             if assignment_locked.get(field):
                 continue
             if assignment_lock and field in assignment_lock:
+                continue
+
+            # Structural validity gate — never replay structurally-invalid values.
+            # Use a lightweight proxy candidate to run the check.
+            class _ReplayProxy:
+                def __init__(self, v):
+                    self.value = v
+                    self.segment_text = ""
+                    self.left_context = ""
+            if not _is_structurally_valid(_ReplayProxy(value), field):
+                print(
+                    f"[VALIDITY_GATE] replay skipped field={field!r} value={value!r}"
+                    f" — failed structural validity",
+                    file=sys.stderr, flush=True,
+                )
                 continue
 
             existing = next((d for d in decision_rows if d.field == field), None)
@@ -2065,6 +2338,19 @@ def parse_eml(
             if _row.field == "price" and any("rejected_price_structure" in signal for signal in _row.provenance.get("signals", [])):
                 continue
             if _row.field in _already_promoted:
+                # Re-check structural validity before re-applying promotion.
+                _cand_recheck = next(
+                    (c for c in all_candidates if c.id == _row.candidate_id), None
+                )
+                if _cand_recheck is not None and not _is_structurally_valid(
+                    _cand_recheck, _row.field
+                ):
+                    print(
+                        f"[VALIDITY_GATE] re-apply skipped field={_row.field!r}"
+                        f" value={_row.value!r} — failed structural validity",
+                        file=sys.stderr, flush=True,
+                    )
+                    continue
                 _row.decision = "assigned"
                 _row.decision_source = "confidence_promotion"
                 _row.provenance["streak_count"] = _row.provenance.get("streak_count", 0)
@@ -2078,7 +2364,15 @@ def parse_eml(
                 )
     else:
         for _row in decision_rows:
-            if _row.decision != "suggested":
+            if _row.decision == "suggested":
+                pass  # always eligible
+            elif (
+                _row.field in _CONF_ALLOW_ASSIGNED_STREAK
+                and _row.decision == "assigned"
+                and _row.decision_source not in {"confidence_promotion", "learned"}
+            ):
+                pass  # header/anchor-assigned date fields also build streaks
+            else:
                 continue
             if _row.field == "price" and any("rejected_price_structure" in signal for signal in _row.provenance.get("signals", [])):
                 continue
@@ -2090,6 +2384,16 @@ def parse_eml(
                 _qty_cand = next((c for c in all_candidates if c.id == _row.candidate_id), None)
                 if _qty_cand is None:
                     continue
+                # Structural validity gate — sale-header candidates are
+                # explicitly ALLOWED; bare generic values without anchor are
+                # blocked.  See _is_structurally_valid for full rules.
+                if not _is_structurally_valid(_qty_cand, "quantity"):
+                    print(
+                        f"[VALIDITY_GATE] quantity value={_row.value!r} failed structural"
+                        f" validity — skipping streak",
+                        file=sys.stderr, flush=True,
+                    )
+                    continue
                 _sig = build_quantity_signature(_qty_cand, segment_map, clean_text)
                 if _sig is None:
                     print(
@@ -2098,6 +2402,19 @@ def parse_eml(
                     )
                     continue
             else:
+                # All other fields: structural validity gate before streak.
+                _cand_for_validity = next(
+                    (c for c in all_candidates if c.id == _row.candidate_id), None
+                )
+                if _cand_for_validity is not None and not _is_structurally_valid(
+                    _cand_for_validity, _row.field
+                ):
+                    print(
+                        f"[VALIDITY_GATE] field={_row.field!r} value={_row.value!r}"
+                        f" failed structural validity — skipping streak",
+                        file=sys.stderr, flush=True,
+                    )
+                    continue
                 # All other fields use the standard 3-part signature.
                 # Falls back to decision_source for replay-generated rows.
                 _sig = _sig_map.get(_row.candidate_id) or _row.decision_source or "unknown"

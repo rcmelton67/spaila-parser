@@ -216,6 +216,7 @@ export function setOrderStatus(orderId, statusKey) {
     map[String(orderId)] = statusKey;
   }
   localStorage.setItem(ORDER_STATUSES_KEY, JSON.stringify(map));
+  window.dispatchEvent(new CustomEvent("spaila:orderstatuses"));
 }
 
 // ── Column order ──────────────────────────────────────────────────────────
@@ -527,6 +528,11 @@ export const DEFAULT_SHOP_CONFIG = {
   imapPassword: "",
   imapUseSsl: true,
   imapFetchLimit: "20",
+  mailPollingIntervalSeconds: 300,
+  mailBackgroundSyncEnabled: true,
+  mailStartupAutoConnect: true,
+  mailReconnectEnabled: true,
+  sentMailRetentionDays: 60,
 };
 
 function persistOrderArchiveSettings(config) {
@@ -563,6 +569,11 @@ function persistEmailSettings(config) {
       imapPassword: String(config?.imapPassword || ""),
       imapUseSsl: config?.imapUseSsl !== false,
       imapFetchLimit: String(config?.imapFetchLimit || "").trim() || "20",
+      mailPollingIntervalSeconds: Math.max(60, Math.min(3600, Number.parseInt(String(config?.mailPollingIntervalSeconds || 300), 10) || 300)),
+      mailBackgroundSyncEnabled: config?.mailBackgroundSyncEnabled !== false,
+      mailStartupAutoConnect: config?.mailStartupAutoConnect !== false,
+      mailReconnectEnabled: config?.mailReconnectEnabled !== false,
+      sentMailRetentionDays: Math.max(1, Math.min(365, Number.parseInt(String(config?.sentMailRetentionDays || 60), 10) || 60)),
     };
     window.parserApp.saveJson({
       folderPath: "C:\\Spaila",

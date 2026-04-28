@@ -1,6 +1,6 @@
 from parser.learning.store import load_records
 
-ASSIGNED_VALUE_BOOST = 5.0
+ASSIGNED_VALUE_BOOST = 2.5
 REJECTED_VALUE_SCORE = -999
 REJECTION_THRESHOLD = 0.85
 
@@ -56,7 +56,7 @@ def apply_anchor_scoring(template_id, field, candidates, source=None):
     for c in candidates:
         if c.value in assigned_values:
             c.score += ASSIGNED_VALUE_BOOST
-            c.signals.append("assigned_value(+5.0)")
+            c.signals.append("assigned_value(+2.5)")
 
         if structural_records:
             c.anchor_match = max(compute_anchor_match(c, record) for record in structural_records)

@@ -742,15 +742,27 @@ def score_shipping_address(
         signals: List[str] = []
         penalties: List[str] = []
 
-        score += 5.0
-        signals.append("shipping_label_context(+5.0)")
+        # Shipping-source blocks are the authoritative target for this field.
+        # Billing-source blocks are a weaker fallback (lower score so that when
+        # both are present the shipping block wins cleanly).
+        cand_source = getattr(cand, "source", "")
+        if cand_source == "shipping":
+            score += 5.0
+            signals.append("shipping_label_context(+5.0)")
+        elif cand_source == "billing":
+            score += 2.0
+            signals.append("billing_label_context(+2.0)")
+        else:
+            score += 3.5
+            signals.append("unknown_label_context(+3.5)")
 
         val_lower = cand.value.lower()
         if any(val_lower.endswith(suf) or (suf + " ") in val_lower for suf in _STREET_SUFFIXES):
             score += 2.0
             signals.append("street_suffix(+2.0)")
 
-        if cand.extractor == "address_block_with_recipient":
+        cand_extractor = getattr(cand, "extractor", "")
+        if "address_block_with_recipient" in cand_extractor:
             score += 1.5
             signals.append("recipient_line_included(+1.5)")
 

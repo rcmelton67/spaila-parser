@@ -6,5 +6,5 @@
   { "field": "buyer_email", "value": "djfurlong18@yahoo.com" },
   { "field": "ship_by", "value": "Apr 16" },
   { "field": "buyer_name", "value": "Doug Furlong" },
-  { "field": "shipping_address", "value": "Doug Furlong\n115 Carpenter Rd\nWALPOLE , MA 02081-3303\nUnited States" }
+  { "field": "shipping_address", "value": "115 Carpenter Rd\nWALPOLE , MA 02081-3303" }
 ]

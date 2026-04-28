@@ -466,6 +466,27 @@ function getSentMessagesIndexPath() {
   return path.join(getWorkspaceDirs().root, "sent_messages.json");
 }
 
+function getManagedSentRoot() {
+  return path.join(getWorkspaceDirs().root, "sent");
+}
+
+function getSentMailRetentionDays() {
+  try {
+    const settings = loadWorkspaceEmailSettings();
+    const days = Number.parseInt(String(settings.sentMailRetentionDays || ""), 10);
+    return Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 60;
+  } catch (_error) {
+    return 60;
+  }
+}
+
+function isWithinManagedSentRoot(targetPath) {
+  const sentRoot = path.resolve(getManagedSentRoot());
+  const resolvedTarget = path.resolve(String(targetPath || ""));
+  const rel = path.relative(sentRoot, resolvedTarget);
+  return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function normalizeSentMessageRecord(record = {}) {
   const messageId = String(record.message_id || record.messageId || record.id || "").trim();
   const timestamp = String(record.timestamp || "").trim();
@@ -500,13 +521,52 @@ function loadSentMessages() {
     }
     const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
     const records = Array.isArray(parsed?.messages) ? parsed.messages : parsed;
-    return (Array.isArray(records) ? records : [])
+    const messages = (Array.isArray(records) ? records : [])
       .map(normalizeSentMessageRecord)
       .filter((message) => message.id)
       .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
+    return pruneExpiredSentMessages(messages);
   } catch (_error) {
     return [];
   }
+}
+
+function pruneExpiredSentMessages(messages) {
+  const retentionDays = getSentMailRetentionDays();
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const kept = [];
+  const expired = [];
+
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const sentAtMs = Date.parse(message.timestamp || message.received_at || "");
+    if (Number.isFinite(sentAtMs) && sentAtMs < cutoffMs) {
+      expired.push(message);
+    } else {
+      kept.push(message);
+    }
+  }
+
+  if (!expired.length) {
+    return messages;
+  }
+
+  const keptFolders = new Set(kept.map((message) => path.resolve(String(message.sent_folder || ""))).filter(Boolean));
+  const expiredFolders = new Set(expired.map((message) => path.resolve(String(message.sent_folder || ""))).filter(Boolean));
+  for (const folderPath of expiredFolders) {
+    if (!folderPath || keptFolders.has(folderPath) || !isWithinManagedSentRoot(folderPath)) {
+      continue;
+    }
+    try {
+      fs.rmSync(folderPath, { recursive: true, force: true });
+      console.log("[SENT_RETENTION] removed sent folder", folderPath);
+    } catch (error) {
+      console.warn("[SENT_RETENTION] could not remove sent folder", folderPath, error?.message || error);
+    }
+  }
+
+  saveSentMessages(kept);
+  console.log("[SENT_RETENTION] pruned", expired.length, "sent message record(s)");
+  return kept;
 }
 
 function saveSentMessages(messages) {
@@ -545,6 +605,58 @@ function copyFilesIntoFolder(filePaths, destinationFolder) {
     copied.push(target);
   }
   return copied;
+}
+
+function inferMimeTypeFromPath(filePath) {
+  const ext = path.extname(String(filePath || "")).toLowerCase();
+  const map = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".zip": "application/zip",
+  };
+  return map[ext] || "application/octet-stream";
+}
+
+function normalizeOutboundAttachmentMetadata(filePaths, { copiedPaths = [], sentAt = new Date().toISOString() } = {}) {
+  return (Array.isArray(filePaths) ? filePaths : [])
+    .map((filePath, index) => {
+      const sourcePath = String(filePath || "").trim();
+      if (!sourcePath) return null;
+      const copiedPath = String(copiedPaths[index] || "").trim();
+      let size = 0;
+      try {
+        size = fs.existsSync(sourcePath) ? fs.statSync(sourcePath).size : 0;
+      } catch (_) {
+        size = 0;
+      }
+      const filename = path.basename(sourcePath);
+      return {
+        file: filename,
+        filename,
+        name: filename,
+        path: sourcePath,
+        original_path: sourcePath,
+        sent_copy_path: copiedPath,
+        mime_type: inferMimeTypeFromPath(sourcePath),
+        type: inferMimeTypeFromPath(sourcePath),
+        size,
+        source: "outbound_send",
+        direction: "outbound",
+        timestamp: sentAt,
+      };
+    })
+    .filter(Boolean);
 }
 
 function decodeHeaderValue(value) {
@@ -663,6 +775,27 @@ function saveHiddenEmailIds(hiddenIds) {
 
 function getWorkspaceInboxHiddenPath() {
   return path.join(getWorkspaceDirs().root, "workspace_inbox_hidden.json");
+}
+
+function getInboxSourceStatePath() {
+  return path.join(getWorkspaceDirs().root, ".spaila_internal", "inbox_source_state.json");
+}
+
+function loadSourceDeletedInboxUids() {
+  try {
+    const sourceStatePath = getInboxSourceStatePath();
+    if (!fs.existsSync(sourceStatePath)) {
+      return new Set();
+    }
+    const parsed = JSON.parse(fs.readFileSync(sourceStatePath, "utf8"));
+    const uids = parsed?.uids && typeof parsed.uids === "object" ? parsed.uids : {};
+    return new Set(Object.entries(uids)
+      .filter(([, sourceDeleted]) => sourceDeleted === true)
+      .map(([uid]) => String(uid || "").trim())
+      .filter(Boolean));
+  } catch (_error) {
+    return new Set();
+  }
 }
 
 function loadWorkspaceInboxHiddenIds() {
@@ -1412,6 +1545,7 @@ function listInboxItems(inboxPath) {
   }
   const hiddenIds = loadHiddenEmailIds();
   const workspaceHiddenIds = loadWorkspaceInboxHiddenIds();
+  const sourceDeletedUids = loadSourceDeletedInboxUids();
   const orderLearning = loadOrderLearningStore();
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".eml"))
@@ -1434,6 +1568,7 @@ function listInboxItems(inboxPath) {
         order_flagged: flagged,
         order_not_order: notOrder,
         order_score: flagged ? 100 : notOrder ? 0 : scoreOrderSuggestion(orderLearning, item),
+        source_deleted: savedUid ? sourceDeletedUids.has(savedUid) : false,
         ...(linkedOrderId ? { linked_order_id: linkedOrderId } : {}),
       };
     })
@@ -1625,6 +1760,11 @@ function createWindow() {
   window.maximize();
   window.show();
   window.loadFile(path.join(__dirname, "..", "ui", "index.html"));
+  window.webContents.once("did-finish-load", () => {
+    if (!window.isDestroyed() && !window.webContents.isDevToolsOpened()) {
+      window.webContents.openDevTools({ mode: "detach" });
+    }
+  });
 }
 
 function runBridge(argsObj) {
@@ -2465,7 +2605,18 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
     fs.mkdirSync(sentFolder, { recursive: true });
     fs.writeFileSync(path.join(sentFolder, "email.html"), html, "utf8");
     fs.writeFileSync(path.join(sentFolder, "email.eml"), mimeMessage);
-    copyFilesIntoFolder(attachmentPaths, sentFolder);
+    const copiedAttachmentPaths = copyFilesIntoFolder(attachmentPaths, sentFolder);
+    const attachmentMetadata = normalizeOutboundAttachmentMetadata(attachmentPaths, {
+      copiedPaths: copiedAttachmentPaths,
+      sentAt: sentAt.toISOString(),
+    });
+    console.log("[ATTACHMENT_SEND]", JSON.stringify({
+      count: attachmentMetadata.length,
+      filenames: attachmentMetadata.map((item) => item.filename || item.file || item.name),
+      to,
+      subject,
+      message_id: messageId,
+    }));
     const sentMessage = appendSentMessage({
       id: `outbound:${messageId.replace(/^<|>$/g, "")}`,
       message_id: messageId.replace(/^<|>$/g, ""),
@@ -2480,7 +2631,7 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
       preview_text: body,
       preview: buildEmailPreview(body),
       preview_html: html,
-      attachments: attachmentPaths,
+      attachments: attachmentMetadata,
       sent_folder: sentFolder,
     });
     console.log("[SEND_LOGGED]", JSON.stringify({

@@ -21,8 +21,9 @@ function Shell() {
   const [columnOrder, setColumnOrder] = React.useState(() => loadColumnOrder());
   const [parserFileRequest, setParserFileRequest] = React.useState({ key: 0, filePath: "" });
   const [ordersTab, setOrdersTab] = React.useState("active");
+  const [returnRoute, setReturnRoute] = React.useState("/");
   const [orderFocusRequest, setOrderFocusRequest] = React.useState({ key: 0, orderNumber: "" });
-  const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0, archived: 0 });
+  const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0 });
   const [settingsTab, setSettingsTab] = React.useState("orders");
 
   React.useEffect(() => {
@@ -60,7 +61,15 @@ function Shell() {
     setRoute(nextRoute);
   }
 
+  // Capture the current page so closing parser/settings returns here.
+  function captureReturn() {
+    if (route !== "/parser" && route !== "/settings") {
+      setReturnRoute(route);
+    }
+  }
+
   function openParserFile(filePath) {
+    captureReturn();
     setParserFileRequest((current) => ({ key: current.key + 1, filePath: filePath || "" }));
     navigate("/parser");
   }
@@ -73,20 +82,29 @@ function Shell() {
   }
 
   function openOrder(order) {
+    captureReturn();
     const orderNumber = String(order?.order_number || "").trim();
-    if (!orderNumber) return;
+    const orderId = String(order?.order_id || order?.id || "").trim();
+    if (!orderNumber && !orderId) return;
     const orderStatus = String(order?.status || "").toLowerCase();
+    const lineStatus = String(order?.item_status || order?.status || "").toLowerCase();
     if (orderStatus === "archived") {
-      setOrdersTab("archived");
+      setOrdersTab("active");
     } else {
-      const lineStatus = String(order?.item_status || order?.status || "").toLowerCase();
       setOrdersTab(lineStatus === "completed" || lineStatus === "done" ? "completed" : "active");
     }
-    setOrderFocusRequest((current) => ({ key: current.key + 1, orderNumber }));
+    setOrderFocusRequest((current) => ({
+      key: current.key + 1,
+      orderNumber,
+      orderId,
+      directOpen: true,
+      orderData: order,
+    }));
     navigate("/");
   }
 
   function goToSettings(nextTab = "orders") {
+    captureReturn();
     setSettingsTab(nextTab || "orders");
     navigate("/settings");
   }
@@ -124,6 +142,7 @@ function Shell() {
           isActive={route === "/"}
           columnOrder={columnOrder}
           onColumnOrderChange={handleColumnOrderChange}
+          onDirectOrderModalClose={() => navigate(returnRoute)}
         />
       </div>
 
@@ -133,7 +152,7 @@ function Shell() {
           <ParserApp
             onCreated={handleCreated}
             onOrderCreated={handleOrderCreated}
-            onBack={goToOrders}
+            onBack={() => navigate(returnRoute)}
             onWorkspace={goToWorkspace}
             onSettings={goToSettings}
             ordersTab={ordersTab}
@@ -153,13 +172,12 @@ function Shell() {
           onOrders={goToOrders}
           activeCount={orderCounts.active}
           completedCount={orderCounts.completed}
-          archivedCount={orderCounts.archived}
         />
       )}
 
       {route === "/settings" && (
         <SettingsPage
-          onOrders={goToOrders}
+          onOrders={(nextTab) => nextTab ? goToOrders(nextTab) : navigate(returnRoute)}
           onWorkspace={goToWorkspace}
           onSettings={goToSettings}
           initialTab={settingsTab}

@@ -679,3 +679,81 @@ def test_integrity_value_equals_slice(sample_path, isolated_learning_store):
 
     for decision in result["decisions"]:
         _assert_decision_state_contract(decision, result["clean_text"], sample_path)
+
+
+# ── Fix 3 regression: [CORRECTION_SYNTHESIS] and [ROLE_RULE_WRITTEN] logs ─────
+
+def test_shipping_address_assignment_emits_correction_synthesis_log(
+    tmp_path, isolated_learning_store, capsys,
+):
+    """Manual shipping address assignment must emit [CORRECTION_SYNTHESIS] and
+    [ROLE_RULE_WRITTEN] proof logs so live debugging can confirm the path."""
+    body = (
+        "Order #5001\n"
+        "Shipping address\n"
+        "Alice Buyer\n"
+        "789 Elm St\n"
+        "Portland, OR 97201\n"
+        "United States\n"
+        "Price: $29.00\n"
+    )
+    eml_path = _make_eml(tmp_path / "synth-log.eml", body)
+    initial = parse_eml(eml_path, update_confidence=False)
+    selected_text = "789 Elm St\nPortland, OR 97201"
+    start = initial["clean_text"].index(selected_text)
+    end = start + len(selected_text)
+
+    apply_learning("save_assignment", eml_path, {
+        "field": "shipping_address",
+        "value": selected_text,
+        "selected_text": selected_text,
+        "start": start,
+        "end": end,
+        "segment_id": "",
+    })
+
+    captured = capsys.readouterr()
+    assert "[CORRECTION_SYNTHESIS]" in captured.err, (
+        "apply_learning must emit [CORRECTION_SYNTHESIS] for manual assignments"
+    )
+    assert "[ROLE_RULE_WRITTEN]" in captured.err, (
+        "apply_learning must emit [ROLE_RULE_WRITTEN] for address field assignments"
+    )
+    assert '"field": "shipping_address"' in captured.err
+
+
+# ── Fix 2 regression: item price assignment writes backend learning store ──────
+
+def test_item_price_manual_assignment_writes_learning_store(
+    tmp_path, isolated_learning_store,
+):
+    """A manually corrected item price routed through apply_learning must write
+    an assignment record so future emails of the same template auto-parse it."""
+    body = (
+        "Order #5002\n"
+        "Product: Custom Mug\n"
+        "Quantity: 1\n"
+        "Price: $18.00\n"
+        "Order total: $23.00\n"
+    )
+    eml_path = _make_eml(tmp_path / "item-price-learn.eml", body)
+    initial = parse_eml(eml_path, update_confidence=False)
+    template_id = initial["template_family_id"]
+
+    selected_text = "18.00"
+    start = initial["clean_text"].index(selected_text)
+    end = start + len(selected_text)
+
+    apply_learning("save_assignment", eml_path, {
+        "field": "price",
+        "value": selected_text,
+        "selected_text": selected_text,
+        "start": start,
+        "end": end,
+        "segment_id": "",
+    })
+
+    records = learning_store.load_assignments(template_id, "price")
+    assert len(records) >= 1, "item price assignment must write a learning record"
+    values = [r["value"] for r in records]
+    assert selected_text in values, f"value {selected_text!r} not found in {values}"

@@ -1611,6 +1611,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
         {[
           { id: "sending", label: "Sending" },
           { id: "templates", label: "Templates" },
+          { id: "storage", label: "Storage" },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1819,6 +1820,49 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
                 style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
               />
             </label>
+          </div>
+          <div style={{ marginTop: 14, borderTop: "1px solid #eef2f7", paddingTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 10 }}>
+              Background Sync
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              <label>
+                <span style={labelStyle}>Polling Interval (seconds)</span>
+                <input
+                  type="number"
+                  min="60"
+                  max="3600"
+                  value={shopConfig?.mailPollingIntervalSeconds ?? 300}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailPollingIntervalSeconds: e.target.value }))}
+                  placeholder="300"
+                  style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+                />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 20 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailBackgroundSyncEnabled !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailBackgroundSyncEnabled: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Enable background sync</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailStartupAutoConnect !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailStartupAutoConnect: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Auto-connect on app startup</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailReconnectEnabled !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailReconnectEnabled: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Reconnect after disconnect</span>
+              </label>
+            </div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
@@ -2064,6 +2108,90 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
         background: "none", color: "#6b7280", fontSize: "13px", cursor: "pointer",
       }}>+ Add Template</button>
       </>
+      ) : null}
+
+      {activeEmailSubtab === "storage" ? (
+        <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "10px", padding: "16px 18px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 4 }}>Sent Mail Records</div>
+          <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, marginBottom: 16 }}>
+            Spaila keeps sent email records so they appear in the Sent view and workspace conversation previews. After the period below, those sent records and Spaila's sent-copy folders are permanently deleted.
+            <br />
+            <span style={{ color: "#4b5563" }}>Order/customer folders and saved order conversation records are not changed.</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <label style={{ fontSize: 13, color: "#374151", fontWeight: 500 }}>
+              Keep sent mail records for
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="365"
+              value={shopConfig?.sentMailRetentionDays ?? 60}
+              onChange={(e) => {
+                const val = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 60));
+                setShopConfig?.((prev) => ({ ...prev, sentMailRetentionDays: val }));
+              }}
+              style={{
+                width: 64,
+                padding: "5px 8px",
+                border: "1px solid #d1d5db",
+                borderRadius: 5,
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            />
+            <span style={{ fontSize: 13, color: "#374151" }}>days</span>
+            <span
+              title="Only Spaila's Sent view records and sent-copy folders are removed. Order/customer folders and saved order conversation records are not changed."
+              style={{ fontSize: 13, color: "#9ca3af", cursor: "help", userSelect: "none" }}
+            >
+              ⓘ
+            </span>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#9ca3af" }}>
+            Default: 60 days. Minimum: 1 day. Maximum: 365 days.
+          </div>
+
+          <div style={{ marginTop: 20, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 4 }}>Email Trash</div>
+            <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, marginBottom: 12 }}>
+              Deleted emails are held in Trash so you can recover them before they're permanently removed from your email account.
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <label style={{ fontSize: 13, color: "#374151", fontWeight: 500 }}>
+                Keep deleted emails for
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="365"
+                value={shopConfig?.trashRetentionDays ?? 30}
+                onChange={(e) => {
+                  const val = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 30));
+                  setShopConfig?.((prev) => ({ ...prev, trashRetentionDays: val }));
+                }}
+                style={{
+                  width: 64,
+                  padding: "5px 8px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 5,
+                  fontSize: 13,
+                  textAlign: "center",
+                }}
+              />
+              <span style={{ fontSize: 13, color: "#374151" }}>days before permanent deletion</span>
+              <span
+                title="After this period, emails are permanently deleted from your email account via IMAP. Emails in each order folder are not affected."
+                style={{ fontSize: 13, color: "#9ca3af", cursor: "help", userSelect: "none" }}
+              >
+                ⓘ
+              </span>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 11, color: "#9ca3af" }}>
+              Default: 30 days. Minimum: 1 day. Maximum: 365 days.
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

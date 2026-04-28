@@ -2068,7 +2068,11 @@ export default function App({
     }
   }, [applyResult, clearSelection, currentOrderNumber, decisionMap.buyer_name, decisionMap.shipping_address, resolveCurrentParserPath, selection, suppressedFields]);
 
-  const assignSelectionToItemField = React.useCallback((field, itemIndex) => {
+  // Fields whose manual assignment must also teach the backend parser so that
+  // future emails of the same template auto-parse them correctly.
+  const ITEM_PARSER_TEACHABLE = React.useMemo(() => new Set(["price"]), []);
+
+  const assignSelectionToItemField = React.useCallback(async (field, itemIndex) => {
     const sel = lastSelectionRef.current || selection;
     if (!sel?.selected_text) {
       return;
@@ -2122,7 +2126,41 @@ export default function App({
     });
     setSelectedField(`item:${itemIndex}:${field}`);
     clearSelection();
-  }, [clearSelection, highlights, selection, state.decisions]);
+
+    // Route parser-teachable item fields through the backend so the learning
+    // store is updated and future emails of the same template benefit.
+    if (ITEM_PARSER_TEACHABLE.has(field) && state.filePath) {
+      try {
+        const parserPath = await resolveCurrentParserPath();
+        await window.parserApp.saveAssignment({
+          filePath: parserPath,
+          orderNumber: currentOrderNumber,
+          decision: {
+            field,
+            value: exactValue,
+            segment_id: sel.segment_id || "",
+            start: sel.start,
+            end: sel.end,
+            selected_text: sel.selected_text,
+            suppressed_fields: suppressedFields,
+          },
+        });
+        console.log("[ITEM_FIELD_LEARNED]", { field, value: exactValue, itemIndex });
+      } catch (err) {
+        console.error("[ITEM_LEARN_FAILED]", { field, error: err?.message });
+      }
+    }
+  }, [
+    ITEM_PARSER_TEACHABLE,
+    clearSelection,
+    currentOrderNumber,
+    highlights,
+    resolveCurrentParserPath,
+    selection,
+    state.decisions,
+    state.filePath,
+    suppressedFields,
+  ]);
 
   const rejectItemField = React.useCallback((field, itemIndex) => {
     if (field === "price" && decisionMap.price) {
@@ -2526,7 +2564,7 @@ export default function App({
         </section>
 
         <aside className="panel fields-panel">
-          <div className="panel-title">Parsed Fields</div>
+          <div className="panel-title">Detected Fields</div>
           <div className="fields-list">
             {unresolvedGiftFlags.length ? (
               <div className="gift-flag-panel">

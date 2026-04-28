@@ -14,6 +14,58 @@ BASE_PATH = _WORKSPACE_DIRS["root"]
 INBOX_PATH = _WORKSPACE_DIRS["Inbox"]
 ORDERS_PATH = _WORKSPACE_DIRS["Orders"]
 ORDER_ARCHIVE_SETTINGS_FILENAME = "order_archive_settings.json"
+PROCESSED_REFS_FILENAME = ".processedInboxRefs.json"
+MAX_PROCESSED_REFS = 5000
+
+
+# ── Processed inbox ref helpers (mirror the frontend getProcessedEmailRefVariants logic) ─
+
+def _normalize_ref(value: str | None) -> str:
+    """Lowercase, strip, normalise path separators."""
+    return str(value or "").strip().lower().replace("\\", "/")
+
+
+def _processed_ref_variants(value: str | None) -> list[str]:
+    """Return [full_normalised_path, filename] variants (same as frontend getProcessedEmailRefVariants)."""
+    ref = _normalize_ref(value)
+    if not ref:
+        return []
+    parts = [p for p in ref.split("/") if p]
+    filename = parts[-1] if parts else ""
+    return [ref, filename] if (filename and filename != ref) else [ref]
+
+
+def _extract_eml_uid(file_path: str | None) -> str:
+    """Extract the bare IMAP UID from a {timestamp}_{uid}.eml filename (mirrors frontend extractEmlUid)."""
+    name = _normalize_ref(file_path).split("/")[-1] if file_path else ""
+    m = re.match(r"^\d+_([a-z0-9]+)\.eml$", name, re.IGNORECASE)
+    return m.group(1).lower() if m else ""
+
+
+def _persist_processed_refs(new_refs: list[str]) -> None:
+    """
+    Merge new_refs into BASE_PATH/.processedInboxRefs.json so the frontend can
+    load them on startup and keep inbox filtering working after orders are removed
+    from the database.
+    """
+    fp = BASE_PATH / PROCESSED_REFS_FILENAME
+    try:
+        existing: list[str] = []
+        if fp.is_file():
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                existing = data
+    except (OSError, json.JSONDecodeError):
+        existing = []
+    seen: dict[str, None] = dict.fromkeys(existing)
+    for ref in new_refs:
+        if ref:
+            seen[ref] = None
+    merged = list(seen.keys())[-MAX_PROCESSED_REFS:]
+    try:
+        fp.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        print(f"[PROCESSED_REFS_WRITE_FAIL] error={exc}")
 
 
 # ── Folder creation (mirrors helper/sync_folders.py logic) ───────────────────
@@ -92,6 +144,116 @@ def _norm_body(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def _looks_absolute_path(value: object) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    if raw.startswith("/") or raw.startswith("\\\\"):
+        return True
+    return bool(re.match(r"^[A-Za-z]:[\\/]", raw))
+
+
+def _normalize_attachment_entry(value: object):
+    """
+    Convert attachment references to archive-safe values.
+    - Absolute paths become: {"file": "<basename>", "original_path": "<absolute path>"}.
+    - Relative strings become: "<relative or filename>".
+    - Dict attachments preserve existing metadata while normalising file/path.
+    """
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        normalized = raw.replace("\\", "/")
+        file_name = normalized.split("/")[-1] or normalized
+        if _looks_absolute_path(raw):
+            return {"file": file_name, "original_path": raw}
+        rel = normalized[2:] if normalized.startswith("./") else normalized
+        return rel or file_name
+
+    if isinstance(value, dict):
+        out = dict(value)
+        raw = str(
+            out.get("path")
+            or out.get("file")
+            or out.get("original_path")
+            or out.get("name")
+            or ""
+        ).strip()
+        if not raw:
+            return out
+        normalized = raw.replace("\\", "/")
+        file_name = normalized.split("/")[-1] or normalized
+        if _looks_absolute_path(raw):
+            out["original_path"] = raw
+            out["file"] = file_name
+            out["path"] = file_name
+            return out
+        rel = normalized[2:] if normalized.startswith("./") else normalized
+        out["file"] = rel or file_name
+        if isinstance(out.get("path"), str):
+            out["path"] = out["file"]
+        return out
+
+    return value
+
+
+def _normalize_message_attachments(value: object) -> list:
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        normalized = _normalize_attachment_entry(item)
+        if normalized in (None, "", []):
+            continue
+        out.append(normalized)
+    return out
+
+
+def _normalize_messages_for_archive(messages: list) -> list:
+    out = []
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, dict):
+            continue
+        next_message = dict(message)
+        next_message["attachments"] = _normalize_message_attachments(next_message.get("attachments"))
+        out.append(next_message)
+    return out
+
+
+def _restore_message_attachment_paths(messages: list, target_folder: Path) -> list:
+    out = []
+    restored_count = 0
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, dict):
+            continue
+        next_message = dict(message)
+        attachments = []
+        for attachment in _normalize_message_attachments(next_message.get("attachments")):
+            if isinstance(attachment, dict):
+                item = dict(attachment)
+                raw_path = str(item.get("path") or item.get("file") or "").strip()
+                if raw_path and not _looks_absolute_path(raw_path):
+                    candidate = (target_folder / raw_path).resolve()
+                    if candidate.exists():
+                        item["path"] = str(candidate)
+                        restored_count += 1
+                attachments.append(item)
+            else:
+                raw = str(attachment or "").strip()
+                candidate = (target_folder / raw).resolve() if raw and not _looks_absolute_path(raw) else None
+                if candidate and candidate.exists():
+                    attachments.append({"file": raw, "path": str(candidate)})
+                    restored_count += 1
+                else:
+                    attachments.append(attachment)
+        next_message["attachments"] = attachments
+        out.append(next_message)
+    if restored_count:
+        print(f"[ATTACHMENT_RESTORE] restored_paths={restored_count} order_folder={target_folder}")
+    return out
+
+
 def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -144,19 +306,41 @@ def _path_under_base(child: Path, base: Path) -> bool:
 
 
 def _first_unique_archive_destination(desired: Path) -> Path:
+    """Used by RESTORE only — produces a unique folder name under Orders."""
     if not desired.exists():
         return desired
     parent = desired.parent
     stem = desired.name
-    print(
-        f"[ORDER_FOLDER_ARCHIVE_CONFLICT] desired_path={desired} "
-        "message=target_exists_using_suffix"
-    )
     for i in range(1, 10000):
-        cand = parent / f"{stem}__conflict{i}"
+        cand = parent / f"{stem}__restored{i}"
         if not cand.exists():
             return cand
-    raise OSError("could not allocate unique archive folder name")
+    raise OSError("could not allocate unique restore folder name")
+
+
+def _archive_destination(folder_path: str | None, archive_root: Path) -> Path | None:
+    """
+    Compute where a folder *would* land after archiving, without touching the
+    filesystem.  Returns None when the path cannot be mapped.
+    """
+    raw = str(folder_path or "").strip()
+    if not raw:
+        return None
+    try:
+        src = Path(raw).expanduser().resolve()
+    except OSError:
+        return None
+    ar = archive_root.resolve()
+    ob = ORDERS_PATH.resolve()
+    if _path_under_base(src, ar):
+        return src  # already inside archive root
+    if not _path_under_base(src, ob):
+        return None
+    try:
+        rel = src.relative_to(ob)
+    except ValueError:
+        return None
+    return (ar / rel).resolve()
 
 
 def _move_order_folder_for_archive(
@@ -208,17 +392,268 @@ def _move_order_folder_for_archive(
 
     desired = ar / rel
     desired.parent.mkdir(parents=True, exist_ok=True)
-    target = _first_unique_archive_destination(desired)
 
     try:
-        shutil.move(str(src), str(target))
+        shutil.move(str(src), str(desired))
     except OSError as exc:
         print(f"[ORDER_FOLDER_ARCHIVE_FAIL] order_id={order_id} error={exc}")
         return None
 
-    final_path = str(target.resolve())
+    final_path = str(desired.resolve())
     print(f"[ORDER_FOLDER_MOVED] order_id={order_id} from_path={src} to_path={final_path}")
     return final_path
+
+
+def _write_manifest(
+    order_id: str,
+    order_number: str | None,
+    buyer_name: str | None,
+    buyer_email: str | None,
+    shipping_address: str | None,
+    pet_name: str | None,
+    src_folder: Path,
+) -> bool:
+    """
+    Write manifest.json into the order folder before archiving.
+
+    Strict minimal contract — only the fields needed for search and restore.
+    Everything else (messages, price, dates, notes) stays in conversation.json.
+    Returns False on write failure.
+    """
+    manifest = {
+        "schema_version": 1,
+        "order_id":        order_id,
+        "order_number":    order_number,
+        "buyer_name":      buyer_name,
+        "buyer_email":     buyer_email,
+        "shipping_address": shipping_address,
+        "pet_name":        pet_name,
+        "folder_name":     src_folder.name,
+        "folder_path":     str(src_folder),
+        "archived_at":     _now_iso_utc(),
+        "search_blob": " ".join(
+            str(v or "") for v in (
+                order_number, buyer_name, buyer_email, shipping_address, pet_name
+            )
+        ).lower(),
+    }
+    manifest_path = src_folder / "manifest.json"
+    try:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[ARCHIVE_MANIFEST_SAVED] order_id={order_id} path={manifest_path}")
+        return True
+    except OSError as exc:
+        print(f"[ARCHIVE_MANIFEST_FAIL] order_id={order_id} error={exc}")
+        return False
+
+
+def _offload_order_to_filesystem(
+    order_id: str,
+    folder_path: str | None,
+    archive_root: Path,
+    cur,
+) -> bool:
+    """
+    Idempotent archive + hard-delete pipeline.
+
+    Sequence:
+      1. Read order fields from DB.
+      2. Validate messages JSON.
+      3. Persist email refs for inbox filtering.
+      4. Idempotency check — if the archive destination already contains a
+         matching manifest.json for this order_id, skip the folder move and
+         go straight to DB cleanup.
+      5. Mark status='archiving' so the order disappears from active views
+         immediately and cannot be double-archived by a concurrent run.
+      6. Write manifest.json + conversation.json into the source folder.
+      7. shutil.move the folder to archive root.
+      8. Hard-delete from DB (always runs after a successful move OR idempotency skip).
+
+    Returns True when the order row was removed from DB.
+    Returns False only when an unrecoverable error prevents safe deletion.
+    """
+    try:
+        # ── Step 1: read order fields ─────────────────────────────────────
+        cur.execute(
+            """SELECT order_number, messages, source_eml_path, eml_path,
+                      buyer_name, buyer_email, shipping_address, pet_name
+               FROM orders WHERE id = ?""",
+            (order_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            print(f"[ARCHIVE_SKIP] order_id={order_id} reason=not_found_in_db")
+            return False
+        (order_number, messages_raw, source_eml_path, eml_path,
+         buyer_name, buyer_email, shipping_address, pet_name) = row
+
+        # Derive pet_name from items.custom_1 when not set on the order directly.
+        if not pet_name:
+            cur.execute(
+                "SELECT custom_1 FROM items WHERE order_id = ? "
+                "ORDER BY item_index ASC LIMIT 1",
+                (order_id,),
+            )
+            item_row = cur.fetchone()
+            pet_name = (item_row[0] if item_row else None) or None
+
+        # ── Step 2: validate messages JSON ───────────────────────────────
+        messages_list: list = []
+        if messages_raw:
+            try:
+                parsed = json.loads(messages_raw)
+            except (json.JSONDecodeError, TypeError) as exc:
+                print(
+                    f"[ARCHIVE_CONVERSATION_INVALID] order_id={order_id} "
+                    f"reason=json_parse_error error={exc}"
+                )
+                return False
+            if not isinstance(parsed, list):
+                print(
+                    f"[ARCHIVE_CONVERSATION_INVALID] order_id={order_id} "
+                    f"reason=messages_not_a_list type={type(parsed).__name__}"
+                )
+                return False
+            messages_list = parsed
+
+        # ── Step 3: persist email refs for inbox filter ──────────────────
+        refs: list[str] = []
+        for eml in (source_eml_path, eml_path):
+            refs.extend(_processed_ref_variants(eml))
+            uid = _extract_eml_uid(eml)
+            if uid:
+                refs.append(uid)
+        for msg in messages_list:
+            if str(msg.get("type") or msg.get("direction") or "").lower() != "inbound":
+                continue
+            for field in (msg.get("email_id"), msg.get("message_id"), msg.get("id")):
+                refs.extend(_processed_ref_variants(field))
+        if refs:
+            _persist_processed_refs(refs)
+
+        # ── Step 4: idempotency check ────────────────────────────────────
+        folder_already_archived = False
+        dest_path: str | None = None
+
+        if folder_path:
+            dest = _archive_destination(folder_path, archive_root)
+            src_folder = Path(folder_path).expanduser().resolve()
+
+            if dest is not None and dest.is_dir():
+                # Destination already exists — check if it belongs to this order.
+                manifest_path = dest / "manifest.json"
+                if manifest_path.is_file():
+                    try:
+                        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        if str(m.get("order_id") or "").strip() == order_id:
+                            print(
+                                f"[ARCHIVE_IDEMPOTENT] order_id={order_id} "
+                                f"folder already archived at {dest} — skipping move, cleaning DB"
+                            )
+                            folder_already_archived = True
+                            dest_path = str(dest)
+                        else:
+                            print(
+                                f"[ARCHIVE_ABORT] order_id={order_id} "
+                                f"destination {dest} exists but belongs to a different order — aborting"
+                            )
+                            return False
+                    except (OSError, json.JSONDecodeError) as exc:
+                        print(
+                            f"[ARCHIVE_ABORT] order_id={order_id} "
+                            f"could not read manifest at {dest}: {exc}"
+                        )
+                        return False
+                else:
+                    print(
+                        f"[ARCHIVE_ABORT] order_id={order_id} "
+                        f"destination {dest} exists but has no manifest.json — aborting to avoid data loss"
+                    )
+                    return False
+
+            if not folder_already_archived:
+                if not src_folder.is_dir():
+                    print(
+                        f"[ARCHIVE_SKIP] order_id={order_id} "
+                        f"reason=source_folder_not_found path={src_folder}"
+                    )
+                    return False
+
+        # ── Step 5: mark as 'archiving' to prevent concurrent re-archive ─
+        if not folder_already_archived:
+            cur.execute(
+                "UPDATE orders SET status = 'archiving' WHERE id = ?",
+                (order_id,),
+            )
+
+        # ── Step 6: write manifest.json + conversation.json ──────────────
+        if folder_path and not folder_already_archived:
+            if not _write_manifest(
+                order_id=order_id,
+                order_number=order_number,
+                buyer_name=buyer_name,
+                buyer_email=buyer_email,
+                shipping_address=shipping_address,
+                pet_name=pet_name,
+                src_folder=src_folder,
+            ):
+                # Revert status so the order reappears and can be retried.
+                cur.execute(
+                    "UPDATE orders SET status = 'active' WHERE id = ?",
+                    (order_id,),
+                )
+                return False
+
+            conv_path = src_folder / "conversation.json"
+            try:
+                archive_messages = _normalize_messages_for_archive(messages_list)
+                conv_data = {
+                    "order_id": order_id,
+                    "order_number": order_number,
+                    "archived_at": _now_iso_utc(),
+                    "source_eml_path": source_eml_path,
+                    "eml_path": eml_path,
+                    "messages": archive_messages,
+                }
+                conv_path.write_text(
+                    json.dumps(conv_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print(f"[ARCHIVE_CONVERSATION_SAVED] order_id={order_id} path={conv_path}")
+            except OSError as exc:
+                print(f"[ARCHIVE_CONVERSATION_FAIL] order_id={order_id} error={exc}")
+                cur.execute(
+                    "UPDATE orders SET status = 'active' WHERE id = ?",
+                    (order_id,),
+                )
+                return False
+
+        # ── Step 7: move folder ───────────────────────────────────────────
+        if folder_path and not folder_already_archived:
+            moved = _move_order_folder_for_archive(order_id, folder_path, archive_root)
+            if moved is None:
+                cur.execute(
+                    "UPDATE orders SET status = 'active' WHERE id = ?",
+                    (order_id,),
+                )
+                return False
+            dest_path = moved
+
+        # ── Step 8: hard-delete — always runs after move or idempotency skip
+        cur.execute("DELETE FROM items WHERE order_id = ?", (order_id,))
+        cur.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+        print(
+            f"[ORDER_ARCHIVED_TO_FILESYSTEM] order_id={order_id} "
+            f"from_path={folder_path or ''} to_path={dest_path or ''}"
+        )
+        return True
+
+    except Exception as exc:
+        print(f"[ARCHIVE_ERROR] order_id={order_id} unhandled exception: {exc}")
+        raise
 
 
 def _archive_reference_dt(last_activity_at, updated_at, created_at) -> tuple[datetime, str, str]:
@@ -233,6 +668,38 @@ def _archive_reference_dt(last_activity_at, updated_at, created_at) -> tuple[dat
             return dt, label, str(s).strip()
     fallback = _parse_iso_dt(created_at) or datetime.now(timezone.utc)
     return fallback, "created_at", str(created_at or "").strip()
+
+
+def _restore_folder_target(source_folder: Path, archive_root: Path) -> Path:
+    """
+    Build the restore target under ORDERS_PATH preserving the relative archive path.
+    Example: C:/Spaila/archive/2026/april/Name -> C:/Spaila/orders/2026/april/Name
+    """
+    src = source_folder.resolve()
+    ar = archive_root.resolve()
+    if not _path_under_base(src, ar):
+        raise ValueError("folder_path is outside archive root")
+    rel = src.relative_to(ar)
+    desired = ORDERS_PATH.resolve() / rel
+    desired.parent.mkdir(parents=True, exist_ok=True)
+    return _first_unique_archive_destination(desired)
+
+
+def _collect_processed_refs_for_restore(messages: list, source_eml_path: str | None, eml_path: str | None) -> list[str]:
+    refs: list[str] = []
+    for eml in (source_eml_path, eml_path):
+        refs.extend(_processed_ref_variants(eml))
+        uid = _extract_eml_uid(eml)
+        if uid:
+            refs.append(uid)
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("type") or msg.get("direction") or "").lower() != "inbound":
+            continue
+        for field in (msg.get("message_id"), msg.get("email_id"), msg.get("id")):
+            refs.extend(_processed_ref_variants(field))
+    return refs
 
 
 def _manual_assign_duplicate_reason(messages: list, new_msg: dict) -> str:
@@ -521,10 +988,11 @@ def list_orders():
             items.item_status,
             orders.is_gift,
             orders.gift_wrap,
-            orders.messages
+            orders.messages,
+            orders.pet_name
         FROM items
         JOIN orders ON items.order_id = orders.id
-        WHERE orders.status NOT IN ('deleted')
+        WHERE orders.status NOT IN ('deleted', 'archiving')
         ORDER BY orders.created_at DESC, items.item_index ASC
     """)
 
@@ -561,6 +1029,7 @@ def list_orders():
             "is_gift": bool(r[25]),
             "gift_wrap": bool(r[26]),
             "messages": _parse_order_messages(r[27]),
+            "pet_name": r[28],
         }
         for r in rows
     ]
@@ -769,6 +1238,7 @@ def append_order_message(order_id: str, payload: dict):
     ):
         if optional_key in message:
             next_message[optional_key] = message.get(optional_key)
+    next_message["attachments"] = _normalize_message_attachments(next_message.get("attachments"))
 
     conn = get_conn()
     cur = conn.cursor()
@@ -792,7 +1262,12 @@ def append_order_message(order_id: str, payload: dict):
 
 @router.post("/orders/auto-archive/run")
 async def run_auto_archive(request: Request):
-    """Set status='archived' for eligible orders; moves order folder into archive_root; never modifies messages."""
+    """
+    Offload eligible orders to the filesystem archive and hard-delete them from
+    the database.  An order qualifies when it has been inactive for more than
+    `days` days.  The folder is moved first; if the move fails the order is
+    skipped and the DB row is left untouched.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -812,13 +1287,12 @@ async def run_auto_archive(request: Request):
         """
         SELECT id, created_at, last_activity_at, updated_at, status, order_folder_path
         FROM orders
-        WHERE status NOT IN ('deleted', 'archived')
+        WHERE status NOT IN ('deleted', 'archived', 'archiving')
         """
     )
     rows = cur.fetchall()
     now = datetime.now(timezone.utc)
     archived: list[str] = []
-    touch = _now_iso_utc()
 
     for row in rows:
         oid, created_at, last_activity_at, updated_at, _status, folder_path = row
@@ -826,21 +1300,17 @@ async def run_auto_archive(request: Request):
         elapsed_days = (now - ref_dt).total_seconds() / 86400.0
         if elapsed_days <= float(days_n):
             continue
-        new_fp = _move_order_folder_for_archive(oid, folder_path, archive_root)
-        if new_fp is not None:
-            cur.execute(
-                "UPDATE orders SET status = 'archived', updated_at = ?, order_folder_path = ? WHERE id = ?",
-                (touch, new_fp, oid),
+        ok = _offload_order_to_filesystem(oid, folder_path, archive_root, cur)
+        if ok:
+            print(
+                f"[ORDER_AUTO_ARCHIVED] order_id={oid} reference_date={ref_raw} "
+                f"days_elapsed={elapsed_days:.4f} threshold={days_n}"
             )
+            archived.append(oid)
         else:
-            cur.execute(
-                "UPDATE orders SET status = 'archived', updated_at = ? WHERE id = ?",
-                (touch, oid),
+            print(
+                f"[ORDER_AUTO_ARCHIVE_SKIP] order_id={oid} reason=folder_move_failed"
             )
-        print(
-            f"[ORDER_AUTO_ARCHIVED] order_id={oid} reference_date={ref_raw} days_elapsed={elapsed_days:.4f}"
-        )
-        archived.append(oid)
 
     conn.commit()
     conn.close()
@@ -854,6 +1324,382 @@ def requeue_all():
         "skipped_missing": [],
         "message": "Deprecated. Helper owns inbox and file movement.",
     }
+
+
+def _create_inbox_event(
+    cur,
+    *,
+    event_type: str,
+    order_id: str,
+    order_number: str | None,
+    buyer_name: str | None,
+    preview: str | None,
+    timestamp: str | None,
+) -> str:
+    """
+    Insert one row into inbox_events and return its id.
+    Caller is responsible for conn.commit().
+    """
+    event_id = str(uuid.uuid4())
+    now = _now_iso_utc()
+    cur.execute(
+        """
+        INSERT INTO inbox_events (id, type, order_id, order_number, buyer_name,
+                                  preview, timestamp, unread, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """,
+        (
+            event_id,
+            event_type,
+            order_id or "",
+            order_number or "",
+            buyer_name or "",
+            (str(preview or "")[:140]).strip(),
+            timestamp or now,
+            now,
+        ),
+    )
+    return event_id
+
+
+@router.get("/inbox/events")
+def list_inbox_events():
+    """Return all inbox events, newest first."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, type, order_id, order_number, buyer_name,
+               preview, timestamp, unread, created_at
+        FROM inbox_events
+        ORDER BY created_at DESC
+        LIMIT 500
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id":           r[0],
+            "type":         r[1],
+            "order_id":     r[2],
+            "order_number": r[3],
+            "buyer_name":   r[4],
+            "preview":      r[5],
+            "timestamp":    r[6],
+            "unread":       bool(r[7]),
+            "created_at":   r[8],
+        }
+        for r in rows
+    ]
+
+
+@router.patch("/inbox/events/{event_id}/read")
+def mark_event_read(event_id: str):
+    """Mark a single inbox event as read."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE inbox_events SET unread = 0 WHERE id = ?", (event_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@router.delete("/inbox/events/{event_id}")
+def delete_inbox_event(event_id: str):
+    """Remove an inbox event."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM inbox_events WHERE id = ?", (event_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@router.get("/inbox/processed-refs")
+def get_processed_refs():
+    """
+    Return the email refs persisted to disk during filesystem archive offloads.
+    The frontend merges these into localStorage on startup so inbox filtering
+    works even when the Workspace never loaded the archived order.
+    """
+    fp = BASE_PATH / PROCESSED_REFS_FILENAME
+    try:
+        if fp.is_file():
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return {"refs": data}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"refs": []}
+
+
+@router.get("/orders/archive/search")
+def search_archive(q: str = ""):
+    """
+    Full-text search over archived orders by scanning manifest.json files
+    under the archive root.  Returns a list of matching order summaries,
+    newest-first.
+    """
+    query = (q or "").strip().lower()
+    if not query:
+        return []
+    archive_root = _resolve_archive_root({})
+    results: list[dict] = []
+    try:
+        folders = list(archive_root.rglob("*"))
+    except OSError:
+        return []
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        manifest_path = folder / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        blob = str(manifest.get("search_blob") or "").lower()
+        if query not in blob:
+            continue
+        results.append({
+            "order_id":     manifest.get("order_id"),
+            "order_number": manifest.get("order_number"),
+            "buyer_name":   manifest.get("buyer_name"),
+            "buyer_email":  manifest.get("buyer_email"),
+            "archived_at":  manifest.get("archived_at"),
+            "folder_path":  str(folder.resolve()),
+        })
+    results.sort(key=lambda x: str(x.get("archived_at") or ""), reverse=True)
+    return results
+
+
+@router.post("/orders/{order_id}/offload-to-filesystem")
+async def offload_order_to_filesystem(order_id: str, request: Request):
+    """
+    Move the order's folder to the archive directory, then hard-delete the order
+    and its items from the database.  The order will no longer appear in any app
+    query; its files remain accessible on disk under the archive root.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    archive_root = _resolve_archive_root(body)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT order_folder_path FROM orders WHERE id = ? AND status NOT IN ('deleted')",
+        (order_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found.")
+    folder_path = row[0]
+    ok = _offload_order_to_filesystem(order_id, folder_path, archive_root, cur)
+    if not ok:
+        conn.close()
+        raise HTTPException(
+            status_code=500,
+            detail="Folder move failed; order was not removed from the database.",
+        )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "order_id": order_id}
+
+
+@router.post("/orders/{order_id}/archive-now")
+async def archive_order_now(order_id: str):
+    """
+    Immediately run the full archive pipeline for a single order (dev / manual use).
+    Equivalent to offload-to-filesystem with default archive root and no request body.
+    """
+    archive_root = _resolve_archive_root({})
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT order_folder_path FROM orders WHERE id = ? AND status NOT IN ('deleted')",
+            (order_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Order not found.")
+        folder_path = row[0]
+        ok = _offload_order_to_filesystem(order_id, folder_path, archive_root, cur)
+        if not ok:
+            raise HTTPException(
+                status_code=500,
+                detail="Archive failed; order was not removed from the database.",
+            )
+        conn.commit()
+        print(f"[ORDER_FORCE_ARCHIVED] order_id={order_id}")
+        return {"success": True, "order_id": order_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[ORDER_FORCE_ARCHIVE_FAIL] order_id={order_id} error={exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@router.post("/orders/restore-from-archive")
+async def restore_order_from_archive(request: Request):
+    """
+    Restore an archived order folder back into the active Orders tree.
+    manifest.json is the PRIMARY source of order metadata.
+    conversation.json is the SECONDARY source for message history.
+    Fails cleanly if manifest.json is missing or invalid.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    raw_folder = str(body.get("folder_path") or "").strip()
+    if not raw_folder:
+        raise HTTPException(status_code=400, detail="folder_path is required.")
+
+    archive_root = _resolve_archive_root({})
+    source_folder = Path(raw_folder).expanduser()
+    try:
+        source_folder = source_folder.resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail="Invalid folder_path.")
+    if not source_folder.exists() or not source_folder.is_dir():
+        raise HTTPException(status_code=400, detail="folder_path does not exist.")
+    if not _path_under_base(source_folder, archive_root):
+        raise HTTPException(status_code=400, detail="folder_path must be under archive root.")
+
+    # ── PRIMARY: manifest.json ──────────────────────────────────────────────
+    manifest_path = source_folder / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=400, detail="Missing manifest.json — cannot restore")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid manifest.json")
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="Invalid manifest.json")
+
+    # ── Extract manifest fields (sole source of truth for order data) ──────
+    restore_order_id = str(manifest.get("order_id") or "").strip()
+    order_number     = str(manifest.get("order_number") or "").strip()
+    if not restore_order_id or not order_number:
+        raise HTTPException(status_code=400, detail="manifest.json missing order_id or order_number")
+
+    buyer_name       = str(manifest.get("buyer_name")       or "").strip() or None
+    buyer_email      = str(manifest.get("buyer_email")      or "").strip() or None
+    shipping_address = str(manifest.get("shipping_address") or "").strip() or None
+    pet_name         = str(manifest.get("pet_name")         or "").strip() or None
+
+    # ── conversation.json: messages only (NOT used for order fields) ─────────
+    conv_messages: list = []
+    source_eml_path: str | None = None
+    eml_path: str | None = None
+    conv_path = source_folder / "conversation.json"
+    if conv_path.is_file():
+        try:
+            conv = json.loads(conv_path.read_text(encoding="utf-8"))
+            if isinstance(conv, dict):
+                raw_msgs = conv.get("messages")
+                if isinstance(raw_msgs, list):
+                    conv_messages = raw_msgs
+                source_eml_path = str(conv.get("source_eml_path") or "").strip() or None
+                eml_path = str(conv.get("eml_path") or "").strip() or None
+        except (OSError, json.JSONDecodeError):
+            pass  # messages are best-effort; order identity comes from manifest
+
+    target_folder = _restore_folder_target(source_folder, archive_root)
+
+    # ── Move folder back FIRST ──────────────────────────────────────────────
+    try:
+        shutil.move(str(source_folder), str(target_folder))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Folder move failed: {exc}")
+    conv_messages = _restore_message_attachment_paths(conv_messages, target_folder)
+
+    now_iso = _now_iso_utc()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM orders WHERE id = ?", (restore_order_id,))
+        if cur.fetchone():
+            restore_order_id = str(uuid.uuid4())
+
+        cur.execute(
+            """
+            INSERT INTO orders (
+                id, order_number, buyer_name, buyer_email, shipping_address, pet_name,
+                status, created_at, last_activity_at, updated_at,
+                order_folder_path, source_eml_path, eml_path, messages
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                restore_order_id,
+                order_number,
+                buyer_name,
+                buyer_email,
+                shipping_address,
+                pet_name,
+                now_iso,
+                now_iso,
+                now_iso,
+                str(target_folder.resolve()),
+                source_eml_path,
+                eml_path,
+                json.dumps(conv_messages),
+            ),
+        )
+        # list_orders joins items; seed one placeholder item so the order is visible.
+        cur.execute(
+            """
+            INSERT INTO items (
+                id, order_id, item_index, quantity, price,
+                custom_1, custom_2, custom_3, custom_4, custom_5, custom_6,
+                item_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                restore_order_id,
+                0,
+                1, "",
+                pet_name, None, None, None, None, None,
+                "active",
+            ),
+        )
+        refs = _collect_processed_refs_for_restore(conv_messages, source_eml_path, eml_path)
+        if refs:
+            _persist_processed_refs(refs)
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        # Non-partial guarantee: move folder back to archive on DB failure.
+        try:
+            target_folder_resolved = target_folder.resolve()
+            source_parent = source_folder.parent
+            source_parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target_folder_resolved), str(source_folder))
+        except Exception as move_back_exc:
+            print(
+                f"[ORDER_RESTORE_ROLLBACK_MOVE_FAIL] from_path={target_folder} "
+                f"to_path={source_folder} error={move_back_exc}"
+            )
+        raise HTTPException(status_code=500, detail=f"Restore failed: {exc}")
+    finally:
+        conn.close()
+
+    print(
+        f"[ORDER_RESTORED] order_id={restore_order_id} "
+        f"from_path={source_folder} to_path={target_folder}"
+    )
+    return {"success": True, "order_id": restore_order_id}
 
 
 @router.delete("/orders/{order_id}")

@@ -348,11 +348,14 @@ def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
             existing_values.add(norm)
             counter += 1
 
-    # ── Deduplication by normalised value ─────────────────────────────────────
+    # ── Deduplication by (source, normalised value) ───────────────────────────
+    # A billing-block name and a shipping-block name are structurally distinct
+    # even when the text is identical, so they must survive as separate
+    # candidates so scoring can prefer the shipping-source one.
     seen_norm: dict = {}
     candidates: List[Candidate] = []
     for cand in raw_candidates:
-        key = _normalize_name(cand.value)
+        key = (getattr(cand, "source", ""), _normalize_name(cand.value))
         if key not in seen_norm:
             seen_norm[key] = cand
             candidates.append(cand)
@@ -405,7 +408,9 @@ def extract_shipping_address(segments: List[Segment]) -> List[Candidate]:
                 start=first_seg.start,
                 end=last_seg.end,
                 segment_id=first_seg.id,
-                extractor="address_block_with_recipient",
+                # Source-qualified so billing vs shipping produce distinct
+                # learning signatures and role-based replay can distinguish them.
+                extractor=f"{source}_address_block_with_recipient",
                 source=source,
             )
             _attach_context(cand, first_seg.text, 0, len(first_seg.text))
@@ -426,7 +431,7 @@ def extract_shipping_address(segments: List[Segment]) -> List[Candidate]:
             start=first_seg.start,
             end=last_seg.end,
             segment_id=first_seg.id,
-            extractor="address_block_street_forward",
+            extractor=f"{source}_address_block_street_forward",
             source=source,
         )
         _attach_context(cand, first_seg.text, 0, len(first_seg.text))

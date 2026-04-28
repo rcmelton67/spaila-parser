@@ -20,6 +20,27 @@ def test_order_number_explicit_label_outranks_nearby_quantity():
     assert "explicit_order_label(+12.0)" in decision.provenance["signals"]
 
 
+def test_shipping_source_candidate_outranks_billing_source_candidate():
+    """When billing and shipping blocks are both present, the decision should
+    be the shipping block, not the billing block."""
+    clean_text = (
+        "Billing address\n"
+        "123 Main St\n"
+        "Austin, TX 78701\n"
+        "Shipping address\n"
+        "456 Oak Ave\n"
+        "Denver, CO 80202\n"
+    )
+    segs = segment(clean_text)
+    candidates = extract_shipping_address(segs)
+    scored = score_shipping_address(candidates, segs)
+    decision = decide_shipping_address(scored)
+
+    assert decision is not None
+    assert "456 Oak Ave" in decision.value, "shipping-block address must win"
+    assert "123 Main St" not in decision.value, "billing-block address must not win"
+
+
 def test_shipping_block_stops_at_section_labels_and_keeps_recipient_line():
     clean_text = (
         "Shipping address\n"

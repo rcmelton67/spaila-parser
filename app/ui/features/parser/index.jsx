@@ -1514,7 +1514,7 @@ export default function App({ onCreated }) {
         </section>
 
         <aside className="panel fields-panel">
-          <div className="panel-title">Parsed Fields</div>
+          <div className="panel-title">Detected Fields</div>
           <div className="fields-list">
             {meta.gift_message ? (
               <div className="personalization-box">

@@ -10,13 +10,57 @@ import os
 import sys
 import tempfile
 import time
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 
 # Absolute path anchored to this file's location — never relative to CWD.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIDENCE_STORE_PATH = os.path.join(_HERE, "confidence_store.json")
 
 CONFIDENCE_PROMOTION_THRESHOLD = 4
+
+# ---------------------------------------------------------------------------
+# Quarantine rules — signatures that MAY accumulate streaks for diagnostics
+# but are BLOCKED from earning autopromote regardless of streak length.
+#
+# Rules are field-aware: an empty set blocks the signature for ALL fields;
+# a non-empty set blocks only those listed fields (all others may promote).
+# This prevents over-broad quarantine from stopping legitimate promotion of
+# core fields like price.
+# ---------------------------------------------------------------------------
+_QUARANTINE_RULES: Dict[str, Set[str]] = {
+    # Generic number-in-body — no semantic anchor, cannot reliably identify field
+    "number_regex|none|body":     set(),
+    "number_regex|none|order":    set(),
+    "number_regex|none|header":   set(),
+    "number_regex|none|shipping": set(),
+    "number_regex|none|pricing":  set(),
+    "number_regex|none|buyer":    set(),
+    # price|pricing IS a valid signature for price but must never promote
+    # non-price fields (e.g. a numeric price value mistaken for order_number).
+    "number_regex|price|pricing": {"order_number", "quantity", "buyer_name",
+                                   "buyer_email", "order_date", "ship_by",
+                                   "shipping_address"},
+    # Generic "from" body context for order_number
+    "number_regex|from|body":     set(),
+    # Shipping label context incorrectly captured as buyer_name
+    "address_label_name|none|shipping": set(),
+}
+
+
+def _is_quarantined(extraction_signature: str, field: str = "") -> bool:
+    """Return True when this signature is blocked from promotion for *field*.
+
+    If *field* is omitted or the rule's blocked-fields set is empty, the
+    signature is blocked for every field.
+    """
+    rule = _QUARANTINE_RULES.get(extraction_signature)
+    if rule is None:
+        return False
+    # Empty set → blocked for all fields
+    if not rule:
+        return True
+    # Non-empty set → blocked only for the listed fields
+    return bool(field) and field in rule
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +172,23 @@ def update_streak(
     _save(store)
 
     streak = record["streak_count"]
-    eligible = (streak >= CONFIDENCE_PROMOTION_THRESHOLD)
-    promoted  = eligible
+    quarantined = _is_quarantined(extraction_signature, field)
+    eligible = (streak >= CONFIDENCE_PROMOTION_THRESHOLD) and not quarantined
+    promoted = eligible
+
+    if quarantined:
+        print(
+            f"[CONF_STORE_QUARANTINE] sig={extraction_signature!r} field={field}"
+            f" streak={streak} — blocked from autopromote (generic/invalid signature)",
+            file=sys.stderr, flush=True,
+        )
 
     print(
         f"CONF_PROMOTION_CHECK {{"
         f" field: {field},"
         f" streak: {streak},"
         f" eligible: {eligible},"
+        f" quarantined: {quarantined},"
         f" promoted: {promoted} }}",
         file=sys.stderr, flush=True,
     )
@@ -163,7 +216,11 @@ def get_currently_promoted_fields(template_id: str, source_scopes: Dict[str, str
             expected_source = (source_scopes or {}).get("quantity", "")
             if expected_source and record.get("source", "") not in {"", expected_source}:
                 continue
-        if record.get("streak_count", 0) >= CONFIDENCE_PROMOTION_THRESHOLD:
+        sig = record.get("extraction_signature", "")
+        if (
+            record.get("streak_count", 0) >= CONFIDENCE_PROMOTION_THRESHOLD
+            and not _is_quarantined(sig, field)
+        ):
             promoted.add(field)
     return frozenset(promoted)
 
