@@ -29,6 +29,71 @@ const _ORDER_FIELD_KEYS = Object.keys(_ORDER_FIELD_META).map((key) => ({
   ...(_ORDER_FIELD_META[key]),
 }));
 const REQUIRED_ORDER_FIELD_KEYS = new Set(["order_number", "buyer_name", "ship_by"]);
+const MONTH_NAME_TO_NUMBER = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function toDateInputValue(value) {
+  const raw = normalizeFieldValue(value);
+  if (!raw) return "";
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return raw;
+
+  const numericMatch = raw.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+  if (numericMatch) {
+    const month = Number(numericMatch[1]);
+    const day = Number(numericMatch[2]);
+    const rawYear = numericMatch[3];
+    const year = rawYear
+      ? Number(rawYear.length === 2 ? `20${rawYear}` : rawYear)
+      : new Date().getFullYear();
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${padDatePart(month)}-${padDatePart(day)}`;
+    }
+  }
+
+  const monthNameMatch = raw.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{2,4}))?$/);
+  if (monthNameMatch) {
+    const month = MONTH_NAME_TO_NUMBER[monthNameMatch[1].toLowerCase()];
+    const day = Number(monthNameMatch[2]);
+    const rawYear = monthNameMatch[3];
+    const year = rawYear
+      ? Number(rawYear.length === 2 ? `20${rawYear}` : rawYear)
+      : new Date().getFullYear();
+    if (month && day >= 1 && day <= 31) {
+      return `${year}-${padDatePart(month)}-${padDatePart(day)}`;
+    }
+  }
+
+  return "";
+}
 
 // Metadata for per-item fields.
 const _ITEM_FIELD_KEYS = [
@@ -1089,6 +1154,8 @@ function FieldRow({
       ? "suggested-state"
       : "";
   const isEditable = typeof onManualChange === "function";
+  const isDatePickerField = fieldKey === "ship_by";
+  const inputValue = isDatePickerField ? toDateInputValue(effectiveValue) : effectiveValue;
 
   const lineCount = displayValue ? displayValue.split("\n").length : 1;
   const addressFieldRef = React.useRef(null);
@@ -1152,9 +1219,9 @@ function FieldRow({
       ) : (
         <input
           id={`field-${fieldKey}`}
-          className={`field-input ${inputState}`}
-          type="text"
-          value={effectiveValue}
+          className={`field-input ${isDatePickerField ? "field-date-input" : ""} ${inputState}`}
+          type={isDatePickerField ? "date" : "text"}
+          value={inputValue}
           placeholder={required ? "Required" : "(empty)"}
           readOnly={!isEditable}
           onClick={(event) => {
@@ -1164,6 +1231,7 @@ function FieldRow({
           onFocus={() => onSelect(decision, fieldKey)}
           onChange={(event) => onManualChange?.(fieldKey, event.target.value)}
           aria-required={required || undefined}
+          title={isDatePickerField && effectiveValue && !inputValue ? `Current value: ${effectiveValue}` : undefined}
         />
       )}
       <div className="compact-actions">
@@ -1379,6 +1447,7 @@ export default function App({
     loading: false,
     quantity: 1,
     items: [emptyItem()],
+    trustReport: null,
   });
   const [flags, setFlags] = React.useState({});
   const [meta, setMeta] = React.useState({});
@@ -1844,6 +1913,7 @@ export default function App({
         subject: result.subject || "",
         decisions: result.decisions || [],
         filePath: result.filePath || "",
+        trustReport: result.trust_report || null,
         error: "",
         loading: false,
         quantity: nextItemState.quantity,
@@ -1915,6 +1985,7 @@ export default function App({
       loading,
       quantity: 1,
       items: [emptyItem()],
+      trustReport: null,
     });
   }, [clearSelection]);
 
@@ -2447,6 +2518,50 @@ export default function App({
     [_displayEmail.length, _emailTrimOffset, attentionHighlights, highlights]
   );
   const isOpeningSelectedEmail = Boolean(selectedFilePath) && !state.filePath && !state.error;
+  const trustReport = state.trustReport || null;
+  const trustSummary = trustReport?.summary || {};
+  const trustFields = trustReport?.fields || {};
+  const trustFieldCount = Object.keys(trustFields).length;
+  const trustSafetyFailedCount = Number(trustSummary.safety_failed_field_count || 0);
+  const trustReportArtifactPath = String(trustReport?.artifact_path || "").trim();
+  const trustReportJson = trustReport ? JSON.stringify(trustReport, null, 2) : "";
+
+  const copyTrustReport = React.useCallback(async () => {
+    if (!trustReportJson) return;
+    try {
+      await navigator.clipboard.writeText(trustReportJson);
+      setCreateToast("Trust report copied");
+    } catch (error) {
+      console.error("COPY_TRUST_REPORT_FAILED", error);
+      setCreateToast("Could not copy trust report");
+    }
+  }, [trustReportJson]);
+
+  const openTrustReportArtifact = React.useCallback(async () => {
+    if (!trustReportArtifactPath) return;
+    try {
+      const result = await window.parserApp?.openFile?.({ filePath: trustReportArtifactPath });
+      if (!result?.ok) {
+        setCreateToast(result?.error || "Could not open trust report");
+      }
+    } catch (error) {
+      console.error("OPEN_TRUST_REPORT_FAILED", error);
+      setCreateToast("Could not open trust report");
+    }
+  }, [trustReportArtifactPath]);
+
+  const openTrustReportFolder = React.useCallback(async () => {
+    if (!trustReportArtifactPath) return;
+    try {
+      const result = await window.parserApp?.openFolder?.(trustReportArtifactPath);
+      if (!result?.ok) {
+        setCreateToast(result?.error || "Could not open trust report folder");
+      }
+    } catch (error) {
+      console.error("OPEN_TRUST_REPORT_FOLDER_FAILED", error);
+      setCreateToast("Could not open trust report folder");
+    }
+  }, [trustReportArtifactPath]);
 
   return (
     <div className="app-shell">
@@ -2730,6 +2845,55 @@ export default function App({
                   .map((field) => requiredFieldLabels[field] || field)
                   .join(", ")}
               </div>
+            ) : null}
+
+            {trustReport ? (
+              <details className="trust-report-panel">
+                <summary>
+                  <span>Trust Report</span>
+                  <span className={trustSafetyFailedCount ? "trust-report-badge warning" : "trust-report-badge"}>
+                    {trustSafetyFailedCount ? `${trustSafetyFailedCount} safety flags` : "Ready"}
+                  </span>
+                </summary>
+                <div className="trust-report-grid">
+                  <div>
+                    <span className="trust-report-label">Parse run</span>
+                    <code>{trustReport.parse_run_id || "n/a"}</code>
+                  </div>
+                  <div>
+                    <span className="trust-report-label">Fields</span>
+                    <strong>{trustFieldCount}</strong>
+                  </div>
+                  <div>
+                    <span className="trust-report-label">Assigned</span>
+                    <strong>{trustSummary.assigned_count ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="trust-report-label">Suggested</span>
+                    <strong>{trustSummary.suggested_count ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="trust-report-label">Blocked candidates</span>
+                    <strong>{trustSummary.blocked_candidate_count ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="trust-report-label">Schema</span>
+                    <strong>{trustReport.schema_version ?? "n/a"}</strong>
+                  </div>
+                </div>
+                <div className="trust-report-path" title={trustReportArtifactPath || "No artifact path"}>
+                  {trustReportArtifactPath || "No artifact file was written for this parse."}
+                </div>
+                <div className="trust-report-actions">
+                  <button type="button" onClick={copyTrustReport}>Copy JSON</button>
+                  <button type="button" onClick={openTrustReportArtifact} disabled={!trustReportArtifactPath}>
+                    Open JSON
+                  </button>
+                  <button type="button" onClick={openTrustReportFolder} disabled={!trustReportArtifactPath}>
+                    Open Folder
+                  </button>
+                </div>
+              </details>
             ) : null}
 
             <button

@@ -1,0 +1,19 @@
+From: marketplace@example.test
+To: seller@example.com
+Subject: Marketplace order 7001
+Date: Wed, 15 Apr 2026 11:00:00 -0500
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Marketplace notification
+Order #7001
+Placed on Apr 15, 2026
+Dispatch by Apr 21
+Product: Memorial Plaque
+Quantity: 2
+Item price: $72.25
+Buyer email: taylor.morgan@example.com
+Shipping address
+Taylor Morgan
+500 Lake View Dr
+Madison, WI 53703

@@ -1,0 +1,10 @@
+[
+  { "field": "quantity", "value": "2" },
+  { "field": "price", "value": "72.25" },
+  { "field": "order_number", "value": "7001" },
+  { "field": "order_date", "value": "April 15, 2026" },
+  { "field": "buyer_email", "value": "taylor.morgan@example.com" },
+  { "field": "ship_by", "value": "Apr 21" },
+  { "field": "buyer_name", "value": "Taylor Morgan" },
+  { "field": "shipping_address", "value": "500 Lake View Dr\nMadison, WI 53703" }
+]

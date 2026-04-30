@@ -11,7 +11,6 @@ import {
   loadViewConfig, saveViewConfig, SEARCH_FIELD_GROUPS,
   FIELD_DEFS,
   loadDateConfig, saveDateConfig, formatDate,
-  loadArchiveConfig, saveArchiveConfig,
   loadEmailTemplates, saveEmailTemplates, DEFAULT_EMAIL_TEMPLATES, EMAIL_VARIABLE_KEYS,
   evalEmailCondition,
   loadShopConfig, saveShopConfig, DEFAULT_SAVE_FOLDER,
@@ -27,20 +26,37 @@ function swapItems(arr, i, j) {
 }
 
 const TABS = [
+  { id: "general",   label: "General"     },
+  { kind: "divider", label: "Account & Helper" },
+  { id: "account",   label: "Account"     },
+  { id: "helper",    label: "Helper"      },
+  { kind: "divider", label: "Orders"      },
   { id: "orders",    label: "Orders"      },
-  { id: "parser",    label: "Parser"      },
-  { id: "emails",    label: "Emails"      },
-  { id: "status",    label: "Status"      },
-  { id: "pricing",   label: "Pricing"     },
+  { id: "parser",    label: "Order Processing" },
+  { id: "learning",  label: "Learning"    },
+  { kind: "divider", label: "Display & Rules" },
   { id: "view",      label: "Search / Sort" },
   { id: "dates",     label: "Dates"       },
-  { id: "archive",   label: "Archive"     },
+  { id: "status",    label: "Status"      },
+  { id: "pricing",   label: "Pricing"     },
+  { kind: "divider", label: "Output & Email" },
   { id: "printing",  label: "Printing"    },
   { id: "documents", label: "Docs"        },
-  { id: "general",   label: "General"     },
-  { id: "learning",  label: "Learning"    },
-  { id: "advanced",  label: "Advanced"    },
+  { id: "emails",    label: "Emails"      },
+  { kind: "divider", label: "Data"        },
+  { id: "data",      label: "Data"        },
 ];
+
+function isAbsoluteLocalPath(value) {
+  const raw = String(value || "").trim();
+  return /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\\\");
+}
+
+function localFileSrc(filePath) {
+  const raw = String(filePath || "").trim();
+  if (!raw || !isAbsoluteLocalPath(raw)) return "";
+  return `file:///${raw.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+}
 
 /* ── icons ─────────────────────────────────────────────────────────────── */
 function EyeIcon({ visible }) {
@@ -476,11 +492,14 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
   function renderSection(title, sectionKeys, sectionSet) {
     return (
       <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
-        <div style={{ minWidth: "560px" }}>
+        <div style={{ minWidth: "420px" }}>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: "#374151", margin: "0 0 6px 2px" }}>
+          {title}
+        </div>
         {/* Section header */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "150px 1fr 100px 44px 52px",
+          gridTemplateColumns: "1fr 100px 44px 52px",
           gap: "0 8px",
           padding: "5px 10px",
           background: "#f3f4f6",
@@ -489,9 +508,6 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
           fontSize: "11px", fontWeight: 600, color: "#6b7280",
           letterSpacing: "0.05em", textTransform: "uppercase", alignItems: "center",
         }}>
-          <span style={{ color: "#374151", textTransform: "none", fontSize: "11px", fontWeight: 700, letterSpacing: 0 }}>
-            {title}
-          </span>
           <span>Display name</span>
           <span style={{ textAlign: "center" }}>Visible</span>
           <span></span>
@@ -510,7 +526,7 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
                 key={key}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "150px 1fr 100px 44px 52px",
+                  gridTemplateColumns: "1fr 100px 44px 52px",
                   gap: "0 8px",
                   padding: "8px 10px",
                   alignItems: "center",
@@ -518,11 +534,6 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
                   borderBottom: i < sectionKeys.length - 1 ? "1px solid #f3f4f6" : "none",
                 }}
               >
-                {/* System key */}
-                <div style={{ fontSize: "12px", color: "#9ca3af", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {key}
-                </div>
-
                 {/* Label — editable, shared with all tabs */}
                 <input
                   type="text"
@@ -633,6 +644,20 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
     setPriceList((prev) => prev.filter((r) => r.id !== id));
   }
 
+  function duplicateRow(id) {
+    setPriceList((prev) => {
+      const index = prev.findIndex((r) => r.id === id);
+      if (index < 0) return prev;
+      const copy = {
+        ...prev[index],
+        id: Math.random().toString(36).slice(2),
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      return next;
+    });
+  }
+
   function update(id, field, value) {
     setPriceList((prev) => prev.map((r) => r.id === id ? { ...r, [field]: value } : r));
   }
@@ -662,10 +687,10 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
         </div>
       ) : (
         <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
-          <div style={{ minWidth: "460px" }}>
+          <div style={{ minWidth: "560px" }}>
           {/* Header */}
           <div style={{
-            display: "grid", gridTemplateColumns: "100px 1fr 54px 60px",
+            display: "grid", gridTemplateColumns: "100px 1fr 54px 126px",
             gap: "0 10px", padding: "5px 10px",
             background: "#f3f4f6", borderRadius: "6px 6px 0 0",
             borderBottom: "1px solid #e5e7eb",
@@ -675,7 +700,7 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
             <span>Price</span>
             <span>{typeLabel}</span>
             <span style={{ textAlign: "center" }}>Color</span>
-            <span></span>
+            <span style={{ textAlign: "center" }}>Actions</span>
           </div>
 
           {/* Rows */}
@@ -699,7 +724,7 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
                 <div
                   key={row.id}
                   style={{
-                    display: "grid", gridTemplateColumns: "100px 1fr 54px 60px",
+                    display: "grid", gridTemplateColumns: "100px 1fr 54px 126px",
                     gap: "0 10px", padding: "8px 10px", alignItems: "center",
                     background: rowBg,
                     borderBottom: i < priceList.length - 1 ? "1px solid rgba(0,0,0,0.08)" : "none",
@@ -744,11 +769,20 @@ function PricingTab({ priceList, setPriceList, typeLabel }) {
                   </div>
 
                   {/* Delete */}
-                  <div style={{ textAlign: "center" }}>
+                  <div style={{ display: "flex", justifyContent: "center", gap: "5px" }}>
+                    <button
+                      onClick={() => duplicateRow(row.id)}
+                      style={{
+                        padding: "3px 8px", fontSize: "11px", borderRadius: "5px",
+                        border: isDark ? "1px solid rgba(255,255,255,0.35)" : "1px solid rgba(0,0,0,0.18)",
+                        background: isDark ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.7)",
+                        cursor: "pointer", color: textColor,
+                      }}
+                    >Duplicate</button>
                     <button
                       onClick={() => del(row.id)}
                       style={{
-                        padding: "3px 10px", fontSize: "11px", borderRadius: "5px",
+                        padding: "3px 8px", fontSize: "11px", borderRadius: "5px",
                         border: isDark ? "1px solid rgba(255,255,255,0.35)" : "1px solid rgba(0,0,0,0.18)",
                         background: isDark ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.7)",
                         cursor: "pointer", color: textColor,
@@ -1114,30 +1148,6 @@ function ViewTab({ config, setConfig, fields }) {
         </div>
       </div>
 
-      <div style={divider} />
-
-      {/* ── Visibility ── */}
-      <div style={sectionStyle}>
-        <span style={headStyle}>Visibility</span>
-        {[
-          { key: "showCompleted",    label: "Show completed orders",      desc: "Include completed/archived orders in the Active tab" },
-          { key: "showInventoryTab", label: 'Show "Inventory Needed" tab', desc: "Surface orders missing personalization fields" },
-          { key: "groupMultiItem",   label: "Group multi-item orders",    desc: "Collapse multiple rows into one (coming soon)" },
-        ].map(({ key, label, desc }) => (
-          <div key={key} style={{ marginBottom: "12px" }}>
-            <div style={rowStyle}>
-              <input id={`vis_${key}`} type="checkbox" style={checkStyle}
-                checked={!!config[key]} disabled={key === "groupMultiItem"}
-                onChange={(e) => setFlag(key, e.target.checked)} />
-              <label htmlFor={`vis_${key}`} style={{ ...labelStyle, opacity: key === "groupMultiItem" ? 0.5 : 1 }}>
-                {label}
-                {key === "groupMultiItem" && <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "6px" }}>coming soon</span>}
-              </label>
-            </div>
-            <p style={{ ...mutedStyle, marginLeft: "23px" }}>{desc}</p>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1247,11 +1257,11 @@ function newTemplateId() {
   return "tpl_" + Math.random().toString(36).slice(2, 10);
 }
 
-function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfig }) {
+function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfig, activeEmailSubtab = "sending", setActiveEmailSubtab = () => {} }) {
   const [editingId, setEditingId] = React.useState(null);
   const [smtpState, setSmtpState] = React.useState({ testing: false, message: "", error: "" });
+  const [imapState, setImapState] = React.useState({ testing: false, message: "", error: "" });
   const [smtpProvider, setSmtpProvider] = React.useState("other");
-  const [activeEmailSubtab, setActiveEmailSubtab] = React.useState("sending");
 
   // Track last-focused subject/body field so variable pills know where to insert
   const focusRef = React.useRef({ field: null, el: null, start: 0, end: 0 });
@@ -1505,6 +1515,28 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
     }
   }
 
+  async function handleTestImap() {
+    setImapState({ testing: true, message: "", error: "" });
+    try {
+      const result = await window.parserApp?.testImapConnection?.({
+        config: {
+          host: shopConfig?.imapHost || "",
+          port: shopConfig?.imapPort || "993",
+          username: shopConfig?.imapUsername || "",
+          password: shopConfig?.imapPassword || "",
+          useSsl: shopConfig?.imapUseSsl !== false,
+        },
+      });
+      if (result?.ok) {
+        setImapState({ testing: false, message: result.message || "IMAP receiving connection successful.", error: "" });
+      } else {
+        setImapState({ testing: false, message: "", error: result?.error || "Unable to connect — check IMAP settings or network" });
+      }
+    } catch (error) {
+      setImapState({ testing: false, message: "", error: error?.message || "Unable to connect — check IMAP settings or network" });
+    }
+  }
+
   const providerHelp = {
     gmail: {
       title: "Gmail Setup",
@@ -1609,7 +1641,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {[
-          { id: "sending", label: "Sending" },
+          { id: "sending", label: "Send / Receive" },
           { id: "templates", label: "Templates" },
           { id: "storage", label: "Storage" },
         ].map((tab) => (
@@ -1639,12 +1671,136 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
         borderRadius: "10px", padding: "14px 18px", marginBottom: "16px",
       }}>
         <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: 8 }}>
-          Email Sending Setup
+          Email Send / Receive Setup
         </div>
         <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.6, marginBottom: 12 }}>
-          To send emails from Spaila, enter your email provider's SMTP details below.
+          To receive customer replies, enter your inbox IMAP settings. To send emails from Spaila, enter your SMTP settings.
           <br />
-          Most providers require an App Password instead of your normal password.
+          Most providers require an App Password instead of your normal email password.
+        </div>
+        <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 12px 10px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 6 }}>
+            Receiving Mail (IMAP)
+          </div>
+          <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.6, marginBottom: 10 }}>
+            IMAP lets Spaila read incoming customer replies from your mailbox. Use your provider's IMAP host, usually port 993 with SSL enabled.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+            <label>
+              <span style={labelStyle}>IMAP Host</span>
+              <input
+                value={shopConfig?.imapHost ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapHost: e.target.value }))}
+                placeholder="imap.yourprovider.com"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Port</span>
+              <input
+                type="number"
+                value={shopConfig?.imapPort ?? "993"}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPort: e.target.value }))}
+                placeholder="993"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Username</span>
+              <input
+                value={shopConfig?.imapUsername ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUsername: e.target.value }))}
+                placeholder="you@example.com"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label>
+              <span style={labelStyle}>IMAP Password</span>
+              <input
+                type="password"
+                value={shopConfig?.imapPassword ?? ""}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPassword: e.target.value }))}
+                placeholder="Mailbox password or app password"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+              <input
+                type="checkbox"
+                checked={shopConfig?.imapUseSsl !== false}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUseSsl: e.target.checked }))}
+              />
+              <span style={{ fontSize: 12, color: "#374151" }}>Use SSL</span>
+            </label>
+            <label>
+              <span style={labelStyle}>Fetch Limit</span>
+              <input
+                type="number"
+                value={shopConfig?.imapFetchLimit ?? "20"}
+                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapFetchLimit: e.target.value }))}
+                placeholder="20"
+                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+              />
+            </label>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={handleTestImap}
+              disabled={imapState.testing}
+              style={{ padding: "6px 12px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+            >
+              {imapState.testing ? "Testing..." : "Test Receiving Connection"}
+            </button>
+            {imapState.message ? <div style={{ fontSize: 12, color: "#047857" }}>✔ Receiving connection successful</div> : null}
+            {imapState.error ? <div style={{ fontSize: 12, color: "#b91c1c" }}>{imapState.error}</div> : null}
+          </div>
+          <div style={{ marginTop: 14, borderTop: "1px solid #eef2f7", paddingTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 10 }}>
+              Background Sync
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              <label>
+                <span style={labelStyle}>Polling Interval (seconds)</span>
+                <input
+                  type="number"
+                  min="60"
+                  max="3600"
+                  value={shopConfig?.mailPollingIntervalSeconds ?? 300}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailPollingIntervalSeconds: e.target.value }))}
+                  placeholder="300"
+                  style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
+                />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 20 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailBackgroundSyncEnabled !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailBackgroundSyncEnabled: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Enable background sync</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailStartupAutoConnect !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailStartupAutoConnect: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Auto-connect on app startup</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={shopConfig?.mailReconnectEnabled !== false}
+                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailReconnectEnabled: e.target.checked }))}
+                />
+                <span style={{ fontSize: 12, color: "#374151" }}>Reconnect after disconnect</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 8 }}>
+          Sending Mail (SMTP)
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           {[
@@ -1759,112 +1915,6 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             />
           </label>
         </div>
-        <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 12px 10px" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 10 }}>
-            Inbox (IMAP)
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-            <label>
-              <span style={labelStyle}>IMAP Host</span>
-              <input
-                value={shopConfig?.imapHost ?? ""}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapHost: e.target.value }))}
-                placeholder="imap.yourprovider.com"
-                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-              />
-            </label>
-            <label>
-              <span style={labelStyle}>IMAP Port</span>
-              <input
-                type="number"
-                value={shopConfig?.imapPort ?? "993"}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPort: e.target.value }))}
-                placeholder="993"
-                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-              />
-            </label>
-            <label>
-              <span style={labelStyle}>IMAP Username</span>
-              <input
-                value={shopConfig?.imapUsername ?? ""}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUsername: e.target.value }))}
-                placeholder="you@example.com"
-                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-              />
-            </label>
-            <label>
-              <span style={labelStyle}>IMAP Password</span>
-              <input
-                type="password"
-                value={shopConfig?.imapPassword ?? ""}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapPassword: e.target.value }))}
-                placeholder="Mailbox password"
-                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-              />
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
-              <input
-                type="checkbox"
-                checked={shopConfig?.imapUseSsl !== false}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapUseSsl: e.target.checked }))}
-              />
-              <span style={{ fontSize: 12, color: "#374151" }}>Use SSL</span>
-            </label>
-            <label>
-              <span style={labelStyle}>Fetch Limit</span>
-              <input
-                type="number"
-                value={shopConfig?.imapFetchLimit ?? "20"}
-                onChange={(e) => setShopConfig?.((prev) => ({ ...prev, imapFetchLimit: e.target.value }))}
-                placeholder="20"
-                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-              />
-            </label>
-          </div>
-          <div style={{ marginTop: 14, borderTop: "1px solid #eef2f7", paddingTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 10 }}>
-              Background Sync
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-              <label>
-                <span style={labelStyle}>Polling Interval (seconds)</span>
-                <input
-                  type="number"
-                  min="60"
-                  max="3600"
-                  value={shopConfig?.mailPollingIntervalSeconds ?? 300}
-                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailPollingIntervalSeconds: e.target.value }))}
-                  placeholder="300"
-                  style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-                />
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 20 }}>
-                <input
-                  type="checkbox"
-                  checked={shopConfig?.mailBackgroundSyncEnabled !== false}
-                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailBackgroundSyncEnabled: e.target.checked }))}
-                />
-                <span style={{ fontSize: 12, color: "#374151" }}>Enable background sync</span>
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={shopConfig?.mailStartupAutoConnect !== false}
-                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailStartupAutoConnect: e.target.checked }))}
-                />
-                <span style={{ fontSize: 12, color: "#374151" }}>Auto-connect on app startup</span>
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={shopConfig?.mailReconnectEnabled !== false}
-                  onChange={(e) => setShopConfig?.((prev) => ({ ...prev, mailReconnectEnabled: e.target.checked }))}
-                />
-                <span style={{ fontSize: 12, color: "#374151" }}>Reconnect after disconnect</span>
-              </label>
-            </div>
-          </div>
-        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -1872,7 +1922,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             disabled={smtpState.testing}
             style={{ padding: "6px 12px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
           >
-            {smtpState.testing ? "Testing..." : "Test Connection"}
+            {smtpState.testing ? "Testing..." : "Test Sending Connection"}
           </button>
           {smtpState.message ? <div style={{ fontSize: 12, color: "#047857" }}>✔ Connection successful</div> : null}
           {smtpState.error ? <div style={{ fontSize: 12, color: "#b91c1c" }}>{smtpState.error}</div> : null}
@@ -2076,8 +2126,17 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
                     onSelect={(e) => onFieldSelect("body", e.target)}
                     onClick={(e) => onFieldSelect("body", e.target)}
                     onKeyUp={(e) => onFieldSelect("body", e.target)}
-                    rows={7}
-                    style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+                    rows={18}
+                    style={{
+                      ...inputStyle,
+                      width: "100%",
+                      maxWidth: "none",
+                      minHeight: "420px",
+                      height: "min(58vh, 680px)",
+                      resize: "vertical",
+                      fontFamily: "inherit",
+                      lineHeight: 1.5,
+                    }}
                   />
                 </div>
 
@@ -2126,9 +2185,9 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
               type="number"
               min="1"
               max="365"
-              value={shopConfig?.sentMailRetentionDays ?? 60}
+              value={shopConfig?.sentMailRetentionDays ?? 30}
               onChange={(e) => {
-                const val = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 60));
+                const val = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 30));
                 setShopConfig?.((prev) => ({ ...prev, sentMailRetentionDays: val }));
               }}
               style={{
@@ -2149,7 +2208,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
             </span>
           </div>
           <div style={{ marginTop: 10, fontSize: 11, color: "#9ca3af" }}>
-            Default: 60 days. Minimum: 1 day. Maximum: 365 days.
+            Default: 30 days. Minimum: 1 day. Maximum: 365 days.
           </div>
 
           <div style={{ marginTop: 20, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
@@ -2197,25 +2256,43 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
   );
 }
 
-/* ── ArchiveTab ─────────────────────────────────────────────────────────── */
-function ArchiveTab({ config, setConfig }) {
-  const set = (patch) => setConfig((p) => ({ ...p, ...patch }));
+/* ── DataTab ────────────────────────────────────────────────────────────── */
+function DataTab({ shopConfig, setShopConfig }) {
+  const setShop = (patch) => setShopConfig((p) => ({ ...p, ...patch }));
+  const [workspaceState, setWorkspaceState] = React.useState(null);
+  const [loadingCounts, setLoadingCounts] = React.useState(false);
+  const [countError, setCountError] = React.useState("");
 
-  async function pickFolder() {
+  async function pickOrderArchiveRoot() {
     const result = await window.parserApp?.pickFolder?.();
     if (result && !result.canceled && result.path) {
-      set({ archiveFolder: result.path });
+      setShop({ orderArchiveRoot: result.path });
     }
   }
+
+  const loadWorkspaceInfo = React.useCallback(async () => {
+    setLoadingCounts(true);
+    try {
+      const nextState = await window.parserApp?.getWorkspaceState?.({ bucket: "Inbox", relativePath: "" });
+      setWorkspaceState(nextState || null);
+      setCountError("");
+    } catch (nextError) {
+      setCountError(nextError.message || "Could not load data folder counts.");
+    } finally {
+      setLoadingCounts(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadWorkspaceInfo();
+  }, [loadWorkspaceInfo]);
+
+  const getBucketCount = (key) => workspaceState?.buckets?.find((item) => item.key === key)?.count ?? 0;
 
   const sectionStyle = { marginBottom: "28px" };
   const headStyle    = { fontSize: "13px", fontWeight: 700, color: "#111", display: "block", marginBottom: "6px" };
   const mutedStyle   = { fontSize: "12px", color: "#6b7280", marginTop: "2px", marginBottom: "10px", lineHeight: 1.5 };
   const rowStyle     = { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" };
-  const selectStyle  = {
-    padding: "5px 8px", border: "1px solid #d1d5db", borderRadius: "5px",
-    fontSize: "13px", background: "#fff", cursor: "pointer",
-  };
   const numInput = {
     width: "64px", padding: "5px 8px", border: "1px solid #d1d5db",
     borderRadius: "5px", fontSize: "13px", textAlign: "center",
@@ -2230,78 +2307,166 @@ function ArchiveTab({ config, setConfig }) {
     padding: "5px 14px", border: "1px solid #d1d5db", borderRadius: "5px",
     background: "#fff", fontSize: "12px", cursor: "pointer", flexShrink: 0,
   };
+  const countCardStyle = {
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "12px 14px",
+    background: "#fff",
+    maxWidth: 220,
+  };
 
   return (
     <div style={{ padding: "4px 0" }}>
 
-      {/* Enable toggle */}
+      <div style={{ ...sectionStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <span style={headStyle}>Data folder counts</span>
+          <p style={mutedStyle}>Archive and backup totals are informational and do not change order data.</p>
+          {countError ? (
+            <div style={{ fontSize: "12px", color: "#b91c1c", marginTop: "6px" }}>{countError}</div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={loadWorkspaceInfo}
+          disabled={loadingCounts}
+          style={{
+            border: "1px solid #d1d5db",
+            background: "#fff",
+            color: "#374151",
+            borderRadius: 8,
+            padding: "6px 10px",
+            cursor: loadingCounts ? "default" : "pointer",
+            opacity: loadingCounts ? 0.7 : 1,
+            fontSize: 12,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          {loadingCounts ? "Refreshing..." : "Refresh Counts"}
+        </button>
+      </div>
+
+      {/* Activity archive */}
       <div style={sectionStyle}>
-        <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={config.enabled}
-            onChange={(e) => set({ enabled: e.target.checked })}
-            style={{ width: 16, height: 16, cursor: "pointer" }}
-          />
-          <span style={{ fontSize: "13px", fontWeight: 600, color: "#111" }}>
-            Enable auto-archive
-          </span>
+        <span style={headStyle}>Auto-archive orders</span>
+        <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
+          Days of inactivity (last activity)
         </label>
-        <p style={{ ...mutedStyle, marginTop: "6px", marginLeft: "26px" }}>
-          Automatically move completed orders to the archive folder after the specified time.
+        <input
+          type="number"
+          min={1}
+          step={1}
+          placeholder="Disabled"
+          value={shopConfig.autoArchiveDays ?? ""}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            setShop({ autoArchiveDays: v === "" ? null : Math.max(1, Number.parseInt(v, 10) || 1) });
+          }}
+          style={{ ...numInput, width: "160px", textAlign: "left", padding: "8px 11px", borderRadius: "6px" }}
+          onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
+          onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
+        />
+        <p style={mutedStyle}>
+          Leave empty to disable. When set, orders whose last activity is older than this many days are marked archived on load and about every hour. Message history is never removed.
         </p>
       </div>
 
-      {/* Time rule */}
-      <div style={{ ...sectionStyle, opacity: config.enabled ? 1 : 0.45, pointerEvents: config.enabled ? "auto" : "none" }}>
-        <span style={headStyle}>Auto-archive after</span>
+      {/* Order folder archive root */}
+      <div style={sectionStyle}>
+        <span style={headStyle}>Archive folder</span>
+        <p style={mutedStyle}>Choose where archived order folders are stored on your computer.</p>
         <div style={rowStyle}>
-          <input
-            type="number"
-            min={1}
-            max={365}
-            value={config.afterValue}
-            onChange={(e) => set({ afterValue: Math.max(1, parseInt(e.target.value) || 1) })}
-            style={numInput}
-          />
-          <select
-            value={config.afterUnit}
-            onChange={(e) => set({ afterUnit: e.target.value })}
-            style={selectStyle}
-          >
-            <option value="days">Days</option>
-            <option value="weeks">Weeks</option>
-            <option value="months">Months</option>
-          </select>
-          <span style={{ fontSize: "13px", color: "#6b7280" }}>after order date</span>
+          <div style={pathBox} title={shopConfig.orderArchiveRoot || "Default: C:/Spaila/archive"}>
+            {shopConfig.orderArchiveRoot || <span style={{ color: "#9ca3af", fontFamily: "inherit" }}>Default: C:/Spaila/archive</span>}
+          </div>
+          <button type="button" onClick={pickOrderArchiveRoot} style={browseBtn}>Browse…</button>
+          {shopConfig.orderArchiveRoot ? (
+            <button
+              type="button"
+              onClick={() => setShop({ orderArchiveRoot: "" })}
+              style={{ ...browseBtn, color: "#64748b", textDecoration: "underline" }}
+            >Use default</button>
+          ) : null}
         </div>
         <p style={mutedStyle}>
-          {config.afterValue} {config.afterUnit} after order date the order will be moved to the archive folder.
+          Archived order folders keep the year/month/name structure, for example <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>.../archive/2026/april/...</code>. Save settings to sync this path for the backend.
         </p>
+        <div style={countCardStyle}>
+          <div style={{ fontSize: 12, color: "#6b7280" }}>Archive folders</div>
+          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 800, color: "#111827" }}>{getBucketCount("Archive")}</div>
+        </div>
       </div>
 
-      {/* Archive folder */}
-      <div style={{ ...sectionStyle, opacity: config.enabled ? 1 : 0.45, pointerEvents: config.enabled ? "auto" : "none" }}>
-        <span style={headStyle}>Archive folder</span>
-        <p style={mutedStyle}>Choose where archived orders are stored on your computer.</p>
-        <div style={rowStyle}>
-          <div style={pathBox} title={config.archiveFolder || "No folder selected"}>
-            {config.archiveFolder || <span style={{ color: "#9ca3af", fontFamily: "inherit" }}>No folder selected</span>}
+      <div style={sectionStyle}>
+        <span style={headStyle}>Backup save location</span>
+        <p style={mutedStyle}>Files saved with the backup/save button are written to this folder.</p>
+        <div style={{ maxWidth: "480px" }}>
+          <div style={{
+            padding: "8px 11px",
+            border: "1px solid #d1d5db", borderRadius: "6px",
+            fontSize: "13px", color: "#111",
+            background: "#f9fafb", overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap",
+            minWidth: 0,
+          }}>
+            {DEFAULT_SAVE_FOLDER}
           </div>
-          <button onClick={pickFolder} style={browseBtn}>Browse…</button>
-          {config.archiveFolder && (
-            <button
-              onClick={() => set({ archiveFolder: "" })}
-              title="Clear folder"
-              style={{ ...browseBtn, color: "#dc2626", borderColor: "#fca5a5" }}
-            >✕</button>
-          )}
         </div>
-        {config.enabled && !config.archiveFolder && (
-          <p style={{ ...mutedStyle, color: "#dc2626", marginTop: "8px" }}>
-            ⚠ Auto-archive is enabled but no folder is selected.
-          </p>
-        )}
+        <div style={{ ...countCardStyle, marginTop: "12px" }}>
+          <div style={{ fontSize: 12, color: "#6b7280" }}>Backup files</div>
+          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 800, color: "#111827" }}>{getBucketCount("Backup")}</div>
+        </div>
+      </div>
+
+      <div style={sectionStyle}>
+        <span style={headStyle}>Restore from backup</span>
+        <p style={mutedStyle}>
+          Select a <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>.spailabackup</code> file
+          to fully restore all orders and settings. The app will reload automatically.
+          <span style={{ color: "#ef4444", fontWeight: 600 }}> This will overwrite your current data.</span>
+        </p>
+        <button
+          onClick={async () => {
+            const picked = await window.parserApp?.pickFile?.({
+              title: "Select Backup File",
+              filters: [{ name: "Spaila Backup", extensions: ["spailabackup"] }],
+            });
+            if (!picked || picked.canceled) return;
+
+            const result = await window.parserApp?.backupRestore?.({ filePath: picked.path });
+            if (!result?.ok) {
+              alert(`Restore failed: ${result?.error ?? "unknown error"}`);
+              return;
+            }
+
+            try {
+              for (const [key, value] of Object.entries(result.settings || {})) {
+                localStorage.setItem(key, value);
+              }
+            } catch (_) {}
+
+            alert(`Restore complete! Backup from ${result.createdAt ? new Date(result.createdAt).toLocaleString() : "unknown date"}.\n\nThe app will now reload.`);
+            window.location.reload();
+          }}
+          style={{
+            padding: "9px 18px",
+            background: "#dc2626",
+            color: "#fff",
+            border: "none",
+            borderRadius: "7px",
+            fontSize: "13px",
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "7px",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#b91c1c")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "#dc2626")}
+        >
+          Restore from Backup...
+        </button>
       </div>
 
     </div>
@@ -2313,6 +2478,27 @@ function PrintingTab({ columns, config, setConfig }) {
   const rowStyle = { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" };
   const checkStyle = { width: "15px", height: "15px", cursor: "pointer", accentColor: "#2563eb" };
   const labelStyle = { fontSize: "13px", color: "#374151", cursor: "pointer" };
+  const isCardMode = (config.mode || "sheet") === "card";
+  const orderedColumns = React.useMemo(() => {
+    if (!isCardMode) {
+      return columns;
+    }
+    const byKey = new Map(columns.map((column) => [column.key, column]));
+    const seen = new Set();
+    const orderedKeys = Array.isArray(config?.cardOrder)
+      ? config.cardOrder.filter((key) => {
+          if (!byKey.has(key) || seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        })
+      : [];
+    return [
+      ...orderedKeys.map((key) => byKey.get(key)),
+      ...columns.filter((column) => !seen.has(column.key)),
+    ];
+  }, [columns, config?.cardOrder, isCardMode]);
 
   function setVisible(key, value) {
     setConfig((prev) => ({
@@ -2328,6 +2514,42 @@ function PrintingTab({ columns, config, setConfig }) {
     }));
   }
 
+  function setMode(value) {
+    setConfig((prev) => ({
+      ...prev,
+      mode: value === "card" ? "card" : "sheet",
+    }));
+  }
+
+  function moveCardField(key, direction) {
+    setConfig((prev) => {
+      const availableKeys = columns.map((column) => column.key);
+      const available = new Set(availableKeys);
+      const seen = new Set();
+      const order = [
+        ...(Array.isArray(prev?.cardOrder) ? prev.cardOrder : []),
+        ...availableKeys,
+      ].filter((candidate) => {
+        if (!available.has(candidate) || seen.has(candidate)) {
+          return false;
+        }
+        seen.add(candidate);
+        return true;
+      });
+      const index = order.indexOf(key);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= order.length) {
+        return prev;
+      }
+      const nextOrder = [...order];
+      [nextOrder[index], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[index]];
+      return {
+        ...prev,
+        cardOrder: nextOrder,
+      };
+    });
+  }
+
   return (
     <div>
       <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "4px" }}>
@@ -2336,6 +2558,47 @@ function PrintingTab({ columns, config, setConfig }) {
       <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6 }}>
         Choose which columns from the Orders sheet should be included in PDFs and printouts.
         Only fields currently visible on the Orders sheet appear here.
+      </div>
+
+      <div style={{ marginBottom: "22px" }}>
+        <div style={{ fontSize: "13px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
+          Print format
+        </div>
+        <div style={{ display: "flex", gap: "10px" }}>
+          {[
+            { value: "sheet", label: "Orders sheet", desc: "Print the current filtered Orders sheet as rows." },
+            { value: "card", label: "Order cards", desc: "Print filtered orders as cards. Large field sets automatically print one card per page." },
+          ].map((option) => (
+            <label
+              key={option.value}
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "8px",
+                padding: "10px 12px",
+                border: "1px solid",
+                borderColor: (config.mode || "sheet") === option.value ? "#2563eb" : "#e5e7eb",
+                borderRadius: "7px",
+                cursor: "pointer",
+                background: (config.mode || "sheet") === option.value ? "#eff6ff" : "#fff",
+              }}
+            >
+              <input
+                type="radio"
+                name="printMode"
+                value={option.value}
+                checked={(config.mode || "sheet") === option.value}
+                onChange={() => setMode(option.value)}
+                style={{ marginTop: "2px", accentColor: "#2563eb" }}
+              />
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "#111" }}>{option.label}</div>
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>{option.desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
       </div>
 
       <div style={{ marginBottom: "22px" }}>
@@ -2387,7 +2650,7 @@ function PrintingTab({ columns, config, setConfig }) {
       }}>
         <div style={{
           display: "grid",
-          gridTemplateColumns: "1fr 90px 130px",
+          gridTemplateColumns: isCardMode ? "1fr 90px 130px 120px" : "1fr 90px 130px",
           gap: "0 12px",
           padding: "8px 12px",
           background: "#f3f4f6",
@@ -2402,13 +2665,14 @@ function PrintingTab({ columns, config, setConfig }) {
           <span>Display name</span>
           <span style={{ textAlign: "center" }}>Print</span>
           <span style={{ textAlign: "center" }}>Wrap if needed</span>
+          {isCardMode && <span style={{ textAlign: "center" }}>Card order</span>}
         </div>
 
         {columns.length === 0 ? (
           <div style={{ padding: "16px 12px", fontSize: "13px", color: "#6b7280" }}>
             No Orders sheet fields are currently visible.
           </div>
-        ) : columns.map((column, index) => {
+        ) : orderedColumns.map((column, index) => {
           const id = `print_${column.key}`;
           const wrapId = `print_wrap_${column.key}`;
           const isVisible = config?.columns?.[column.key] !== false;
@@ -2418,12 +2682,12 @@ function PrintingTab({ columns, config, setConfig }) {
               key={column.key}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 90px 130px",
+                gridTemplateColumns: isCardMode ? "1fr 90px 130px 120px" : "1fr 90px 130px",
                 gap: "0 12px",
                 padding: "10px 12px",
                 alignItems: "center",
                 background: index % 2 === 0 ? "#fff" : "#fafafa",
-                borderBottom: index < columns.length - 1 ? "1px solid #f3f4f6" : "none",
+                borderBottom: index < orderedColumns.length - 1 ? "1px solid #f3f4f6" : "none",
               }}
             >
               <label htmlFor={id} style={labelStyle}>{column.label}</label>
@@ -2449,6 +2713,44 @@ function PrintingTab({ columns, config, setConfig }) {
                   />
                 </div>
               </div>
+              {isCardMode && (
+                <div style={{ display: "flex", justifyContent: "center", gap: "4px" }}>
+                  <button
+                    type="button"
+                    onClick={() => moveCardField(column.key, -1)}
+                    disabled={index === 0}
+                    style={{
+                      border: "1px solid #d1d5db",
+                      borderRadius: "5px",
+                      background: index === 0 ? "#f3f4f6" : "#fff",
+                      color: index === 0 ? "#9ca3af" : "#374151",
+                      cursor: index === 0 ? "default" : "pointer",
+                      padding: "3px 8px",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveCardField(column.key, 1)}
+                    disabled={index === orderedColumns.length - 1}
+                    style={{
+                      border: "1px solid #d1d5db",
+                      borderRadius: "5px",
+                      background: index === orderedColumns.length - 1 ? "#f3f4f6" : "#fff",
+                      color: index === orderedColumns.length - 1 ? "#9ca3af" : "#374151",
+                      cursor: index === orderedColumns.length - 1 ? "default" : "pointer",
+                      padding: "3px 8px",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Down
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -2462,7 +2764,12 @@ function DocumentsTab({ config, setConfig }) {
   async function pickFile(field, nameField, title, filters) {
     const result = await window.parserApp?.pickFile?.({ title, filters });
     if (!result || result.canceled) return;
-    setConfig((prev) => ({ ...prev, [field]: result.path, [nameField]: result.name }));
+    const copied = await window.parserApp?.copyDocumentToDocs?.({ filePath: result.path });
+    if (!copied?.ok) {
+      alert(`Could not save document to C:\\Spaila\\Docs: ${copied?.error || "unknown error"}`);
+      return;
+    }
+    setConfig((prev) => ({ ...prev, [field]: copied.path, [nameField]: copied.name }));
   }
 
   function clearFile(field, nameField) {
@@ -2543,6 +2850,9 @@ function DocumentsTab({ config, setConfig }) {
     <div>
       <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
         Docs
+      </div>
+      <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6 }}>
+        Selected PDFs are copied into <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>C:\Spaila\Docs</code>. Spaila always uses the saved copy from that folder.
       </div>
 
       {/* Letterhead */}
@@ -2635,32 +2945,6 @@ function DocumentsTab({ config, setConfig }) {
           </div>
         )}
 
-        {/* Show toolbar button toggle */}
-        <div style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
-          <label style={{ position: "relative", display: "inline-block", width: 36, height: 20, flexShrink: 0 }}>
-            <input
-              type="checkbox"
-              checked={config.showThankYouHeaderBtn !== false}
-              onChange={(e) => setConfig((prev) => ({ ...prev, showThankYouHeaderBtn: e.target.checked }))}
-              style={{ opacity: 0, width: 0, height: 0, position: "absolute" }}
-            />
-            <span style={{
-              position: "absolute", inset: 0, borderRadius: 999, cursor: "pointer",
-              background: config.showThankYouHeaderBtn !== false ? "#2563eb" : "#d1d5db",
-              transition: "background 0.2s",
-            }}>
-              <span style={{
-                position: "absolute", top: 3,
-                left: config.showThankYouHeaderBtn !== false ? 19 : 3,
-                width: 14, height: 14, borderRadius: "50%", background: "#fff",
-                transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-              }} />
-            </span>
-          </label>
-          <span style={{ fontSize: "13px", color: "#374151" }}>
-            Show 📄 thank you letter button in toolbar
-          </span>
-        </div>
       </div>
 
       {/* Gift message text position */}
@@ -2722,85 +3006,7 @@ function DocumentsTab({ config, setConfig }) {
       </div>
 
       <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.6 }}>
-        Only PDF files are supported. Files are referenced by path — moving or renaming them will require re-selecting.
-      </div>
-    </div>
-  );
-}
-
-function AdvancedTab() {
-  const [workspaceState, setWorkspaceState] = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState("");
-
-  const loadWorkspaceInfo = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const nextState = await window.parserApp?.getWorkspaceState?.({ bucket: "Inbox", relativePath: "" });
-      setWorkspaceState(nextState || null);
-      setError("");
-    } catch (nextError) {
-      setError(nextError.message || "Could not load workspace details.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    loadWorkspaceInfo();
-  }, [loadWorkspaceInfo]);
-
-  const buckets = workspaceState?.buckets || [];
-
-  return (
-    <div>
-      <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: 4 }}>
-        Workspace Details
-      </div>
-      <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: 16, lineHeight: 1.6 }}>
-        Reference counts for Spaila folders. These are informational and do not change learning or order data.
-      </div>
-      <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>Folder Counts</div>
-            <div style={{ marginTop: 3, fontSize: 12, color: "#6b7280" }}>
-              Inbox, Orders, Archive, and Backup totals.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={loadWorkspaceInfo}
-            disabled={loading}
-            style={{
-              border: "1px solid #d1d5db",
-              background: "#fff",
-              color: "#374151",
-              borderRadius: 8,
-              padding: "6px 10px",
-              cursor: loading ? "default" : "pointer",
-              opacity: loading ? 0.7 : 1,
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-        {error ? (
-          <div style={{ marginTop: 12, fontSize: 12, color: "#b91c1c" }}>{error}</div>
-        ) : null}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginTop: 14 }}>
-          {["Inbox", "Orders", "Archive", "Backup"].map((key) => {
-            const bucketInfo = buckets.find((item) => item.key === key);
-            return (
-              <div key={key} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, background: "#fff" }}>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>{key}</div>
-                <div style={{ marginTop: 6, fontSize: 24, fontWeight: 800, color: "#111827" }}>{bucketInfo?.count ?? 0}</div>
-              </div>
-            );
-          })}
-        </div>
+        Only PDF files are supported. After selection, Spaila stores and uses the copied file in C:\Spaila\Docs.
       </div>
     </div>
   );
@@ -2969,7 +3175,7 @@ function LearningTab() {
 
 /* ── main component ─────────────────────────────────────────────────────── */
 export default function SettingsPage({ onOrders, onWorkspace, onSettings, initialTab = "orders", ordersTab, onOrdersTabChange, columnOrder: externalColumnOrder, onColumnOrderChange }) {
-  const [activeTab, setActiveTab] = React.useState(initialTab || "orders");
+  const [activeTab, setActiveTab] = React.useState(initialTab === "archive" ? "data" : initialTab || "orders");
   const [fields, setFields] = React.useState(() => loadFieldConfig());
   const [localOrder, setLocalOrder] = React.useState(() => externalColumnOrder ? [...externalColumnOrder] : defaultColumnOrder());
   const [localParserOrder, setLocalParserOrder] = React.useState(() => loadParserFieldOrder());
@@ -2977,16 +3183,16 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
   const [localStatusConfig, setLocalStatusConfig] = React.useState(() => loadStatusConfig());
   const [localViewConfig, setLocalViewConfig] = React.useState(() => loadViewConfig());
   const [localDateConfig, setLocalDateConfig] = React.useState(() => loadDateConfig());
-  const [localArchiveConfig, setLocalArchiveConfig] = React.useState(() => loadArchiveConfig());
   const [localEmailTemplates, setLocalEmailTemplates] = React.useState(() => loadEmailTemplates());
   const [localShopConfig, setLocalShopConfig] = React.useState(() => loadShopConfig());
   const [localDocumentsConfig, setLocalDocumentsConfig] = React.useState(() => loadDocumentsConfig());
   const [localPrintConfig, setLocalPrintConfig] = React.useState(() => loadPrintConfig());
+  const [activeEmailSubtab, setActiveEmailSubtab] = React.useState("sending");
   const [saveFeedback, setSaveFeedback] = React.useState(false);
   const saveFeedbackTimerRef = React.useRef(null);
 
   React.useEffect(() => {
-    setActiveTab(initialTab || "orders");
+    setActiveTab(initialTab === "archive" ? "data" : initialTab || "orders");
   }, [initialTab]);
 
   React.useEffect(() => {
@@ -3012,13 +3218,35 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     saveStatusConfig(localStatusConfig);
     saveViewConfig(localViewConfig);
     saveDateConfig(localDateConfig);
-    saveArchiveConfig(localArchiveConfig);
     saveEmailTemplates(localEmailTemplates);
     setSaveFeedback(true);
     saveFeedbackTimerRef.current = window.setTimeout(() => {
       setSaveFeedback(false);
       onOrders?.();
     }, 650);
+  }
+
+  async function pickShopLogo() {
+    const result = await window.parserApp?.pickFile?.({
+      title: "Select Shop Logo",
+      filters: [
+        { name: "Image Files", extensions: ["png", "jpg", "jpeg", "webp"] },
+      ],
+    });
+    if (!result || result.canceled) return;
+    const copied = await window.parserApp?.copyDocumentToDocs?.({
+      filePath: result.path,
+      allowedExtensions: ["png", "jpg", "jpeg", "webp"],
+    });
+    if (!copied?.ok) {
+      alert(`Could not save logo to C:\\Spaila\\Docs: ${copied?.error || "unknown error"}`);
+      return;
+    }
+    setLocalShopConfig((prev) => ({
+      ...prev,
+      shopLogoPath: copied.path,
+      shopLogoName: copied.name,
+    }));
   }
 
   /** Update the shared label for a field key. Both tabs write here. */
@@ -3086,6 +3314,8 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     });
   }, [fields, localOrder, localStatusConfig]);
 
+  const useWideSettingsContent = false;
+  const useExpandedMainContent = activeTab === "emails";
   const contentShellStyle = {
     display: "flex",
     alignItems: "flex-start",
@@ -3093,8 +3323,9 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     minWidth: 0,
   };
   const mainColumnStyle = {
-    flex: "0 1 860px",
-    maxWidth: "860px",
+    flex: useExpandedMainContent ? "1 1 auto" : "0 1 860px",
+    maxWidth: useExpandedMainContent ? "none" : "860px",
+    width: useExpandedMainContent ? "100%" : undefined,
     minWidth: 0,
   };
   const helperPanelStyle = {
@@ -3111,6 +3342,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     background: "#f9fafb",
     padding: "18px 18px 16px",
   };
+  const sidebarLogoSrc = localFileSrc(localShopConfig.shopLogoPath);
 
   return (
     <div style={{
@@ -3128,6 +3360,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
         documentsConfig={localDocumentsConfig}
         activeTab={ordersTab}
         selectedNav="settings"
+        showCompletedTab={localViewConfig.showCompleted !== false}
         onSelectTab={(nextTab) => {
           onOrdersTabChange?.(nextTab);
           onOrders?.(nextTab);
@@ -3167,24 +3400,72 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
               }}>
                 Settings
               </div>
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  style={{
-                    display: "block", width: "100%", textAlign: "left",
-                    padding: "10px 18px", border: "none",
-                    background: activeTab === tab.id ? "#eff6ff" : "none",
-                    color: activeTab === tab.id ? "#2563eb" : "#374151",
-                    fontWeight: activeTab === tab.id ? 600 : 400,
-                    fontSize: "13px", cursor: "pointer",
-                    borderLeft: activeTab === tab.id ? "3px solid #2563eb" : "3px solid transparent",
-                  }}
-                  onMouseEnter={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "#f3f4f6"; }}
-                  onMouseLeave={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "none"; }}
-                >
-                  {tab.label}
-                </button>
+              {TABS.map((tab, index) => (
+                tab.kind === "divider" ? (
+                  <div
+                    key={`divider-${tab.label}-${index}`}
+                    style={{
+                      margin: "14px 18px 6px",
+                      paddingTop: "12px",
+                      borderTop: "1px solid #e5e7eb",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                    }}
+                  >
+                    {tab.label}
+                  </div>
+                ) : (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    style={{
+                      display: "flex", width: "100%", textAlign: "left",
+                      alignItems: "center", gap: "9px",
+                      padding: "10px 18px", border: "none",
+                      background: activeTab === tab.id ? "#eff6ff" : "none",
+                      color: activeTab === tab.id ? "#2563eb" : "#374151",
+                      fontWeight: activeTab === tab.id ? 600 : 400,
+                      fontSize: "13px", cursor: "pointer",
+                      borderLeft: activeTab === tab.id ? "3px solid #2563eb" : "3px solid transparent",
+                    }}
+                    onMouseEnter={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "#f3f4f6"; }}
+                    onMouseLeave={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "none"; }}
+                  >
+                    {tab.id === "account" ? (
+                      <span
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: "50%",
+                          border: "1px solid #e2e8f0",
+                          background: sidebarLogoSrc ? "#fff" : "#e5e7eb",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          overflow: "hidden",
+                          flexShrink: 0,
+                        }}
+                        title={localShopConfig.shopLogoName || localShopConfig.shopLogoPath || "Shop logo"}
+                      >
+                        {sidebarLogoSrc ? (
+                          <img
+                            src={sidebarLogoSrc}
+                            alt=""
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8" }}>
+                            {String(localShopConfig.shopName || "S").trim().slice(0, 1).toUpperCase() || "S"}
+                          </span>
+                        )}
+                      </span>
+                    ) : null}
+                    <span>{tab.label}</span>
+                  </button>
+                )
               ))}
             </div>
 
@@ -3227,74 +3508,33 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                   </div>
                 </div>
 
-                <div style={{ marginTop: "28px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
-                    Auto-archive orders
-                  </div>
+                <div style={{ marginBottom: "24px" }}>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                    Days of inactivity (last activity)
+                    Shop logo
                   </label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    placeholder="Disabled"
-                    value={localShopConfig.autoArchiveDays ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value.trim();
-                      setLocalShopConfig((p) => ({
-                        ...p,
-                        autoArchiveDays: v === "" ? null : Math.max(1, Number.parseInt(v, 10) || 1),
-                      }));
-                    }}
-                    style={{
-                      maxWidth: "200px",
-                      padding: "9px 12px",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "6px",
-                      fontSize: "14px",
-                      color: "#111",
-                      outline: "none",
-                      boxSizing: "border-box",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
-                    onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
-                  />
-                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "520px", lineHeight: 1.55 }}>
-                    Leave empty to disable. When set, orders whose last activity (messages or edits) is older than this many days are marked archived on load and about every hour. Message history is never removed.
-                  </div>
-                </div>
-
-                <div style={{ marginTop: "28px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
-                    Archived order folders (disk)
-                  </div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                    Archive root
-                  </label>
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", maxWidth: "560px" }}>
-                    <div style={{
-                      flex: "1 1 220px",
-                      minWidth: 0,
-                      padding: "8px 11px",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "6px",
-                      fontSize: "13px",
-                      color: "#111",
-                      background: "#f9fafb",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }} title={localShopConfig.orderArchiveRoot || "Default: C:/Spaila/archive"}>
-                      {localShopConfig.orderArchiveRoot || <span style={{ color: "#9ca3af" }}>Default: C:/Spaila/archive</span>}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", maxWidth: "620px" }}>
+                    <div
+                      title={localShopConfig.shopLogoPath || "No logo selected"}
+                      style={{
+                        flex: "1 1 260px",
+                        minWidth: 0,
+                        padding: "8px 11px",
+                        border: "1px solid #d1d5db",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                        color: localShopConfig.shopLogoName ? "#111" : "#9ca3af",
+                        background: "#f9fafb",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        fontStyle: localShopConfig.shopLogoName ? "normal" : "italic",
+                      }}
+                    >
+                      {localShopConfig.shopLogoName || "No logo selected"}
                     </div>
                     <button
                       type="button"
-                      onClick={async () => {
-                        const result = await window.parserApp?.pickFolder?.();
-                        if (!result || result.canceled || !result.path) return;
-                        setLocalShopConfig((p) => ({ ...p, orderArchiveRoot: result.path }));
-                      }}
+                      onClick={pickShopLogo}
                       style={{
                         padding: "8px 14px",
                         border: "1px solid #cbd5e1",
@@ -3305,11 +3545,11 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                         fontWeight: 600,
                         color: "#1e293b",
                       }}
-                    >Browse…</button>
-                    {localShopConfig.orderArchiveRoot ? (
+                    >Browse...</button>
+                    {localShopConfig.shopLogoPath ? (
                       <button
                         type="button"
-                        onClick={() => setLocalShopConfig((p) => ({ ...p, orderArchiveRoot: "" }))}
+                        onClick={() => setLocalShopConfig((prev) => ({ ...prev, shopLogoPath: "", shopLogoName: "" }))}
                         style={{
                           padding: "8px 12px",
                           border: "none",
@@ -3320,91 +3560,107 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           color: "#64748b",
                           textDecoration: "underline",
                         }}
-                      >Use default</button>
+                      >Remove</button>
                     ) : null}
                   </div>
-                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "520px", lineHeight: 1.55 }}>
-                    When an order is archived, its folder under Orders is moved here, keeping year/month/name structure (e.g. <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>…/archive/2026/april/…</code>). Save settings to sync this path for the backend.
+                  {localShopConfig.shopLogoPath ? (
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#9ca3af", wordBreak: "break-all" }}>
+                      {localShopConfig.shopLogoPath}
+                    </div>
+                  ) : null}
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "620px", lineHeight: 1.55 }}>
+                    Selected logos are copied into <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>C:\Spaila\Docs</code>. Spaila stores and uses the copied file. A transparent .png logo usually looks best.
                   </div>
                 </div>
 
-                {/* Save location */}
                 <div style={{ marginTop: "28px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
-                    Save Location
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
+                    App visibility
                   </div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                    Save folder
-                  </label>
-                  <div style={{ maxWidth: "480px" }}>
-                    <div style={{
-                      padding: "8px 11px",
-                      border: "1px solid #d1d5db", borderRadius: "6px",
-                      fontSize: "13px", color: "#111",
-                      background: "#f9fafb", overflow: "hidden",
-                      textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      minWidth: 0,
-                    }}>
-                      {DEFAULT_SAVE_FOLDER}
+                  <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "12px", lineHeight: 1.55, maxWidth: "560px" }}>
+                    Control which order views appear during normal daily use.
+                  </div>
+                  {[
+                    {
+                      key: "showCompleted",
+                      label: "Show completed orders",
+                      desc: "Show the Completed tab in the main navigation.",
+                    },
+                    {
+                      key: "showInventoryTab",
+                      label: 'Show "Inventory Needed" tab',
+                      desc: "Show a separate tab for orders missing personalization or production details.",
+                    },
+                  ].map((option) => {
+                    const id = `general_${option.key}`;
+                    return (
+                      <div key={option.key} style={{ marginBottom: "12px" }}>
+                        <label htmlFor={id} style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                          <input
+                            id={id}
+                            type="checkbox"
+                            checked={!!localViewConfig[option.key]}
+                            onChange={(e) => setLocalViewConfig((prev) => ({ ...prev, [option.key]: e.target.checked }))}
+                            style={{ width: "15px", height: "15px", cursor: "pointer", accentColor: "#2563eb" }}
+                          />
+                          <span style={{ fontSize: "13px", color: "#374151" }}>{option.label}</span>
+                        </label>
+                        <div style={{ marginLeft: "23px", marginTop: "3px", fontSize: "11px", color: "#9ca3af", lineHeight: 1.4 }}>
+                          {option.desc}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ marginBottom: "12px" }}>
+                    <label htmlFor="general_showThankYouHeaderBtn" style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                      <input
+                        id="general_showThankYouHeaderBtn"
+                        type="checkbox"
+                        checked={localDocumentsConfig.showThankYouHeaderBtn !== false}
+                        onChange={(e) => setLocalDocumentsConfig((prev) => ({ ...prev, showThankYouHeaderBtn: e.target.checked }))}
+                        style={{ width: "15px", height: "15px", cursor: "pointer", accentColor: "#2563eb" }}
+                      />
+                      <span style={{ fontSize: "13px", color: "#374151" }}>Show thank-you letter shortcut</span>
+                    </label>
+                    <div style={{ marginLeft: "23px", marginTop: "3px", fontSize: "11px", color: "#9ca3af", lineHeight: 1.4 }}>
+                      Show the header button that opens the saved thank-you letter for printing.
                     </div>
                   </div>
-                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af" }}>
-                    Files saved via the save button will always be written to this folder.
-                  </div>
                 </div>
 
-                {/* Restore from backup */}
-                <div style={{ marginTop: "28px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "6px" }}>
-                    Restore from Backup
+              </div>
+            )}
+
+            {activeTab === "account" && (
+              <div>
+                <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "8px" }}>
+                  Account
+                </div>
+                <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6, maxWidth: "620px" }}>
+                  This placeholder is reserved for user profile, account, subscription, unsubscribe, and account-management settings.
+                </div>
+                <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: "18px 20px", maxWidth: "640px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 6 }}>Coming soon</div>
+                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                    Future account tools can live here, including profile details, subscription status, billing links, unsubscribe controls, account email, and license/account health.
                   </div>
-                  <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "14px", lineHeight: 1.6 }}>
-                    Select a <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>.spailabackup</code> file
-                    to fully restore all orders and settings. The app will reload automatically.
-                    <span style={{ color: "#ef4444", fontWeight: 600 }}> This will overwrite your current data.</span>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "helper" && (
+              <div>
+                <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "8px" }}>
+                  Helper
+                </div>
+                <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6, maxWidth: "620px" }}>
+                  This placeholder is reserved for helper-specific settings and preferences.
+                </div>
+                <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: "18px 20px", maxWidth: "640px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 6 }}>Coming soon</div>
+                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                    Future helper options can live here, such as assistant behavior, guided workflows, help visibility, automation preferences, and support-related settings.
                   </div>
-                  <button
-                    onClick={async () => {
-                      const picked = await window.parserApp?.pickFile?.({
-                        title: "Select Backup File",
-                        filters: [{ name: "Spaila Backup", extensions: ["spailabackup"] }],
-                      });
-                      if (!picked || picked.canceled) return;
-
-                      const result = await window.parserApp?.backupRestore?.({ filePath: picked.path });
-                      if (!result?.ok) {
-                        alert(`Restore failed: ${result?.error ?? "unknown error"}`);
-                        return;
-                      }
-
-                      // Restore localStorage settings
-                      try {
-                        for (const [key, value] of Object.entries(result.settings || {})) {
-                          localStorage.setItem(key, value);
-                        }
-                      } catch (_) {}
-
-                      alert(`Restore complete! Backup from ${result.createdAt ? new Date(result.createdAt).toLocaleString() : "unknown date"}.\n\nThe app will now reload.`);
-                      window.location.reload();
-                    }}
-                    style={{
-                      padding: "9px 18px",
-                      background: "#dc2626",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "7px",
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "7px",
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "#b91c1c")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "#dc2626")}
-                  >
-                    ↩ Restore from Backup…
-                  </button>
                 </div>
               </div>
             )}
@@ -3476,10 +3732,10 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
               />
             )}
 
-            {activeTab === "archive" && (
-              <ArchiveTab
-                config={localArchiveConfig}
-                setConfig={setLocalArchiveConfig}
+            {activeTab === "data" && (
+              <DataTab
+                shopConfig={localShopConfig}
+                setShopConfig={setLocalShopConfig}
               />
             )}
 
@@ -3490,6 +3746,8 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                 labelMap={Object.fromEntries(fields.map((f) => [f.key, f.label]))}
                 shopConfig={localShopConfig}
                 setShopConfig={setLocalShopConfig}
+                activeEmailSubtab={activeEmailSubtab}
+                setActiveEmailSubtab={setActiveEmailSubtab}
               />
             )}
 
@@ -3508,10 +3766,6 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
               />
             )}
 
-            {activeTab === "advanced" && (
-              <AdvancedTab />
-            )}
-
             {activeTab === "learning" && (
               <LearningTab />
             )}
@@ -3520,7 +3774,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
               <>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "4px" }}>
                   <div style={{ fontSize: "15px", fontWeight: 700, color: "#111" }}>
-                    Parser Fields
+                    Order Processing Fields
                   </div>
                   <button
                     onClick={() => setLocalParserOrder(defaultParserFieldOrder())}
@@ -3535,8 +3789,8 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                   </button>
                 </div>
                 <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6 }}>
-                  Control which fields are shown and in what order while parsing.
-                  Use ↑ ↓ to reorder within each section. Renaming also updates the orders sheet everywhere.
+                  Choose which details Spaila shows while converting emails into orders, and set the order they appear in.
+                  Renaming also updates matching labels elsewhere in the app.
                 </div>
                 <ParserFieldTable
                   fields={fields}
@@ -3550,19 +3804,597 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
 
                 </div>
 
+                {!useWideSettingsContent ? (
                 <aside style={helperPanelStyle}>
                   <div style={helperCardStyle}>
                     <div style={{ fontSize: "12px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
-                      Reserved Panel
+                      {activeTab === "printing" ? "Printing Help" : activeTab === "orders" ? "Orders Help" : activeTab === "emails" ? "Email Help" : activeTab === "status" ? "Status Help" : activeTab === "pricing" ? "Pricing Help" : activeTab === "view" ? "Search / Sort Help" : activeTab === "dates" ? "Dates Help" : activeTab === "data" ? "Data Help" : activeTab === "documents" ? "Docs Help" : activeTab === "learning" ? "Learning Help" : activeTab === "account" ? "Account Help" : activeTab === "helper" ? "Helper Help" : activeTab === "general" ? "General Help" : activeTab === "parser" ? "Order Processing Help" : "Reserved Panel"}
                     </div>
-                    <div style={{ fontSize: "14px", fontWeight: 600, color: "#111827", marginBottom: "6px" }}>
-                      Tips and guidance will appear here
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6 }}>
-                      This space is intentionally kept open for future help text, examples, and section-specific guidance.
-                    </div>
+                    {activeTab === "printing" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Printing orders
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Choose <strong>Orders sheet</strong> to print the current searched/filtered order rows as a table. This keeps the sheet column order, wrapping, and cell colors.
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "10px" }}>
+                          Choose <strong>Order cards</strong> to print the same searched/filtered orders as packing-style cards. Cards do not use cell colors; the order number/name pill uses the pricing color from Settings → Pricing.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Field selection
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use <strong>Print</strong> to include or remove fields from both print modes. Use <strong>Wrap if needed</strong> for sheet columns that should break onto multiple lines.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Card mode
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            When Order cards is selected, use <strong>Up</strong> and <strong>Down</strong> to set the card field order. Portrait prints two stacked cards per page; landscape prints left and right cards.
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "8px" }}>
+                            If too many fields are selected to fit cleanly, Spaila automatically switches cards to one order per page.
+                          </div>
+                        </div>
+                      </>
+                    ) : activeTab === "orders" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Orders sheet layout
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          This tab controls the columns shown on the main Orders sheet. Use the eye button to show or hide a field, and rename fields here when you want the label updated across the app.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Column order
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use the up/down controls here, or drag columns directly in the Orders sheet header. <strong>Reset to Default Layout</strong> restores the standard order.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Colors and highlights
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Palette coloring uses your Settings → Pricing rules to tint enabled fields. Highlight color is field-specific and can be used for important columns that should stand out.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Status and Order Info
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            The Status column can be enabled and renamed here. Order Info is a computed column for badges like platform, gift, messages, and multi-item orders.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so the Orders sheet, Printing tab, and related views use the updated layout.
+                        </div>
+                      </>
+                    ) : activeTab === "status" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Order statuses
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Statuses help you track where each order is in your workflow, such as new, in progress, ready to ship, or completed.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Show the status column
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Turn the status column on when you want a status badge on the Orders sheet. The column label is the header users will see.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Create useful states
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Add only the states you actually use day to day. Short labels work best because they display as compact badges.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Colors and order
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Choose colors that are easy to scan. Use the arrows to put your most common statuses first in the order picker.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so the Orders sheet uses your updated statuses.
+                        </div>
+                      </>
+                    ) : activeTab === "pricing" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Price-based order types
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Pricing rules let Spaila identify an order type from the order price. When a price matches, Spaila fills the <strong>Type</strong> field and uses the selected color in the Orders sheet.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Price rules
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Enter the price point you want to match, then enter the Type value that should appear for orders with that price.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Multiple order types
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Add as many rows as needed for different prices or product types. Use <strong>Duplicate</strong> when a new rule should start from an existing price, type, or color.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Colors
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Choose colors that make order types easy to scan. These colors can also be used by print cards for the order header pill.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so new and refreshed orders use the updated pricing rules.
+                        </div>
+                      </>
+                    ) : activeTab === "view" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Search and sort behavior
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          These settings control how the Orders sheet searches, sorts, and shows extra workflow views.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Searchable fields
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Turn on the fields users actually search by, such as order number, buyer, dates, or shipping details. Fewer fields can make search results cleaner.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Smart vs exact
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            <strong>Smart</strong> is best for everyday searching because partial text can match. <strong>Exact</strong> is stricter and works best when users search complete values.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Default sort
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Pick the field and direction the Orders sheet should use when it opens or refreshes. Date descending usually keeps newer orders near the top.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so the Orders sheet uses the updated search and sort behavior.
+                        </div>
+                      </>
+                    ) : activeTab === "dates" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Date display
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Date settings control how order dates and ship-by dates appear in the Orders sheet and related views.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Choose a format
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            <strong>Short</strong> is easiest to read, <strong>Numeric</strong> is compact, and <strong>ISO</strong> is best when you want sortable year-month-day style dates.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Showing the year
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Turn on <strong>Always show year</strong> when you work across multiple years or want printed sheets to be unambiguous.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Searching dates
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            <strong>Match multiple date formats in search</strong> lets users type dates naturally, like "apr 13", even if the table displays dates in another format.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Preview before saving
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use the preview examples to confirm the format looks right before saving.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so order dates use the updated display settings.
+                        </div>
+                      </>
+                    ) : activeTab === "data" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Data settings
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Data settings control archive behavior, backup save location, restore tools, and archive/backup folder counts.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Auto-archive orders
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            <strong>Days of inactivity</strong> archives orders whose messages or edits have been quiet for that many days. Leave it blank to disable this rule.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Archive folder
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Pick where archived order folders should live. Archived folders keep the year, month, and order-name structure so they remain easy to browse later.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Backup and restore
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            The backup save location shows where backup files are written. The Backup count card shows how many backup files are currently stored. Use restore only when you intend to replace current orders and settings with a backup file.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Folder counts
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Archive and Backup counts are informational. Use <strong>Refresh Counts</strong> when you want to recheck what is currently stored on disk.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so archive settings and data paths are stored.
+                        </div>
+                      </>
+                    ) : activeTab === "documents" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Document templates
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Docs settings connect Spaila to the PDF files you use for printed customer documents. Selected PDFs are copied into <strong>C:\Spaila\Docs</strong> so Spaila uses its own saved copy.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Gift messages
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Upload a PDF letterhead for gift-message orders. When an order has a gift message, Spaila can print that message on this letterhead.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Print placement
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use the X, Y, width, font size, and color controls to position gift-message text on the PDF. Coordinates are measured in points from the bottom-left of the page.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Thank you letter
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Upload the standard thank-you PDF used for packing inserts. The header shortcut can be shown or hidden from Settings → General.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Saved document copies
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Spaila stores the copied file paths under <strong>C:\Spaila\Docs</strong>. Moving or deleting the original file you selected later will not break Spaila's document settings.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so document paths and display options are stored.
+                        </div>
+                      </>
+                    ) : activeTab === "account" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Account placeholder
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          This section is reserved for user profile and account-management features.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Future profile details
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            User name, business contact details, account email, and profile preferences can be added here later.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Future subscription tools
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Subscription status, plan details, unsubscribe controls, billing links, and license health can live in this tab when available.
+                          </div>
+                        </div>
+                      </>
+                    ) : activeTab === "helper" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Helper placeholder
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          This section is reserved for settings that control Spaila helper behavior.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Future helper preferences
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Guided workflow settings, help visibility, assistant prompts, automation preferences, and support tools can be added here.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          This placeholder does not change current Spaila behavior yet.
+                        </div>
+                      </>
+                    ) : activeTab === "general" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          General app settings
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          General settings control shop identity, shop logo, and app visibility.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Shop identity
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Shop name is used in the app header and window title so users know which workspace they are working in.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Shop logo
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Upload a PNG, JPG, or WebP logo. A transparent .png usually looks best because it blends cleanly into Spaila screens and printed layouts. Spaila copies the selected file into <strong>C:\Spaila\Docs</strong> and stores that copied path for future use.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            App visibility
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use these toggles to decide whether completed orders, the Inventory Needed workflow tab, and the thank-you letter shortcut appear during normal daily use.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so general app behavior uses the updated settings.
+                        </div>
+                      </>
+                    ) : activeTab === "emails" ? (
+                      <>
+                        {activeEmailSubtab === "sending" ? (
+                          <>
+                            <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                              Send and receive setup
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                              Use this tab to connect Spaila to the mailbox you use for customer conversations.
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Receiving mail
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                IMAP is for incoming email. Enter your provider's IMAP host, username, password, and usually port <strong>993</strong> with SSL enabled. Use <strong>Test Receiving Connection</strong> to verify it can open the inbox.
+                              </div>
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Sending mail
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                SMTP is for outgoing email. Pick Gmail, Outlook, or Other, apply defaults when available, then enter your sender name, email address, username, and app password. <strong>Sender Name</strong> is the display name customers see when they receive your email.
+                              </div>
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Sync behavior
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                Background sync checks for new mail on the polling interval. Auto-connect starts the mailbox connection when Spaila opens, and reconnect helps recover from dropped connections.
+                              </div>
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                              Use <strong>Test Receiving Connection</strong> to check IMAP and <strong>Test Sending Connection</strong> to check SMTP, then click <strong>Save</strong> to store changes.
+                            </div>
+                          </>
+                        ) : activeEmailSubtab === "templates" ? (
+                          <>
+                            <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                              Email templates
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                              Templates control the message Spaila prepares when you email a customer from an order.
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Template priority
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                Templates are checked from top to bottom. The first matching template is used, so keep specific templates above the default fallback.
+                              </div>
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Conditions
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                Add a condition when a template should only be used for certain orders. Leave the fallback template with no condition and keep it last.
+                              </div>
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                Variables and attachments
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                Click variable pills to insert order details into the subject or body. Attachment rules let you include images or specific file types when needed.
+                              </div>
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                              Click <strong>Save</strong> after editing templates so new emails use the latest wording.
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                              Email storage
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                              Storage settings control how long Spaila keeps sent-mail records in its own Sent view.
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                What is removed
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                After the retention period, Spaila removes old sent-mail records and sent-copy folders from its own sent-mail storage.
+                              </div>
+                            </div>
+                            <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                                What is kept
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                                Order folders, customer folders, saved orders, and saved order conversation history are not changed by this cleanup setting.
+                              </div>
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                              Choose a retention period that matches how long you want quick access to sent messages, then click <strong>Save</strong>.
+                            </div>
+                          </>
+                        )}
+                      </>
+                    ) : activeTab === "learning" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Parser learning
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          Learning helps Spaila remember field corrections you make during order processing, so similar future emails can be parsed more accurately.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Field-by-field learning
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Each row is tracked separately. Resetting Buyer Name learning, for example, does not reset price, quantity, address, or date learning.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Assignments and rejections
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            <strong>Assignments</strong> are examples where a user taught Spaila the correct value. <strong>Active rejections</strong> are examples Spaila should avoid using for that field.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Confidence
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Confidence starts as tracking and becomes promoted after repeated matching evidence. Promoted learning is trusted more strongly by the parser.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Reset carefully
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use <strong>Reset Field Learning</strong> only when a field keeps learning the wrong pattern. The reset is scoped to that field, but it cannot be undone from this screen.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Use <strong>Refresh</strong> to update the counts after processing or correcting orders.
+                        </div>
+                      </>
+                    ) : activeTab === "parser" ? (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
+                          Email to order conversion
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                          This area controls which order details are shown during the email conversion workflow. It does not change saved orders by itself.
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Display names
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Edit the display name when you want friendlier labels while reviewing converted orders. These labels are shared with related order views.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Visibility and order
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Use the eye button to show or hide a detail during conversion. Use the arrows to put the most important details near the top of each section.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Good workflow
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Keep order number, ship-by date, customer details, quantity, and price easy to review.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
+                          Click <strong>Save</strong> when finished so the conversion screen uses the updated setup.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: "#111827", marginBottom: "6px" }}>
+                          Tips and guidance will appear here
+                        </div>
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6 }}>
+                          This space is intentionally kept open for future help text, examples, and section-specific guidance.
+                        </div>
+                      </>
+                    )}
                   </div>
                 </aside>
+                ) : null}
               </div>
             </div>
           </div>

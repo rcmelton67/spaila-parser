@@ -7,10 +7,11 @@ from .learning.store import CORE_FIELDS, learning_summary, reset_field_learning,
 from .learning.confidence_store import reset_field, reset_field_everywhere, summarize_fields
 from .pipeline import (
     parse_eml,
+    build_buyer_name_confidence_signature,
     build_extraction_signature,
+    build_item_price_confidence_signature,
     build_quantity_signature,
-    build_price_signature,
-    build_shipping_address_signature,
+    build_shipping_address_confidence_signature,
     build_shipping_address_line_learning,
     classify_price_type,
     _price_context_class,
@@ -20,6 +21,7 @@ from .pipeline import (
     _shipping_address_pattern_hints,
     _shipping_address_relative_position,
 )
+from .structural_rules import classify_role, structural_signature
 from .replay.fingerprint import compute_template_family_id
 
 
@@ -73,6 +75,7 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
         "segments": segments,
         "flags": result.get("flags", {}),
         "meta": meta,
+        "trust_report": result.get("trust_report", {}),
     }
 
 
@@ -95,8 +98,9 @@ def _find_context(
 
     def _candidate_context(candidate) -> Dict[str, Any]:
         if field == "price":
-            sig = build_price_signature(candidate, segment_map or {}, result.get("segments", []))
-            return {
+            segments = result.get("segments", [])
+            sig = build_item_price_confidence_signature(candidate, segment_map or {}, segments)
+            context = {
                 "segment_id": candidate.segment_id,
                 "start": candidate.start,
                 "end": candidate.end,
@@ -107,14 +111,26 @@ def _find_context(
                 "candidate_id": candidate.id,
                 "extractor": candidate.extractor,
                 "learned_signature": sig,
-                "price_type": classify_price_type(candidate, result.get("segments", [])),
-                "section_type": _price_section_type(candidate, result.get("segments", [])),
-                "nearby_label": _price_nearby_label(candidate, result.get("segments", [])),
-                "context_class": _price_context_class(candidate, result.get("segments", [])),
-                "relative_position": _price_relative_position(candidate, result.get("segments", [])),
+                "price_type": classify_price_type(candidate, segments),
+                "section_type": _price_section_type(candidate, segments),
+                "nearby_label": _price_nearby_label(candidate, segments),
+                "context_class": _price_context_class(candidate, segments),
+                "relative_position": _price_relative_position(candidate, segments),
             }
+            context["role"] = classify_role(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+            context["structural_signature"] = structural_signature(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+            return context
         if field == "shipping_address":
-            sig = build_shipping_address_signature(candidate, segment_map or {})
+            segments = result.get("segments", [])
+            sig = build_shipping_address_confidence_signature(
+                candidate,
+                segment_map or {},
+                segments,
+                _buyer_name_value(),
+                action.get("start"),
+                action.get("end"),
+                explicit_policy=True,
+            )
             lines = [line for line in (candidate.value or "").splitlines() if line.strip()]
             line_learning = {}
             if isinstance(action.get("start"), int) and isinstance(action.get("end"), int):
@@ -124,7 +140,7 @@ def _find_context(
                     action.get("end"),
                     _buyer_name_value(),
                 )
-            return {
+            context = {
                 "segment_id": candidate.segment_id,
                 "start": candidate.start,
                 "end": candidate.end,
@@ -140,11 +156,22 @@ def _find_context(
                 "pattern_hints": _shipping_address_pattern_hints(candidate.value),
                 **line_learning,
             }
-        if segment_map:
+            context["role"] = classify_role(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+            context["structural_signature"] = structural_signature(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+            return context
+        if field == "buyer_name" and segment_map:
+            sig = build_buyer_name_confidence_signature(
+                candidate,
+                segment_map,
+                result.get("segments", []),
+                [c for c in result.get("candidates", []) if c.field_type == "buyer_name"],
+                explicit_acceptance=True,
+            )
+        elif segment_map:
             sig = build_extraction_signature(candidate, segment_map)
         else:
             sig = candidate.extractor
-        return {
+        context = {
             "segment_id": candidate.segment_id,
             "start": candidate.start,
             "end": candidate.end,
@@ -156,6 +183,9 @@ def _find_context(
             "extractor": candidate.extractor,
             "learned_signature": sig,
         }
+        context["role"] = classify_role(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+        context["structural_signature"] = structural_signature(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
+        return context
 
     if action.get("selected_text"):
         start = action.get("start", 0)
@@ -221,6 +251,8 @@ def _find_context(
                 "extractor": action.get("extractor", ""),
                 "learned_signature": action.get("learned_signature", action.get("extractor", "")),
                 "assignment_source": "manual" if is_manual_assignment else "",
+                "role": action.get("role", ""),
+                "structural_signature": action.get("structural_signature", ""),
             }
         if is_manual_assignment:
             return {
@@ -235,6 +267,8 @@ def _find_context(
                 "extractor": action.get("extractor", "manual_selection"),
                 "learned_signature": action.get("learned_signature", action.get("extractor", "manual_selection")),
                 "assignment_source": "manual",
+                "role": action.get("role", ""),
+                "structural_signature": action.get("structural_signature", ""),
             }
         print(
             f"[ASSIGNMENT_APPLIED] rejected_mismatch field={action.get('field', '')!r} start={start} end={end}",

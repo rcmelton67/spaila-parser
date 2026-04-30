@@ -1,0 +1,29 @@
+{
+  "scenario_id": "quantity_self_healing_stale_assignment",
+  "eml_path": "tests/regression_pack/synthetic/unknown_contamination_9902.eml",
+  "expected_field": "quantity",
+  "expected_value": "1",
+  "seed_assignments": [
+    {
+      "field": "quantity",
+      "value": "4",
+      "source": "",
+      "segment_text": "Promotion: buy 4 or more next time and save",
+      "left_context": "Product Quantity Price",
+      "right_context": "Customer email",
+      "candidate_id": "stale_quantity_0001",
+      "extractor": "number_regex",
+      "learned_signature": "number_regex|none|order_summary",
+      "type": "assign",
+      "active": true
+    }
+  ],
+  "admin_selector": {
+    "operation": "remove_assignment",
+    "field": "quantity",
+    "value": "4",
+    "learned_signature": "number_regex|none|order_summary",
+    "reason": "self-healing stress cleanup",
+    "operator": "regression_audit"
+  }
+}

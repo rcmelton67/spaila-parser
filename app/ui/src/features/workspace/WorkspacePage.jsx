@@ -890,6 +890,176 @@ function doesInboxItemMatchActivityEvent(item, event, orders, orderUpdateLinks) 
   return !Number.isNaN(eventMs) && !Number.isNaN(itemMs) && Math.abs(eventMs - itemMs) <= SAME_REPLY_WINDOW_MS;
 }
 
+function doesOrderMessageMatchActivityEvent(message, event) {
+  if (String(message?.type || message?.direction || "").toLowerCase() !== "inbound") return { matched: false, reason: "" };
+  if (String(message?.inbox_type || "").toLowerCase() !== "order_update") return { matched: false, reason: "" };
+  const eventPreview = normalizeTextForActivityMatch(event?.preview);
+  const messagePreview = normalizeTextForActivityMatch(message?.body || message?.preview_text || message?.preview);
+  if (eventPreview && messagePreview) {
+    const shortPreview = eventPreview.slice(0, Math.min(80, Math.max(24, eventPreview.length)));
+    const shortMessagePreview = messagePreview.slice(0, Math.min(80, Math.max(24, messagePreview.length)));
+    if (messagePreview.includes(shortPreview) || eventPreview.includes(shortMessagePreview)) {
+      return { matched: true, reason: "preview" };
+    }
+  }
+
+  const eventMs = parseMsForMatch(event?.timestamp || event?.created_at);
+  const messageMs = parseMsForMatch(message?.timestamp || message?.received_at || message?.created_at);
+  const SAME_REPLY_WINDOW_MS = 5 * 60 * 1000;
+  if (!Number.isNaN(eventMs) && !Number.isNaN(messageMs) && Math.abs(eventMs - messageMs) <= SAME_REPLY_WINDOW_MS) {
+    return { matched: true, reason: "timestamp" };
+  }
+  return { matched: false, reason: "" };
+}
+
+function findOrderLinkedActivityMessage(event, orders) {
+  if (String(event?.type || "").toLowerCase() !== "order_update") return null;
+  for (const order of orders || []) {
+    if (!doOrdersReferToSameOrder(order, event)) continue;
+    const messages = Array.isArray(order?.messages) ? order.messages : [];
+    for (const message of messages) {
+      const match = doesOrderMessageMatchActivityEvent(message, event);
+      if (match.matched) {
+        return { order, message, reason: match.reason };
+      }
+    }
+  }
+  return null;
+}
+
+function doInboxItemAndOrderMessageRepresentSameEmail(item, message) {
+  const itemEmailId = String(getInboxItemId(item) || "").trim().toLowerCase();
+  const itemImapUid = String(item?.imap_uid || "").trim().toLowerCase();
+  const itemMessageId = normalizeMessageIdForLink(item?.message_id || itemEmailId);
+  const messageEmailId = String(message?.email_id || "").trim().toLowerCase();
+  const messageMessageId = normalizeMessageIdForLink(message?.message_id || message?.id);
+
+  if (itemMessageId && messageMessageId && itemMessageId === messageMessageId) {
+    return { matched: true, reason: "message_id" };
+  }
+  if (itemEmailId && messageMessageId && itemEmailId === messageMessageId) {
+    return { matched: true, reason: "message_id" };
+  }
+  if (itemImapUid && messageEmailId && itemImapUid === messageEmailId) {
+    return { matched: true, reason: "imap_uid" };
+  }
+  if (itemEmailId && messageEmailId && itemEmailId === messageEmailId) {
+    return { matched: true, reason: "email_id" };
+  }
+
+  const itemSender = extractEmailAddress(item?.sender_email || item?.reply_to || item?.sender || item?.from || "").toLowerCase();
+  const messageSender = extractEmailAddress(message?.sender_email || message?.reply_to || message?.sender || message?.from || "").toLowerCase();
+  const itemMs = parseMsForMatch(item?.timestamp || item?.received_at || item?.created_at);
+  const messageMs = parseMsForMatch(message?.timestamp || message?.received_at || message?.created_at);
+  const itemBody = item?.body || item?.preview_text || item?.preview || "";
+  const messageBody = message?.body || message?.preview_text || message?.preview || "";
+  const itemBodyHash = itemBody ? hashThreadBody(itemBody) : "";
+  const messageBodyHash = messageBody ? hashThreadBody(messageBody) : "";
+  const SIGNATURE_WINDOW_MS = 10 * 1000;
+  if (
+    itemSender
+    && messageSender
+    && itemSender === messageSender
+    && itemBodyHash
+    && messageBodyHash
+    && itemBodyHash === messageBodyHash
+    && !Number.isNaN(itemMs)
+    && !Number.isNaN(messageMs)
+    && Math.abs(itemMs - messageMs) <= SIGNATURE_WINDOW_MS
+  ) {
+    return { matched: true, reason: "sender_body_timestamp" };
+  }
+
+  return { matched: false, reason: "" };
+}
+
+function isTrashEntryActive(entry) {
+  return Boolean(entry && (entry.deleted_at || String(entry.status || "").toLowerCase() === "trash" || entry.item));
+}
+
+function findTrashEntryForMessage(message, trashMap) {
+  for (const [emailId, entry] of Object.entries(trashMap || {})) {
+    if (!isTrashEntryActive(entry)) continue;
+    const trashItem = entry.item || {};
+    const signatureMatch = doInboxItemAndOrderMessageRepresentSameEmail(trashItem, message);
+    if (signatureMatch.matched) {
+      return { emailId, entry, reason: signatureMatch.reason };
+    }
+  }
+  return null;
+}
+
+function findTrashEntryForInboxItem(item, trashMap) {
+  const emailId = getInboxItemId(item);
+  const imapUid = String(item?.imap_uid || "").trim();
+  if (emailId && isTrashEntryActive(trashMap?.[emailId])) {
+    return { emailId, entry: trashMap[emailId], reason: "email_id" };
+  }
+  for (const [trashEmailId, entry] of Object.entries(trashMap || {})) {
+    if (!isTrashEntryActive(entry)) continue;
+    const trashItem = entry.item || {};
+    const trashItemId = getInboxItemId(trashItem);
+    const trashImapUid = String(trashItem?.imap_uid || "").trim();
+    if (emailId && trashItemId && String(emailId).toLowerCase() === String(trashItemId).toLowerCase()) {
+      return { emailId: trashEmailId, entry, reason: "email_id" };
+    }
+    if (imapUid && trashImapUid && imapUid.toLowerCase() === trashImapUid.toLowerCase()) {
+      return { emailId: trashEmailId, entry, reason: "imap_uid" };
+    }
+    const signatureMatch = doInboxItemAndOrderMessageRepresentSameEmail(item, trashItem);
+    if (signatureMatch.matched) {
+      return { emailId: trashEmailId, entry, reason: signatureMatch.reason };
+    }
+  }
+  return null;
+}
+
+function findTrashEntryForActivityEvent(event, trashMap, orders, orderUpdateLinks) {
+  for (const [emailId, entry] of Object.entries(trashMap || {})) {
+    if (!isTrashEntryActive(entry)) continue;
+    const trashItem = entry.item || {};
+    if (doesInboxItemMatchActivityEvent(trashItem, event, orders, orderUpdateLinks)) {
+      return { emailId, entry, reason: "activity_signature" };
+    }
+  }
+
+  const orderLinkedMessageMatch = findOrderLinkedActivityMessage(event, orders);
+  if (!orderLinkedMessageMatch) return null;
+  const trashMatch = findTrashEntryForMessage(orderLinkedMessageMatch.message, trashMap);
+  if (!trashMatch) return null;
+  return {
+    ...trashMatch,
+    order: orderLinkedMessageMatch.order,
+    message: orderLinkedMessageMatch.message,
+    reason: `order_message_${trashMatch.reason}`,
+  };
+}
+
+function findSourceDeletedInboxItemForActivityEvent(event, sourceDeletedItems, orders, orderUpdateLinks) {
+  for (const item of sourceDeletedItems || []) {
+    if (doesInboxItemMatchActivityEvent(item, event, orders, orderUpdateLinks)) {
+      return { item, reason: "activity_signature" };
+    }
+  }
+
+  const orderLinkedMessageMatch = findOrderLinkedActivityMessage(event, orders);
+  if (!orderLinkedMessageMatch) return null;
+  for (const item of sourceDeletedItems || []) {
+    const linkedOrder = getInboxItemLinkedOrder(item, orders, orderUpdateLinks);
+    if (!doOrdersReferToSameOrder(linkedOrder, orderLinkedMessageMatch.order)) continue;
+    const signatureMatch = doInboxItemAndOrderMessageRepresentSameEmail(item, orderLinkedMessageMatch.message);
+    if (signatureMatch.matched) {
+      return {
+        item,
+        order: orderLinkedMessageMatch.order,
+        message: orderLinkedMessageMatch.message,
+        reason: `order_message_${signatureMatch.reason}`,
+      };
+    }
+  }
+  return null;
+}
+
 function getInboxItemHandledState(item, orders) {
   if (isHiddenInWorkspace(item)) {
     return { handled: true, reason: "hidden" };
@@ -1313,6 +1483,12 @@ function isAbsoluteLocalPath(value) {
   return /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\\\");
 }
 
+function localFileSrc(filePath) {
+  const raw = String(filePath || "").trim();
+  if (!raw || !isAbsoluteLocalPath(raw)) return "";
+  return `file:///${raw.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+}
+
 function getAttachmentOpenPath(attachment) {
   if (typeof attachment === "string") return attachment;
   const direct = String(attachment?.path || attachment?.filePath || "").trim();
@@ -1333,7 +1509,7 @@ function isImageAttachment(attachment) {
 function attachmentPreviewSrc(attachment) {
   const openPath = getAttachmentOpenPath(attachment);
   if (!openPath || !isAbsoluteLocalPath(openPath) || !isImageAttachment(attachment)) return "";
-  return `file:///${openPath.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+  return localFileSrc(openPath);
 }
 
 function getAttachmentIcon(attachment) {
@@ -1418,7 +1594,8 @@ function PreviewMenuItem({ children, disabled = false, danger = false, onClick }
   );
 }
 
-function WorkspaceIdentityPanel({ shopName }) {
+function WorkspaceIdentityPanel({ shopName, shopLogoPath }) {
+  const logoSrc = localFileSrc(shopLogoPath);
   // TODO: support dynamic messages (first use, caught up, etc.)
   return (
     <div style={{
@@ -1429,7 +1606,20 @@ function WorkspaceIdentityPanel({ shopName }) {
       padding: 32,
       textAlign: "center",
     }}>
-      <div style={{ width: "100%", maxWidth: 520 }}>
+      <div style={{ width: "100%", maxWidth: 520, transform: "translateY(-54px)" }}>
+        {logoSrc ? (
+          <div style={{ marginBottom: 20 }}>
+            <img
+              src={logoSrc}
+              alt={`${shopName} logo`}
+              style={{
+                maxWidth: 320,
+                maxHeight: 213,
+                objectFit: "contain",
+              }}
+            />
+          </div>
+        ) : null}
         <h1 style={{
           margin: 0,
           fontSize: 36,
@@ -1839,6 +2029,7 @@ export default function WorkspacePage({
   const [emailTrash, setEmailTrash] = React.useState({});
   const trashRef = React.useRef({});
   const previousImapConnectedRef = React.useRef(false);
+  const startupInboxFetchRef = React.useRef(false);
   const previewScrollRef = React.useRef(null);
   const bottomRef = React.useRef(null);
   const lastConversationKeyRef = React.useRef("");
@@ -2067,7 +2258,17 @@ export default function WorkspacePage({
     }
   }, [checkImapConnection, imapConnected, loadWorkspace, workspaceState?.imapConfigured]);
 
+  React.useEffect(() => {
+    if (startupInboxFetchRef.current || !workspaceState?.imapConfigured) return;
+    startupInboxFetchRef.current = true;
+    fetchInbox({ manual: false, reason: "startup" });
+  }, [fetchInbox, workspaceState?.imapConfigured]);
+
   const inboxItems = workspaceState?.inboxItems || [];
+  const sourceDeletedInboxItems = React.useMemo(
+    () => inboxItems.filter((item) => item?.source_deleted === true),
+    [inboxItems],
+  );
 
   // Map: normalised email_id / imap_uid → order, built from inbox_type='order_update' messages.
   // Used by renderUnlinkedRow to show "Reply for Order #XXX" and offer a direct link.
@@ -2091,8 +2292,31 @@ export default function WorkspacePage({
     for (const item of inboxItems) {
       const emailId = getInboxItemId(item);
       const imapUid = String(item?.imap_uid || "").trim();
+      const trashMatch = findTrashEntryForInboxItem(item, emailTrash);
+      if (trashMatch) {
+        console.log("[SIGNATURE_TRASH_MATCH]", { email_id: emailId || "(unknown)", trash_email_id: trashMatch.emailId, reason: trashMatch.reason });
+        console.log("[MESSAGE_HIDDEN_BY_TRASH]", { email_id: emailId || "(unknown)", trash_email_id: trashMatch.emailId, surface: "inbox" });
+        console.log("[TRASH_VISIBILITY_SUPPRESS]", { email_id: emailId || "(unknown)", reason: "local_trash" });
+        continue;
+      }
       if ((emailId && pendingRemovals[emailId]) || (imapUid && pendingRemovals[imapUid])) {
         console.log("[INBOX_FILTER]", { email_id: emailId || "(unknown)", reason: "pending_removal" });
+        continue;
+      }
+      if (item?.source_deleted === true) {
+        console.log("[INBOX_SUPPRESS_PROVIDER_DELETE]", {
+          email_id: emailId || "(unknown)",
+          imap_uid: imapUid,
+          surface: "inbox",
+        });
+        const { handled } = getInboxItemHandledState(item, ordersForLinking);
+        if (handled) {
+          console.log("[THREAD_RETAIN_LOCAL]", {
+            email_id: emailId || "(unknown)",
+            imap_uid: imapUid,
+            reason: "source_deleted_active_suppressed",
+          });
+        }
         continue;
       }
       const { handled, reason } = getInboxItemHandledState(item, ordersForLinking);
@@ -2103,14 +2327,101 @@ export default function WorkspacePage({
       out.push(item);
     }
     return out;
-  }, [inboxItems, ordersForLinking, pendingRemovals]);
+  }, [emailTrash, inboxItems, ordersForLinking, pendingRemovals]);
   const displayInboxIdKey = React.useMemo(
     () => displayInboxItems.map(getInboxItemId).filter(Boolean).join("|"),
     [displayInboxItems],
   );
   const visibleInboxActivityEvents = React.useMemo(
-    () => inboxEvents.filter((event) => !displayInboxItems.some((item) => doesInboxItemMatchActivityEvent(item, event, ordersForLinking, orderUpdateLinks))),
-    [displayInboxItems, inboxEvents, orderUpdateLinks, ordersForLinking],
+    () => inboxEvents.filter((event) => {
+      const trashMatch = findTrashEntryForActivityEvent(event, emailTrash, ordersForLinking, orderUpdateLinks);
+      if (trashMatch) {
+        console.log("[SIGNATURE_TRASH_MATCH]", {
+          event_id: event?.id || "",
+          trash_email_id: trashMatch.emailId,
+          reason: trashMatch.reason,
+        });
+        console.log("[MESSAGE_HIDDEN_BY_TRASH]", {
+          event_id: event?.id || "",
+          trash_email_id: trashMatch.emailId,
+          surface: "activity",
+        });
+        console.log("[ACTIVITY_TRASH_FILTER]", { event_id: event?.id || "", trash_email_id: trashMatch.emailId });
+        console.log("[TRASH_VISIBILITY_SUPPRESS]", { event_id: event?.id || "", reason: "local_trash" });
+        return false;
+      }
+
+      const sourceDeletedMatch = findSourceDeletedInboxItemForActivityEvent(
+        event,
+        sourceDeletedInboxItems,
+        ordersForLinking,
+        orderUpdateLinks,
+      );
+      if (sourceDeletedMatch) {
+        const suppressedItemId = getInboxItemId(sourceDeletedMatch.item);
+        console.log("[SOURCE_DELETED_PROVIDER]", {
+          event_id: event?.id || "",
+          email_id: suppressedItemId || "",
+          imap_uid: sourceDeletedMatch.item?.imap_uid || "",
+        });
+        console.log("[PROVIDER_MISSING_MESSAGE]", {
+          event_id: event?.id || "",
+          email_id: suppressedItemId || "",
+          reason: sourceDeletedMatch.reason,
+        });
+        console.log("[INBOX_SUPPRESS_PROVIDER_DELETE]", {
+          event_id: event?.id || "",
+          email_id: suppressedItemId || "",
+          surface: "activity",
+          reason: sourceDeletedMatch.reason,
+        });
+        if (sourceDeletedMatch.order || String(sourceDeletedMatch.item?.linked_order_id || "").trim()) {
+          console.log("[THREAD_RETAIN_LOCAL]", {
+            event_id: event?.id || "",
+            email_id: suppressedItemId || "",
+            reason: "source_deleted_active_suppressed",
+          });
+        }
+        return false;
+      }
+
+      const directInboxMatch = displayInboxItems.some((item) => doesInboxItemMatchActivityEvent(item, event, ordersForLinking, orderUpdateLinks));
+      if (directInboxMatch) {
+        console.log("[ACTIVITY_SUPPRESSED]", { event_id: event?.id || "", reason: "display_inbox_match" });
+        return false;
+      }
+
+      const orderLinkedMessageMatch = findOrderLinkedActivityMessage(event, ordersForLinking);
+      if (!orderLinkedMessageMatch) return true;
+
+      const representedByLinkedInbox = displayInboxItems.some((item) => {
+        const linkedOrder = getInboxItemLinkedOrder(item, ordersForLinking, orderUpdateLinks);
+        if (!doOrdersReferToSameOrder(linkedOrder, orderLinkedMessageMatch.order)) return false;
+        const signatureMatch = doInboxItemAndOrderMessageRepresentSameEmail(item, orderLinkedMessageMatch.message);
+        if (signatureMatch.matched) {
+          console.log("[MESSAGE_SIGNATURE_MATCH]", {
+            event_id: event?.id || "",
+            email_id: getInboxItemId(item) || "",
+            order_id: orderLinkedMessageMatch.order?.order_id || orderLinkedMessageMatch.order?.id || "",
+            reason: signatureMatch.reason,
+          });
+        }
+        return signatureMatch.matched;
+      });
+
+      if (representedByLinkedInbox) {
+        console.log("[ORDER_LINKED_PRIORITY]", {
+          event_id: event?.id || "",
+          order_id: orderLinkedMessageMatch.order?.order_id || orderLinkedMessageMatch.order?.id || "",
+        });
+        console.log("[INBOX_DEDUPE]", { event_id: event?.id || "", reason: "order_linked_priority" });
+        console.log("[ACTIVITY_SUPPRESSED]", { event_id: event?.id || "", reason: "order_linked_priority" });
+        return false;
+      }
+
+      return true;
+    }),
+    [displayInboxItems, emailTrash, inboxEvents, orderUpdateLinks, ordersForLinking, sourceDeletedInboxItems],
   );
   const sentMessages = workspaceState?.sentMessages || [];
   const buckets = workspaceState?.buckets || [];
@@ -2225,8 +2536,7 @@ export default function WorkspacePage({
     ? dedupeConversationMessages([...selectedMailboxThreadMessages, ...selectedMailboxReplies])
     : [];
 
-  // Conditional auto-scroll: when a new message arrives in the *same* open conversation,
-  // scroll to bottom only if the user is already near it.
+  // Keep opened conversations focused on the newest populated email.
   const _conversationMessageCount = selectedThreadMessagesWithReplies.length + selectedMailboxThreadMessagesWithReplies.length;
   React.useEffect(() => {
     const key = currentConversationKey;
@@ -2238,9 +2548,7 @@ export default function WorkspacePage({
     if (!isSame || !isNew) return;
     const node = previewScrollRef.current;
     if (!node) return;
-    if (node.scrollHeight - node.scrollTop - node.clientHeight < 200) {
-      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-    }
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
   }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const assignableOrders = React.useMemo(() => {
@@ -3014,7 +3322,10 @@ export default function WorkspacePage({
     }
     let deleted = false;
     try {
-      const alreadySourceDeleted = entry?.source_deleted === true || entry?.item?.source_deleted === true || entry?.server_delete_status === "deleted";
+      const providerTrashFolder = String(entry?.provider_trash_folder || entry?.server_trash_folder || "").trim();
+      const providerTrashMethod = String(entry?.provider_trash_method || "").trim();
+      const alreadySourceDeleted = entry?.source_deleted === true || entry?.item?.source_deleted === true || entry?.server_delete_status === "deleted" || entry?.server_delete_status === "trashed";
+      const providerCopyAlreadyGone = alreadySourceDeleted && (providerTrashMethod === "expunge" || providerTrashMethod === "missing");
       setEmailTrash((prev) => {
         if (!prev[emailId]) return prev;
         const next = {
@@ -3027,27 +3338,30 @@ export default function WorkspacePage({
         saveTrashToStorage(next);
         return next;
       });
-      if (alreadySourceDeleted) {
-        console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, already_source_deleted: true });
+      if (providerCopyAlreadyGone) {
+        console.log("[TRASH_PERMANENT_DELETE]", { email_id: emailId, already_source_deleted: true, provider_copy: "gone" });
         await removeInboxFromSpailaStorage(entry.item);
         deleted = true;
       } else {
-        const serverEmailId = String(entry?.item?.imap_uid || entry?.item?.email_id || emailId || "").trim();
-        console.log("[TRASH_SERVER_DELETE]", { email_id: emailId, server_email_id: serverEmailId, purge: true });
+        const permanentDeleteId = providerTrashFolder
+          ? String(entry?.item?.email_id || emailId || entry?.item?.imap_uid || "").trim()
+          : String(entry?.item?.imap_uid || entry?.item?.email_id || emailId || "").trim();
+        const mailboxQuery = providerTrashFolder ? `&mailbox=${encodeURIComponent(providerTrashFolder)}` : "";
+        console.log("[PERMANENT_DELETE_PROVIDER]", { email_id: emailId, server_email_id: permanentDeleteId, mailbox: providerTrashFolder || "default" });
         const response = await fetch(
-          `http://127.0.0.1:8055/inbox?email_id=${encodeURIComponent(serverEmailId)}`,
+          `http://127.0.0.1:8055/inbox?email_id=${encodeURIComponent(permanentDeleteId)}${mailboxQuery}`,
           { method: "DELETE" }
         );
         if (response.ok) {
-          console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, server_email_id: serverEmailId, purge: true });
+          console.log("[TRASH_PROVIDER_SUCCESS]", { email_id: emailId, server_email_id: permanentDeleteId, mailbox: providerTrashFolder || "default", action: "permanent_delete" });
           await removeInboxFromSpailaStorage(entry.item);
           deleted = true;
         } else {
-          console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, server_email_id: serverEmailId, status: response.status, purge: true });
+          console.error("[TRASH_PROVIDER_FAIL]", { email_id: emailId, server_email_id: permanentDeleteId, status: response.status, action: "permanent_delete" });
         }
       }
     } catch (err) {
-      console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, error: err?.message || String(err), purge: true });
+      console.error("[TRASH_PROVIDER_FAIL]", { email_id: emailId, error: err?.message || String(err), action: "permanent_delete" });
     }
     if (deleted) {
       setEmailTrash((prev) => {
@@ -3092,11 +3406,11 @@ export default function WorkspacePage({
     return { deletedCount, errorCount, skippedCount };
   }, [executeTrashPurge, shopConfig?.trashRetentionDays]);
 
-  const requestTrashServerDelete = React.useCallback(async (emailId, item) => {
+  const requestTrashProviderMove = React.useCallback(async (emailId, item) => {
     const serverEmailId = String(item?.imap_uid || item?.email_id || emailId || "").trim();
     if (!serverEmailId) return false;
     const now = Date.now();
-    console.log("[TRASH_SERVER_DELETE]", { email_id: emailId, server_email_id: serverEmailId });
+    console.log("[TRASH_PROVIDER_MOVE]", { email_id: emailId, server_email_id: serverEmailId });
     setEmailTrash((prev) => {
       if (!prev[emailId]) return prev;
       const next = {
@@ -3113,14 +3427,18 @@ export default function WorkspacePage({
     });
     try {
       const response = await fetch(
-        `http://127.0.0.1:8055/inbox?email_id=${encodeURIComponent(serverEmailId)}`,
-        { method: "DELETE" },
+        "http://127.0.0.1:8055/inbox/trash",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email_id: serverEmailId }),
+        },
       );
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.detail || payload?.error || `Server delete failed (${response.status})`);
+        throw new Error(payload?.detail || payload?.error || `Provider trash move failed (${response.status})`);
       }
-      console.log("[TRASH_SERVER_SUCCESS]", { email_id: emailId, server_email_id: serverEmailId });
+      console.log("[TRASH_PROVIDER_SUCCESS]", { email_id: emailId, server_email_id: serverEmailId, provider_trash_folder: payload?.provider_trash_folder || "" });
       console.log("[SOURCE_DELETED_UPDATE]", { email_id: emailId, server_email_id: serverEmailId, source_deleted: true });
       setEmailTrash((prev) => {
         if (!prev[emailId]) return prev;
@@ -3133,7 +3451,9 @@ export default function WorkspacePage({
             item: nextItem,
             source_deleted: true,
             source_deleted_at: Date.now(),
-            server_delete_status: "deleted",
+            server_delete_status: "trashed",
+            provider_trash_folder: payload?.provider_trash_folder || "",
+            provider_trash_method: payload?.provider_trash_method || "",
             last_server_delete_error: "",
           },
         };
@@ -3142,7 +3462,7 @@ export default function WorkspacePage({
       });
       return true;
     } catch (err) {
-      console.error("[TRASH_SERVER_FAIL]", { email_id: emailId, server_email_id: serverEmailId, error: err?.message || String(err) });
+      console.error("[TRASH_PROVIDER_FAIL]", { email_id: emailId, server_email_id: serverEmailId, error: err?.message || String(err) });
       console.log("[SOURCE_DELETED_UPDATE]", { email_id: emailId, server_email_id: serverEmailId, source_deleted: false });
       setEmailTrash((prev) => {
         if (!prev[emailId]) return prev;
@@ -3154,23 +3474,40 @@ export default function WorkspacePage({
             source_deleted: false,
             server_delete_status: "failed",
             last_delete_attempt_at: Date.now(),
-            last_server_delete_error: err?.message || "Server delete failed",
+            last_server_delete_error: err?.message || "Provider trash move failed",
           },
         };
         saveTrashToStorage(next);
         return next;
       });
-      setDropMessage("Moved to Trash. Server delete failed and will retry.");
+      setDropMessage("Moved to Trash. Provider trash move failed and will retry.");
       return false;
     }
   }, []);
 
+  const retryPendingProviderTrashMoves = React.useCallback(async ({ force = false } = {}) => {
+    const current = trashRef.current || {};
+    for (const [emailId, entry] of Object.entries(current)) {
+      const alreadyMoved = entry?.source_deleted === true || entry?.item?.source_deleted === true || entry?.server_delete_status === "trashed";
+      if (alreadyMoved) continue;
+      const lastAttemptAt = Number(entry?.last_delete_attempt_at || 0);
+      if (!force && lastAttemptAt && Date.now() - lastAttemptAt < TRASH_DELETE_RETRY_COOLDOWN_MS) {
+        continue;
+      }
+      await requestTrashProviderMove(emailId, entry.item);
+    }
+  }, [requestTrashProviderMove]);
+
   // Background purge: runs on startup and hourly for items past their retention window.
   React.useEffect(() => {
+    retryPendingProviderTrashMoves();
     runTrashPurge();
-    const interval = window.setInterval(runTrashPurge, TRASH_PURGE_INTERVAL_MS);
+    const interval = window.setInterval(() => {
+      retryPendingProviderTrashMoves();
+      runTrashPurge();
+    }, TRASH_PURGE_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [runTrashPurge]);
+  }, [retryPendingProviderTrashMoves, runTrashPurge]);
 
   async function emptyTrashNow() {
     const result = await runTrashPurge({ force: true });
@@ -3208,9 +3545,12 @@ export default function WorkspacePage({
         ...prev,
         [emailId]: {
           item,
+          status: "trash",
           deleted_at: Date.now(),
           source_deleted: false,
           server_delete_status: "pending",
+          provider_trash_folder: "",
+          provider_trash_method: "",
           last_delete_attempt_at: 0,
           previousIndex,
         },
@@ -3221,7 +3561,7 @@ export default function WorkspacePage({
     console.log("[TRASH_LOCAL]", { email_id: emailId });
 
     setDropMessage("Moved to Trash.");
-    requestTrashServerDelete(emailId, item);
+    requestTrashProviderMove(emailId, item);
   }
 
   // Keep the old name as an alias so all call sites work unchanged
@@ -4393,6 +4733,7 @@ export default function WorkspacePage({
           {!selectedMailboxItem && !selectedThread ? (
             <WorkspaceIdentityPanel
               shopName={displayShopName}
+              shopLogoPath={shopConfig.shopLogoPath}
             />
           ) : selectedThread ? (
             <>

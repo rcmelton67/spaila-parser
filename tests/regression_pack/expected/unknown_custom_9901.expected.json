@@ -1,0 +1,10 @@
+[
+  { "field": "quantity", "value": "2" },
+  { "field": "price", "value": "58.00" },
+  { "field": "order_number", "value": "9901" },
+  { "field": "order_date", "value": "April 17, 2026" },
+  { "field": "buyer_email", "value": "casey.nguyen@example.com" },
+  { "field": "ship_by", "value": "Apr 23" },
+  { "field": "buyer_name", "value": "Casey Nguyen" },
+  { "field": "shipping_address", "value": "19 River Bend\nBoise, ID 83702" }
+]

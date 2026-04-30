@@ -2,10 +2,13 @@ import json
 import os
 import sys
 from typing import Dict, List, Optional
+from ..order_number_safety import is_safe_order_number_candidate, order_number_safety_reasons
+from ..structural_rules import classify_role, structural_signature
 from datetime import datetime, timezone
 
 STORE_PATH = "parser/learning/learning_store.json"
 CORE_FIELDS = {
+    "order_number",
     "shipping_address",
     "buyer_name",
     "buyer_email",
@@ -13,6 +16,17 @@ CORE_FIELDS = {
     "quantity",
     "order_date",
     "ship_by",
+}
+TRUST_GLOBAL_TEMPLATE_ID = "__global_structural_trust__"
+TRUST_FIELDS = {
+    "order_number",
+    "buyer_name",
+    "buyer_email",
+    "shipping_address",
+    "order_date",
+    "ship_by",
+    "quantity",
+    "price",
 }
 
 
@@ -53,6 +67,8 @@ def _normalize_record(record: Dict) -> Dict:
         "section_type": record.get("section_type", ""),
         "nearby_label": record.get("nearby_label", ""),
         "context_class": record.get("context_class", ""),
+        "source_priority_used": record.get("source_priority_used", ""),
+        "metadata_fallback_class": record.get("metadata_fallback_class", ""),
         "price_type": record.get("price_type", ""),
         "relative_position": record.get("relative_position", {}),
         "line_count": record.get("line_count", 0),
@@ -66,6 +82,25 @@ def _normalize_record(record: Dict) -> Dict:
         "assignment_source": record.get("assignment_source", ""),
         "type": record.get("type", "assign"),
         "active": record.get("active", True),
+        "polarity": record.get("polarity", ""),
+        "role": record.get("role", ""),
+        "structural_signature": record.get("structural_signature", ""),
+        "scope": record.get("scope", ""),
+        "poison_candidate": record.get("poison_candidate", False),
+        "positive_corrections": record.get("positive_corrections", 0),
+        "negative_corrections": record.get("negative_corrections", 0),
+        "confidence": record.get("confidence", 0.0),
+        "demotion_count": record.get("demotion_count", 0),
+        "promotion_count": record.get("promotion_count", 0),
+        "platform": record.get("platform", ""),
+        "adaptive_family": record.get("adaptive_family", record.get("template_id", "")),
+        "universality_score": record.get("universality_score", 0.0),
+        "trust_score": record.get("trust_score", 0.0),
+        "trust_state": record.get("trust_state", "neutral"),
+        "quarantined": record.get("quarantined", False),
+        "quarantine_reason": record.get("quarantine_reason", ""),
+        "last_used_at": record.get("last_used_at", ""),
+        "admin_last_touched_at": record.get("admin_last_touched_at", ""),
         "created_at": record.get("created_at", ""),
     }
 
@@ -96,6 +131,25 @@ def _record_matches(existing: Dict, incoming: Dict) -> bool:
 
 def save_record(record: Dict) -> None:
     record = _normalize_record(record)
+    if record.get("type") == "assign" and record.get("field") == "order_number":
+        if not is_safe_order_number_candidate(record, record.get("learned_signature", "")):
+            record["active"] = False
+            record["quarantined"] = True
+            record["quarantine_reason"] = "unsafe_order_number_assignment"
+            record["safety_reasons"] = order_number_safety_reasons(
+                record, record.get("learned_signature", "")
+            )
+            print(
+                "[ORDER_NUMBER_ASSIGNMENT_QUARANTINED_ON_WRITE] "
+                + json.dumps({
+                    "value": record.get("value", ""),
+                    "signature": record.get("learned_signature", ""),
+                    "segment_text": record.get("segment_text", ""),
+                    "reasons": record.get("safety_reasons", []),
+                }, ensure_ascii=False),
+                file=sys.stderr,
+                flush=True,
+            )
     template_id = record["template_id"]
     store = load_store()
     records = store.setdefault(template_id, [])
@@ -175,6 +229,32 @@ def _deactivate_matching_assignments(
         if field == "quantity" and record.get("source", "") != source:
             continue
         record["active"] = False
+        record["poison_candidate"] = True
+        record["quarantined"] = True
+        record["quarantine_reason"] = "rejected_by_user"
+        record["quarantined_at"] = datetime.now(timezone.utc).isoformat()
+        print(
+            "[POISON_ASSIGNMENT_QUARANTINED] "
+            + json.dumps({
+                "field": field,
+                "value": value,
+                "template_id": template_id,
+                "signature": record.get("learned_signature", ""),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            "[SELF_HEAL_APPLIED] "
+            + json.dumps({
+                "field": field,
+                "wrong_value": value,
+                "healed": "assignment_quarantined_after_rejection",
+                "template_id": template_id,
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _structural_rejection_match_reason(rejection: Dict, assignment: Dict) -> str:
@@ -227,6 +307,8 @@ def _self_heal_matching_rejections(
     healed = 0
     healed_at = datetime.now(timezone.utc).isoformat()
     for record in store.get(template_id, []):
+        if record.get("type") == "structural_rule":
+            continue
         if record.get("type") != "reject":
             continue
         if record.get("field") != field or not record.get("active", True):
@@ -265,6 +347,303 @@ def _self_heal_matching_rejections(
     return healed
 
 
+def _structural_rule_payload(
+    template_id: str,
+    field: str,
+    polarity: str,
+    value: str,
+    context: Dict,
+    scope: str = "global",
+) -> Dict:
+    candidate_like = {
+        "value": value,
+        "raw_text": context.get("selected_text") or value,
+        "segment_text": context.get("segment_text", ""),
+        "left_context": context.get("left_context", ""),
+        "right_context": context.get("right_context", ""),
+        "extractor": context.get("extractor", ""),
+        "learned_signature": context.get("learned_signature", ""),
+        "price_type": context.get("price_type", ""),
+    }
+    role = classify_role(field, candidate_like)
+    return {
+        "field": field,
+        "value": value,
+        "template_id": template_id,
+        "source": context.get("source", "") if field == "quantity" else "",
+        "segment_id": context.get("segment_id", ""),
+        "start": context.get("start", 0),
+        "end": context.get("end", 0),
+        "selected_text": context.get("selected_text", ""),
+        "segment_text": context.get("segment_text", ""),
+        "left_context": context.get("left_context", ""),
+        "right_context": context.get("right_context", ""),
+        "candidate_id": context.get("candidate_id", ""),
+        "extractor": context.get("extractor", ""),
+        "learned_signature": context.get("learned_signature", "") or context.get("extractor", ""),
+        "section_type": context.get("section_type", ""),
+        "nearby_label": context.get("nearby_label", ""),
+        "context_class": context.get("context_class", ""),
+        "source_priority_used": context.get("source_priority_used", ""),
+        "metadata_fallback_class": context.get("metadata_fallback_class", ""),
+        "price_type": context.get("price_type", ""),
+        "relative_position": context.get("relative_position", {}) if isinstance(context.get("relative_position", {}), dict) else {},
+        "line_count": context.get("line_count", 0),
+        "pattern_hints": context.get("pattern_hints", {}) if isinstance(context.get("pattern_hints", {}), dict) else {},
+        "type": "structural_rule",
+        "polarity": polarity,
+        "role": role,
+        "structural_signature": structural_signature(field, candidate_like),
+        "scope": scope,
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def save_structural_rule(
+    template_id: str,
+    field: str,
+    polarity: str,
+    value: str,
+    context: Dict,
+    scope: str = "global",
+) -> Dict:
+    payload = _structural_rule_payload(template_id, field, polarity, _normalize_value(value), context, scope)
+    store = load_store()
+    records = store.setdefault(template_id, [])
+    for record in records:
+        if record.get("type") != "structural_rule":
+            continue
+        if (
+            record.get("field") == payload["field"]
+            and record.get("polarity") == payload["polarity"]
+            and record.get("role") == payload["role"]
+            and record.get("structural_signature") == payload["structural_signature"]
+        ):
+            record.update(payload)
+            save_store(store)
+            return record
+    records.append(payload)
+    save_store(store)
+    return payload
+
+
+def load_structural_rules(
+    field: Optional[str] = None,
+    polarity: Optional[str] = None,
+    template_id: Optional[str] = None,
+) -> List[Dict]:
+    store = load_store()
+    records: List[Dict] = []
+    iterable = [(template_id, store.get(template_id, []))] if template_id else store.items()
+    for _tid, store_records in iterable:
+        for raw in store_records:
+            record = _normalize_record(raw)
+            if record.get("type") != "structural_rule":
+                continue
+            if not record.get("active", True):
+                continue
+            if field and record.get("field") != field:
+                continue
+            if polarity and record.get("polarity") != polarity:
+                continue
+            records.append(record)
+    return records
+
+
+def _trust_key(record: Dict) -> tuple:
+    return (
+        record.get("field", ""),
+        record.get("role", ""),
+        record.get("structural_signature", ""),
+        record.get("source", "") or record.get("platform", ""),
+    )
+
+
+def _trust_payload(template_id: str, field: str, value: str, context: Dict) -> Dict:
+    context = context or {}
+    candidate_like = {
+        "value": value,
+        "raw_text": context.get("selected_text") or value,
+        "segment_text": context.get("segment_text", ""),
+        "left_context": context.get("left_context", ""),
+        "right_context": context.get("right_context", ""),
+        "extractor": context.get("extractor", ""),
+        "learned_signature": context.get("learned_signature", ""),
+        "price_type": context.get("price_type", ""),
+    }
+    source = context.get("source", "") if field == "quantity" else context.get("source", "")
+    return {
+        "field": field,
+        "value": _normalize_value(value),
+        "template_id": template_id,
+        "source": source,
+        "platform": source,
+        "adaptive_family": template_id,
+        "segment_id": context.get("segment_id", ""),
+        "selected_text": context.get("selected_text", ""),
+        "segment_text": context.get("segment_text", ""),
+        "left_context": context.get("left_context", ""),
+        "right_context": context.get("right_context", ""),
+        "candidate_id": context.get("candidate_id", ""),
+        "extractor": context.get("extractor", ""),
+        "learned_signature": context.get("learned_signature", "") or context.get("extractor", ""),
+        "section_type": context.get("section_type", ""),
+        "nearby_label": context.get("nearby_label", ""),
+        "context_class": context.get("context_class", ""),
+        "price_type": context.get("price_type", ""),
+        "learned_line_types": context.get("learned_line_types", []) if isinstance(context.get("learned_line_types", []), list) else [],
+        "excluded_line_types": context.get("excluded_line_types", []) if isinstance(context.get("excluded_line_types", []), list) else [],
+        "line_count_pattern": context.get("line_count_pattern", 0),
+        "role": context.get("role", "") or classify_role(field, candidate_like),
+        "structural_signature": context.get("structural_signature", "") or structural_signature(field, candidate_like),
+        "type": "structural_trust",
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _recompute_trust_record(record: Dict, all_records: List[Dict]) -> None:
+    positives = int(record.get("positive_corrections") or 0)
+    negatives = int(record.get("negative_corrections") or 0)
+    total = positives + negatives
+    record["confidence"] = round(positives / total, 4) if total else 0.0
+    record["trust_score"] = round((positives * 1.0) - (negatives * 1.25), 4)
+    related_families = {
+        item.get("adaptive_family") or item.get("template_id", "")
+        for item in all_records
+        if item.get("type") == "structural_trust"
+        and item.get("field") == record.get("field")
+        and item.get("structural_signature") == record.get("structural_signature")
+    }
+    record["universality_score"] = round(min(1.0, len(related_families) / 5), 4)
+    if record.get("quarantined") or negatives >= 3 and negatives > positives:
+        record["trust_state"] = "quarantined"
+        record["quarantined"] = True
+        record["quarantine_reason"] = record.get("quarantine_reason") or "repeated_structural_demotions"
+    elif record["trust_score"] >= 1:
+        record["trust_state"] = "promoted"
+        record["quarantined"] = False
+        record["quarantine_reason"] = ""
+    elif record["trust_score"] < 0:
+        record["trust_state"] = "demoted"
+        record["quarantined"] = False
+        record["quarantine_reason"] = ""
+    else:
+        record["trust_state"] = "neutral"
+        record["quarantined"] = False
+        record["quarantine_reason"] = ""
+
+
+def update_structural_trust(
+    template_id: str,
+    field: str,
+    value: str,
+    context: Dict,
+    polarity: str,
+) -> Dict:
+    if field not in TRUST_FIELDS:
+        return {}
+
+    payload = _trust_payload(template_id, field, value, context)
+    store = load_store()
+    records = store.setdefault(template_id, [])
+    existing = None
+    for record in records:
+        if record.get("type") == "structural_trust" and _trust_key(record) == _trust_key(payload):
+            existing = record
+            break
+    if existing is None:
+        existing = payload
+        existing["positive_corrections"] = 0
+        existing["negative_corrections"] = 0
+        existing["promotion_count"] = 0
+        existing["demotion_count"] = 0
+        records.append(existing)
+    else:
+        existing.update({k: v for k, v in payload.items() if v not in ("", {}, [])})
+
+    before = existing.get("trust_state", "neutral")
+    if polarity == "positive":
+        existing["positive_corrections"] = int(existing.get("positive_corrections") or 0) + 1
+        existing["promotion_count"] = int(existing.get("promotion_count") or 0) + 1
+    else:
+        existing["negative_corrections"] = int(existing.get("negative_corrections") or 0) + 1
+        existing["demotion_count"] = int(existing.get("demotion_count") or 0) + 1
+
+    all_trust = [
+        item
+        for store_records in store.values()
+        for item in store_records
+        if item.get("type") == "structural_trust"
+    ]
+    _recompute_trust_record(existing, all_trust)
+
+    if polarity == "positive":
+        log_name = "[TRUST_PROMOTE]"
+    else:
+        log_name = "[TRUST_DEMOTE]"
+    print(
+        log_name + " " + json.dumps({
+            "field": field,
+            "role": existing.get("role", ""),
+            "structural_signature": existing.get("structural_signature", ""),
+            "trust_score": existing.get("trust_score", 0.0),
+            "trust_state": existing.get("trust_state", ""),
+            "adaptive_family": template_id,
+            "platform": existing.get("platform", ""),
+        }, ensure_ascii=False),
+        file=sys.stderr,
+        flush=True,
+    )
+    if before != existing.get("trust_state"):
+        print(
+            "[TRUST_SHIFT] " + json.dumps({
+                "field": field,
+                "from": before,
+                "to": existing.get("trust_state", ""),
+                "role": existing.get("role", ""),
+                "structural_signature": existing.get("structural_signature", ""),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+    if existing.get("trust_state") == "quarantined":
+        print(
+            "[TRUST_QUARANTINE] " + json.dumps({
+                "field": field,
+                "role": existing.get("role", ""),
+                "structural_signature": existing.get("structural_signature", ""),
+                "negative_corrections": existing.get("negative_corrections", 0),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+    save_store(store)
+    return _normalize_record(existing)
+
+
+def load_structural_trust(
+    field: Optional[str] = None,
+    template_id: Optional[str] = None,
+) -> List[Dict]:
+    store = load_store()
+    records: List[Dict] = []
+    for tid, store_records in store.items():
+        if template_id and tid not in {template_id, TRUST_GLOBAL_TEMPLATE_ID}:
+            continue
+        for raw in store_records:
+            record = _normalize_record(raw)
+            if record.get("type") != "structural_trust":
+                continue
+            if not record.get("active", True):
+                continue
+            if field and record.get("field") != field:
+                continue
+            records.append(record)
+    return records
+
+
 def save_assignment(template_id: str, field: str, value: str, context=None) -> None:
     raw_value = "" if value is None else str(value)
     value = _normalize_value(value)
@@ -290,6 +669,8 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
     excluded_line_types = getattr(context, "excluded_line_types", [])
     line_count_pattern = getattr(context, "line_count_pattern", 0)
     assignment_source = getattr(context, "assignment_source", "")
+    role = getattr(context, "role", "")
+    struct_sig = getattr(context, "structural_signature", "")
     source = getattr(context, "source", "")
     if isinstance(context, dict):
         source = context.get("source", "")
@@ -314,6 +695,8 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
         excluded_line_types = context.get("excluded_line_types", [])
         line_count_pattern = context.get("line_count_pattern", 0)
         assignment_source = context.get("assignment_source", "")
+        role = context.get("role", "")
+        struct_sig = context.get("structural_signature", "")
     selected_text_exact = selected_text if selected_text else raw_value
     payload = {
         "field": field,
@@ -341,6 +724,8 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
         "excluded_line_types": excluded_line_types if isinstance(excluded_line_types, list) else [],
         "line_count_pattern": line_count_pattern,
         "assignment_source": assignment_source,
+        "role": role,
+        "structural_signature": struct_sig,
         "type": "assign",
         "active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -348,6 +733,21 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
     store = load_store()
     _self_heal_matching_rejections(store, template_id, payload)
     save_store(store)
+    update_structural_trust(template_id, field, value, payload, "positive")
+    if field in {"order_number", "price", "buyer_name"}:
+        rule = save_structural_rule(template_id, field, "positive", value, payload)
+        print(
+            "[POSITIVE_RULE_WRITTEN] "
+            + json.dumps({
+                "field": field,
+                "value": value,
+                "role": rule.get("role", ""),
+                "structural_signature": rule.get("structural_signature", ""),
+                "scope": rule.get("scope", ""),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
     if field == "quantity":
         print(
             f"QUANTITY_LEARNING {{ learned_from: {candidate_id or extractor or 'UNKNOWN'},"
@@ -378,6 +778,8 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
     relative_position = getattr(candidate_or_value, "relative_position", {})
     line_count = getattr(candidate_or_value, "line_count", 0)
     pattern_hints = getattr(candidate_or_value, "pattern_hints", {})
+    role = getattr(candidate_or_value, "role", "")
+    struct_sig = getattr(candidate_or_value, "structural_signature", "")
     if isinstance(candidate_or_value, dict):
         source = candidate_or_value.get("source", source)
         value = _normalize_value(candidate_or_value.get("value", value))
@@ -398,6 +800,8 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
         relative_position = candidate_or_value.get("relative_position", relative_position)
         line_count = candidate_or_value.get("line_count", line_count)
         pattern_hints = candidate_or_value.get("pattern_hints", pattern_hints)
+        role = candidate_or_value.get("role", role)
+        struct_sig = candidate_or_value.get("structural_signature", struct_sig)
     store = load_store()
     if field != "shipping_address":
         _deactivate_matching_assignments(
@@ -411,7 +815,7 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
             source,
         )
         save_store(store)
-    save_record({
+    reject_payload = {
         "field": field,
         "value": value,
         "template_id": template_id,
@@ -433,10 +837,39 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
         "relative_position": relative_position if isinstance(relative_position, dict) else {},
         "line_count": line_count,
         "pattern_hints": pattern_hints if isinstance(pattern_hints, dict) else {},
+        "role": role,
+        "structural_signature": struct_sig,
         "type": "reject",
         "active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    if field in {"order_number", "price", "buyer_name"}:
+        rule = save_structural_rule(template_id, field, "negative", value, reject_payload)
+        print(
+            "[UNLEARN_STRUCTURAL] "
+            + json.dumps({
+                "field": field,
+                "value": value,
+                "role": rule.get("role", ""),
+                "structural_signature": rule.get("structural_signature", ""),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            "[NEGATIVE_RULE_WRITTEN] "
+            + json.dumps({
+                "field": field,
+                "value": value,
+                "role": rule.get("role", ""),
+                "structural_signature": rule.get("structural_signature", ""),
+                "scope": rule.get("scope", ""),
+            }, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+    update_structural_trust(template_id, field, value, reject_payload, "negative")
+    save_record(reject_payload)
 
 
 def save_anchor(template_id: str, field: str, candidate) -> None:

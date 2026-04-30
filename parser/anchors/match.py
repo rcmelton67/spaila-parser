@@ -1,4 +1,5 @@
 from parser.learning.store import load_records
+from parser.structural_rules import GENERIC_HARD_LOCK_SIGNATURES
 
 ASSIGNED_VALUE_BOOST = 2.5
 REJECTED_VALUE_SCORE = -999
@@ -44,6 +45,7 @@ def apply_anchor_scoring(template_id, field, candidates, source=None):
     assigned_values = {r["value"] for r in assign_records if r["value"]}
     structural_records = [
         r for r in assign_records
+        if not _is_generic_hard_lock_record(r)
         if r["segment_text"] or r["left_context"] or r["right_context"]
     ]
     reject_records = [
@@ -68,3 +70,9 @@ def apply_anchor_scoring(template_id, field, candidates, source=None):
                 c.penalties.append("rejected_value(−∞)")
 
     return candidates
+
+
+def _is_generic_hard_lock_record(record):
+    signature = record.get("learned_signature", "") or record.get("signature", "")
+    structural = record.get("structural_signature", "")
+    return signature in GENERIC_HARD_LOCK_SIGNATURES or structural in GENERIC_HARD_LOCK_SIGNATURES

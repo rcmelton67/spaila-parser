@@ -165,21 +165,50 @@ def mark_source_deleted(uid: str, deleted: bool) -> None:
     })
 
 
-def _reconcile_source_deleted(server_uids: set[str]) -> None:
+def _reconcile_source_deleted(server_uids: set[str]) -> dict[str, int]:
     existing_state = _load_source_state()
     next_state: dict[str, bool] = {}
     changed = 0
+    missing = 0
+    restored = 0
     for eml_path in _INBOX_DIR.glob("*.eml"):
         uid = _saved_uid_from_path(str(eml_path))
         if not uid:
             continue
         source_deleted = uid not in server_uids
         next_state[uid] = source_deleted
+        if source_deleted:
+            missing += 1
+            if existing_state.get(uid) is not True:
+                print("[PROVIDER_MISSING_MESSAGE]", {
+                    "uid": uid,
+                    "path": str(eml_path),
+                })
+                print("[SOURCE_DELETED_PROVIDER]", {
+                    "uid": uid,
+                    "source_deleted": True,
+                })
+        elif existing_state.get(uid) is True:
+            restored += 1
         if existing_state.get(uid) != source_deleted:
             changed += 1
     _save_source_state(next_state)
+    print("[PROVIDER_RECONCILE]", {
+        "server_uid_count": len(server_uids),
+        "local_uid_count": len(next_state),
+        "missing_count": missing,
+        "restored_count": restored,
+        "changed_count": changed,
+    })
     if changed:
         print("[INBOX SOURCE] source_deleted changed count=", changed)
+    return {
+        "server_uid_count": len(server_uids),
+        "local_uid_count": len(next_state),
+        "missing_count": missing,
+        "restored_count": restored,
+        "changed_count": changed,
+    }
 
 
 def _message_id_from_file(path_value: str) -> str:
@@ -972,8 +1001,15 @@ def fetch_and_store_emails(
             })
 
     _save_dedup_store(dedup_store)
-    _reconcile_source_deleted(server_uids)
+    reconcile_result = _reconcile_source_deleted(server_uids)
     if not resync:
         _save_fetch_state(last_seen_uid=max_seen_uid)
     print("[INBOX FETCH] success count=", saved)
-    return {"saved": saved, "skipped": skipped, "fetched": len(fetched_messages), "last_seen_uid": max_seen_uid}
+    return {
+        "saved": saved,
+        "skipped": skipped,
+        "fetched": len(fetched_messages),
+        "last_seen_uid": max_seen_uid,
+        "source_deleted_missing": reconcile_result.get("missing_count", 0),
+        "source_deleted_changed": reconcile_result.get("changed_count", 0),
+    }

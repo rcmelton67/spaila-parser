@@ -6,7 +6,27 @@ from .models import Candidate, Segment
 _NUMBER_RE = re.compile(r"\b\d+(?:[.,]\d+)?\b")
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]+")
-_SHIP_BY_SUBJECT_RE = re.compile(r"Ship by ([A-Za-z]{3,9} \d{1,2})", re.IGNORECASE)
+_SHIP_BY_SUBJECT_RE = re.compile(
+    r"(?:Ship by|Ships by|Dispatch by|Estimated ship(?: date)?)"
+    r"[^A-Za-z0-9]{0,10}([A-Za-z]{3,9} \d{1,2})",
+    re.IGNORECASE,
+)
+_ORDER_DATE_SUBJECT_RE = re.compile(
+    r"(?:order\s+date|ordered\s+on|order\s+placed|placed\s+on|"
+    r"purchase\s+date|purchased\s+on)"
+    r"[^A-Za-z0-9]{0,16}("
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    r"\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?"
+    r"|\d{1,2}(?:st|nd|rd|th)?\s+"
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    r"\.?(?:,?\s+\d{4})?"
+    r"|\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    r")",
+    re.IGNORECASE,
+)
 _SHIP_BY_BODY_RE = re.compile(
     r"(?:Ship by|Ships by|Dispatch by|Estimated ship(?: date)?)"
     r"[^A-Za-z0-9]{0,10}([A-Za-z]{3,9} \d{1,2})",
@@ -157,6 +177,30 @@ def extract_header_date(email_date: str) -> List[Candidate]:
     return [cand]
 
 
+def extract_order_date_from_subject(subject: str) -> List[Candidate]:
+    candidates: List[Candidate] = []
+    if not subject:
+        return candidates
+
+    for counter, match in enumerate(_ORDER_DATE_SUBJECT_RE.finditer(subject), start=1):
+        value = match.group(1)
+        cand = Candidate(
+            id=f"order_date_subject_{counter:04d}",
+            field_type="date",
+            value=value,
+            raw_text=value,
+            start=None,
+            end=None,
+            segment_id="subject",
+            extractor="order_date_subject_regex",
+            source="subject",
+        )
+        _attach_context(cand, subject, match.start(1), match.end(1))
+        candidates.append(cand)
+
+    return candidates
+
+
 def extract_ship_by_from_subject(subject: str) -> List[Candidate]:
     candidates: List[Candidate] = []
     if not subject:
@@ -194,6 +238,7 @@ _BUYER_LABEL_RE = re.compile(
 )
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'\- ]+$")
+_NAME_WITH_TRAILING_NUMBER_RE = re.compile(r"^([A-Za-z][A-Za-z'\- ]*?[A-Za-z])\s+\d+$")
 _STREET_RE = re.compile(r"^\d[\d\-]*\s+\S")
 _PHONE_RE = re.compile(r"^\+?\d[\d\s().-]{6,}\d$")
 _CITY_STATE_RE = re.compile(r"^[A-Za-z .'\-]+,\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?$")
@@ -224,6 +269,17 @@ def _label_source(text: str) -> str:
 
 def _is_valid_name(text: str) -> bool:
     return bool(_NAME_RE.match(text) and " " in text and len(text) >= 4)
+
+
+def _extract_contact_name_value(text: str) -> tuple[str, int] | None:
+    if _is_valid_name(text):
+        return text, len(text)
+    match = _NAME_WITH_TRAILING_NUMBER_RE.match(text)
+    if match:
+        value = match.group(1).strip()
+        if _is_valid_name(value):
+            return value, len(value)
+    return None
 
 
 def _normalize_name(value: str) -> str:
@@ -309,20 +365,22 @@ def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
     for source, block in _collect_address_blocks(segments):
         first_seg = block[0]
         text = first_seg.text
-        if not _is_valid_name(text):
+        extracted = _extract_contact_name_value(text)
+        if not extracted:
             continue
+        value, value_len = extracted
         cand = Candidate(
             id=f"name_{counter:04d}",
             field_type="buyer_name",
-            value=text,
-            raw_text=text,
+            value=value,
+            raw_text=value,
             start=first_seg.start,
-            end=first_seg.end,
+            end=first_seg.start + value_len,
             segment_id=first_seg.id,
             extractor="address_block_first_line",
             source=source,
         )
-        _attach_context(cand, first_seg.text, 0, len(text))
+        _attach_context(cand, first_seg.text, 0, value_len)
         raw_candidates.append(cand)
         counter += 1
 
@@ -337,8 +395,8 @@ def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
                 field_type="buyer_name",
                 value=norm,
                 raw_text=base.raw_text,
-                start=base.start,
-                end=base.end,
+                start=None,
+                end=None,
                 segment_id=base.segment_id,
                 extractor="normalized_variant",
                 source=base.source,
@@ -355,7 +413,7 @@ def extract_buyer_name(segments: List[Segment]) -> List[Candidate]:
     seen_norm: dict = {}
     candidates: List[Candidate] = []
     for cand in raw_candidates:
-        key = (getattr(cand, "source", ""), _normalize_name(cand.value))
+        key = (getattr(cand, "source", ""), _normalize_name(cand.value), cand.extractor)
         if key not in seen_norm:
             seen_norm[key] = cand
             candidates.append(cand)

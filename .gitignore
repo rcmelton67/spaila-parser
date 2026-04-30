@@ -17,12 +17,20 @@ venv/
 .coverage
 htmlcov/
 
+# Parser debug / audit artifacts
+parser/debug/trust_reports/
+parser/debug/regression_audit*/
+audit_woo_*.json
+audit_woo_*.txt
+parser/learning/*.bak
+
 # Node / Electron
 node_modules/
 ui/node_modules/
 
 # Build output
 ui/dist/
+app/ui/dist/
 
 # Database
 spaila.db

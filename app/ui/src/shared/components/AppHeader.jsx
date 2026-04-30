@@ -1,4 +1,5 @@
 import React from "react";
+import { loadViewConfig } from "../utils/fieldConfig.js";
 
 const tabStyle = {
   padding: "6px 14px",
@@ -30,12 +31,15 @@ export default function AppHeader({
   completedCount = 0,
   tabCounts = null,
   showCounts = true,
+  showCompletedTab,
   selectedNav = "active",
   rightContent = null,
 }) {
   const [saveFeedback, setSaveFeedback] = React.useState(false);
+  const [headerViewConfig, setHeaderViewConfig] = React.useState(() => loadViewConfig());
   const saveFeedbackTimerRef = React.useRef(null);
   const hasDoc = !!documentsConfig.thankYouPath;
+  const canShowCompletedTab = showCompletedTab ?? (headerViewConfig.showCompleted !== false);
   const titleText = hasDoc
     ? "Open thank you letter (ready to print)"
     : "No thank you letter configured - go to Settings -> Documents";
@@ -46,6 +50,14 @@ export default function AppHeader({
         window.clearTimeout(saveFeedbackTimerRef.current);
       }
     };
+  }, []);
+
+  React.useEffect(() => {
+    function onViewConfigChange() {
+      setHeaderViewConfig(loadViewConfig());
+    }
+    window.addEventListener("spaila:viewconfig", onViewConfigChange);
+    return () => window.removeEventListener("spaila:viewconfig", onViewConfigChange);
   }, []);
 
   const triggerSave = () => {
@@ -211,16 +223,18 @@ export default function AppHeader({
             }}>{tabCounts.active}</span>
           )}
         </button>
-        <button style={navButtonStyle("completed")} onClick={() => onSelectTab?.("completed")}>
-          {"Completed"}
-          {tabCounts && (
-            <span style={{
-              marginLeft: 6, background: selectedNav === "completed" ? "#2563eb" : "#6b7280",
-              color: "#fff", borderRadius: 999, padding: "1px 7px",
-              fontSize: 11, fontWeight: 700, lineHeight: "16px",
-            }}>{tabCounts.completed}</span>
-          )}
-        </button>
+        {canShowCompletedTab && (
+          <button style={navButtonStyle("completed")} onClick={() => onSelectTab?.("completed")}>
+            {"Completed"}
+            {tabCounts && (
+              <span style={{
+                marginLeft: 6, background: selectedNav === "completed" ? "#2563eb" : "#6b7280",
+                color: "#fff", borderRadius: 999, padding: "1px 7px",
+                fontSize: 11, fontWeight: 700, lineHeight: "16px",
+              }}>{tabCounts.completed}</span>
+            )}
+          </button>
+        )}
       </div>
       {rightContent ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

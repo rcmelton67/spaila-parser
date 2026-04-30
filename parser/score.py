@@ -1,6 +1,13 @@
 import re
 from typing import List, Dict, Optional
 from .models import Candidate, Segment
+from .order_number_safety import (
+    EXPLICIT_ORDER_LABEL_RE,
+    HASH_ID_RE,
+    has_address_or_postal_context,
+    has_explicit_order_support,
+    order_number_safety_reasons,
+)
 
 _SUMMARY_WORDS = (
     "subtotal", "total", "tax", "shipping", "s&h", "discount", "payment"
@@ -35,10 +42,7 @@ _PRICE_TOTAL_CONTEXT_WORDS: tuple = (
     "order total", "grand total", "order subtotal",
     "cart total", "checkout total",
 )
-_EXPLICIT_ORDER_NUMBER_RE = re.compile(
-    r"\b(?:your\s+)?order(?:\s+number)?\s*(?:is|#|number)?\s*[:#-]?\s*(\d{5,})\b",
-    re.IGNORECASE,
-)
+_EXPLICIT_ORDER_NUMBER_RE = EXPLICIT_ORDER_LABEL_RE
 
 
 def score_quantity(candidates: List[Candidate], segments: List[Segment]) -> List[Candidate]:
@@ -353,9 +357,19 @@ def score_order_number(
         # --- POSITIVE SIGNALS ---
 
         explicit_match = _EXPLICIT_ORDER_NUMBER_RE.search(seg.text)
-        if explicit_match and explicit_match.group(1) == cand.value:
+        if explicit_match and explicit_match.group(1).strip().strip("#") == cand.value:
             score += 12.0
             signals.append("explicit_order_label(+12.0)")
+
+        hash_match = HASH_ID_RE.search(seg.text)
+        if (
+            hash_match
+            and hash_match.group(1) == cand.value
+            and not has_address_or_postal_context(cand)
+            and "explicit_order_label(+12.0)" not in signals
+        ):
+            score += 8.0
+            signals.append("hash_order_id(+8.0)")
 
         if any(word in window_text for word in _order_keywords):
             score += 6.0
@@ -407,6 +421,15 @@ def score_order_number(
             score -= 4.0
             penalties.append("quantity_item_context(−4.0)")
 
+        safety_reasons = order_number_safety_reasons(cand, "number_regex|none|body")
+        if safety_reasons:
+            if "address_or_postal_context" in safety_reasons:
+                score -= 100.0
+                penalties.append("unsafe_order_number_address_or_postal(-100.0)")
+            elif not has_explicit_order_support(cand):
+                score -= 25.0
+                penalties.append("unsafe_order_number_generic(-25.0)")
+
         cand.signals = signals
         cand.penalties = penalties
         cand.score = score
@@ -416,6 +439,7 @@ def score_order_number(
 
 _ORDER_DATE_KEYWORDS = ("order", "order date", "order summary")
 _SHIPPING_WORDS = ("ship", "delivery", "arrive")
+_ORDER_DATE_SUBJECT_WORDS = ("order date", "ordered on", "order placed", "placed on", "purchase date", "purchased on")
 
 
 def score_order_date(
@@ -438,6 +462,33 @@ def score_order_date(
 
             score += 2.0
             signals.append("header_date_base(+2.0)")
+
+            cand.signals = signals
+            cand.penalties = penalties
+            cand.score = score
+            continue
+
+        if getattr(cand, "source", "") == "subject":
+            subject_text = (cand.segment_text or "").lower()
+            score = 0.0
+            signals = []
+            penalties = []
+
+            if any(word in subject_text for word in _ORDER_DATE_SUBJECT_WORDS):
+                score += 6.0
+                signals.append("subject_order_date_label(+6.0)")
+            if "order" in subject_text or "purchase" in subject_text:
+                score += 2.0
+                signals.append("subject_order_context(+2.0)")
+            score += 1.5
+            signals.append("subject_source(+1.5)")
+
+            if any(word in subject_text for word in _SHIPPING_WORDS):
+                score -= 4.0
+                penalties.append("shipping_context(−4.0)")
+            if "paid" in subject_text or "payment" in subject_text:
+                score -= 5.0
+                penalties.append("payment_context(−5.0)")
 
             cand.signals = signals
             cand.penalties = penalties

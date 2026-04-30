@@ -18,6 +18,7 @@ const {
 const ROOT = path.join(__dirname, "..", "..");
 const APP_ICON = path.join(ROOT, "spaila-logo.blue.ico");
 const DEFAULT_APP_NAME = "Parser Viewer";
+const DOCS_FOLDER = "C:\\Spaila\\Docs";
 let currentBrandName = DEFAULT_APP_NAME;
 let helperProcess = null;
 let helperRestarting = false;
@@ -258,6 +259,15 @@ function validateImapAppendConfig(config) {
   return { ok: true, imap };
 }
 
+function validateImapConnectionConfig(config) {
+  const imap = normalizeImapConfig(config);
+  if (!imap.host) return { ok: false, error: "IMAP Host is required." };
+  if (!imap.port || !Number.isFinite(imap.port)) return { ok: false, error: "IMAP Port is required." };
+  if (!imap.username) return { ok: false, error: "IMAP Username is required." };
+  if (!imap.password) return { ok: false, error: "IMAP Password is required." };
+  return { ok: true, imap };
+}
+
 function validateSmtpConfig(config) {
   const smtp = normalizeSmtpConfig(config);
   if (!smtp.emailAddress) return { ok: false, error: "Email Address is required." };
@@ -474,9 +484,9 @@ function getSentMailRetentionDays() {
   try {
     const settings = loadWorkspaceEmailSettings();
     const days = Number.parseInt(String(settings.sentMailRetentionDays || ""), 10);
-    return Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 60;
+    return Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 30;
   } catch (_error) {
-    return 60;
+    return 30;
   }
 }
 
@@ -1373,7 +1383,8 @@ function inferInboxEmailId(filePath, headers) {
 }
 
 function inferSavedInboxUid(filePath) {
-  const savedIdMatch = path.basename(filePath).match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
+  const filename = path.basename(filePath);
+  const savedIdMatch = filename.match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
   return savedIdMatch?.[1] || "";
 }
 
@@ -2328,6 +2339,42 @@ ipcMain.handle("documents:open-file", async (_event, { filePath }) => {
   }
 });
 
+ipcMain.handle("documents:copy-to-docs", async (_event, payload = {}) => {
+  try {
+    const sourcePath = String(payload.filePath || payload.path || "").trim();
+    const allowedExtensions = Array.isArray(payload.allowedExtensions) && payload.allowedExtensions.length
+      ? payload.allowedExtensions.map((ext) => String(ext || "").replace(/^\./, "").toLowerCase()).filter(Boolean)
+      : ["pdf"];
+    if (!sourcePath || !path.isAbsolute(sourcePath)) {
+      return { ok: false, error: "Document file path is required." };
+    }
+    if (!fs.existsSync(sourcePath)) {
+      return { ok: false, error: "Document file not found." };
+    }
+    const stat = safeStat(sourcePath);
+    if (!stat?.isFile()) {
+      return { ok: false, error: "Selected document is not a file." };
+    }
+    const sourceExt = path.extname(sourcePath).replace(/^\./, "").toLowerCase();
+    if (!allowedExtensions.includes(sourceExt)) {
+      return { ok: false, error: `Only ${allowedExtensions.map((ext) => `.${ext}`).join(", ")} files are supported.` };
+    }
+
+    fs.mkdirSync(DOCS_FOLDER, { recursive: true });
+    const filename = sanitizeFilenamePart(path.basename(sourcePath), `document.${allowedExtensions[0] || "pdf"}`);
+    const preferredTarget = path.join(DOCS_FOLDER, filename);
+    const sameFile = path.resolve(sourcePath).toLowerCase() === path.resolve(preferredTarget).toLowerCase();
+    const targetPath = sameFile ? preferredTarget : makeUniqueFilePath(preferredTarget);
+    if (!sameFile) {
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+
+    return { ok: true, path: targetPath, name: path.basename(targetPath), folderPath: DOCS_FOLDER };
+  } catch (err) {
+    return { ok: false, error: err.message || "Could not copy document." };
+  }
+});
+
 ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) => {
   try {
     const dest = path.join(folderPath, filename);
@@ -2558,6 +2605,36 @@ ipcMain.handle("email:test-smtp", async (_event, payload = {}) => {
     return { ok: true, message: "SMTP connection successful." };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not connect to SMTP server." };
+  }
+});
+ipcMain.handle("email:test-imap", async (_event, payload = {}) => {
+  const validation = validateImapConnectionConfig(payload.config || {});
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+
+  const imap = validation.imap;
+  const client = new ImapFlow({
+    host: imap.host,
+    port: imap.port,
+    secure: imap.useSsl !== false,
+    auth: {
+      user: imap.username,
+      pass: imap.password,
+    },
+    logger: false,
+  });
+
+  let lock = null;
+  try {
+    await client.connect();
+    lock = await client.getMailboxLock("INBOX");
+    return { ok: true, message: "IMAP receiving connection successful." };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not connect to IMAP server." };
+  } finally {
+    try { lock?.release?.(); } catch (_) {}
+    try { await client.logout(); } catch (_) {}
   }
 });
 ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {

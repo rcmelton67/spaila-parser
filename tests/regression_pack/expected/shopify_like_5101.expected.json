@@ -1,0 +1,10 @@
+[
+  { "field": "quantity", "value": "1" },
+  { "field": "price", "value": "64.50" },
+  { "field": "order_number", "value": "5101" },
+  { "field": "order_date", "value": "April 14, 2026" },
+  { "field": "buyer_email", "value": "jordan.casey@example.com" },
+  { "field": "ship_by", "value": "Apr 20" },
+  { "field": "buyer_name", "value": "Jordan Casey" },
+  { "field": "shipping_address", "value": "8 Walnut Street\nPortland, OR 97205" }
+]

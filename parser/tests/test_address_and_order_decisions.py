@@ -20,6 +20,83 @@ def test_order_number_explicit_label_outranks_nearby_quantity():
     assert "explicit_order_label(+12.0)" in decision.provenance["signals"]
 
 
+def test_four_digit_order_label_beats_repeated_zip():
+    segs = segment(
+        "Melton Memorials\n"
+        "New order: #1928\n"
+        "Order summary\n"
+        "Order #1928 (December 1, 2025)\n"
+        "Shipping address\n"
+        "Brenda Espinosa\n"
+        "1220 7th St NE\n"
+        "Rochester, MN 55906\n"
+        "Billing address\n"
+        "Brenda Espinosa\n"
+        "1220 7th St NE\n"
+        "Rochester, MN 55906\n"
+    )
+
+    scored = score_order_number(extract_numbers(segs), segs)
+    decision = decide_order_number(scored)
+    zip_candidates = [c for c in scored if c.value == "55906"]
+
+    assert decision is not None
+    assert decision.value == "1928"
+    assert any("explicit_order_label(+12.0)" in c.signals for c in scored if c.value == "1928")
+    assert all(any("unsafe_order_number_address_or_postal" in p for p in c.penalties) for c in zip_candidates)
+
+
+def test_woo_zip_failures_do_not_win_order_number():
+    cases = [
+        ("1933", "Lake Dallas, TX 75065"),
+        ("1935", "Texarkana, TX 75501"),
+        ("1959", "Bradenton, FL 34203"),
+    ]
+
+    for order_id, city_state_zip in cases:
+        segs = segment(
+            f"New order: #{order_id}\n"
+            "Order summary\n"
+            f"Order #{order_id} (December 5, 2025)\n"
+            "Shipping address\n"
+            "Sample Buyer\n"
+            "123 Main Street\n"
+            f"{city_state_zip}\n"
+            "Billing address\n"
+            "Sample Buyer\n"
+            "123 Main Street\n"
+            f"{city_state_zip}\n"
+        )
+        decision = decide_order_number(score_order_number(extract_numbers(segs), segs))
+
+        assert decision is not None
+        assert decision.value == order_id
+
+
+def test_invoice_and_purchase_four_digit_ids_are_supported():
+    for label in ("Invoice 1234", "Purchase 5678", "#2468"):
+        segs = segment(f"{label}\nShipping address\nJane Buyer\n10 Main St\nAustin, TX 78701\n")
+        decision = decide_order_number(score_order_number(extract_numbers(segs), segs))
+
+        assert decision is not None
+        assert decision.value in label
+
+
+def test_address_block_numbers_are_not_order_numbers_without_order_support():
+    segs = segment(
+        "Shipping address\n"
+        "Jane Buyer\n"
+        "1234 Main Street\n"
+        "Austin, TX 78701\n"
+        "Quantity: 1\n"
+        "Price: $20.00\n"
+    )
+
+    decision = decide_order_number(score_order_number(extract_numbers(segs), segs))
+
+    assert decision is None
+
+
 def test_shipping_source_candidate_outranks_billing_source_candidate():
     """When billing and shipping blocks are both present, the decision should
     be the shipping block, not the billing block."""

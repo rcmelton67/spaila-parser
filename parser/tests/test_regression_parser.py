@@ -11,7 +11,7 @@ def load_expected(path):
 
 
 def run_case(eml_path, expected_path):
-    decisions = parse_eml(eml_path)["decisions"]
+    decisions = parse_eml(eml_path, update_confidence=False)["decisions"]
 
     result = {d.field: d.value for d in decisions}
     expected = load_expected(expected_path)

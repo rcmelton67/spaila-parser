@@ -1,0 +1,10 @@
+[
+  { "field": "quantity", "value": "3" },
+  { "field": "price", "value": "48.00" },
+  { "field": "order_number", "value": "1002" },
+  { "field": "order_date", "value": "April 13, 2026" },
+  { "field": "buyer_email", "value": "riley.park@example.com" },
+  { "field": "ship_by", "value": "Apr 19" },
+  { "field": "buyer_name", "value": "Riley Park" },
+  { "field": "shipping_address", "value": "44 Pine Road\nDenver, CO 80203" }
+]

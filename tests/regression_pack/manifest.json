@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "parser_version": "0.1.0",
+    "trust_schema_version": 1,
+    "field_model_versions": {
+      "order_number": "parser_trust_field_v1",
+      "price": "parser_trust_field_v1",
+      "shipping_address": "parser_trust_field_v1",
+      "buyer_name": "parser_trust_field_v1",
+      "quantity": "parser_trust_field_v1",
+      "ship_by": "parser_trust_field_v1",
+      "buyer_email": "parser_trust_field_v1",
+      "order_date": "parser_trust_field_v1"
+    },
+    "severity_classification": {
+      "critical": "Final field mismatch for shipped real-email regressions or contamination returning a dangerous wrong field.",
+      "high": "Replay, trust snapshot, or family grouping failure that can spread across templates.",
+      "medium": "Synthetic platform accuracy failure.",
+      "low": "Reporting-only drift signal without field mismatch.",
+      "info": "Coverage or trend metadata signal."
+    },
+    "platform_abstraction": "commerce_order_email",
+    "historical_trend_compatibility": "parser_audit_trend_v1",
+    "marketplace_drift_detection_hooks": true
+  },
+  "platform_coverage": [
+    "woo",
+    "etsy",
+    "marketflow",
+    "shopify_like",
+    "amazon_like",
+    "walmart_like",
+    "unknown_custom"
+  ],
+  "cases": [
+    {
+      "case_id": "woo_2353",
+      "platform_family": "woo",
+      "kind": "real",
+      "severity": "critical",
+      "eml_path": "tests/samples/2353.eml",
+      "expected_path": "tests/samples/2353.expected.json",
+      "store_mode": "live_copy_readonly",
+      "ci_tiers": ["fast", "regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "buyer_name", "shipping_address"],
+      "family_group_key": "woo_order_summary"
+    },
+    {
+      "case_id": "etsy_4024391570",
+      "platform_family": "etsy",
+      "kind": "real",
+      "severity": "critical",
+      "eml_path": "tests/samples/4024391570.eml",
+      "expected_path": "tests/samples/4024391570.expected.json",
+      "store_mode": "live_copy_readonly",
+      "ci_tiers": ["fast", "regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "etsy_sale_email"
+    },
+    {
+      "case_id": "marketflow_1001",
+      "platform_family": "marketflow",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/marketflow_1001.eml",
+      "expected_path": "tests/regression_pack/expected/marketflow_1001.expected.json",
+      "trust_snapshot_path": "tests/regression_pack/trust_snapshots/marketflow_1001.trust.json",
+      "store_mode": "empty",
+      "ci_tiers": ["fast", "regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "marketflow_order_summary",
+      "expected_family_relationships": {
+        "same_family_as": ["marketflow_1002"],
+        "different_family_from": ["shopify_like_5101"]
+      }
+    },
+    {
+      "case_id": "marketflow_1002",
+      "platform_family": "marketflow",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/marketflow_1002.eml",
+      "expected_path": "tests/regression_pack/expected/marketflow_1002.expected.json",
+      "store_mode": "empty",
+      "ci_tiers": ["regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "marketflow_order_summary",
+      "expected_family_relationships": {
+        "same_family_as": ["marketflow_1001"]
+      }
+    },
+    {
+      "case_id": "shopify_like_5101",
+      "platform_family": "shopify_like",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/shopify_like_5101.eml",
+      "expected_path": "tests/regression_pack/expected/shopify_like_5101.expected.json",
+      "store_mode": "empty",
+      "ci_tiers": ["regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "shopify_like_order"
+    },
+    {
+      "case_id": "amazon_like_7001",
+      "platform_family": "amazon_like",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/amazon_like_7001.eml",
+      "expected_path": "tests/regression_pack/expected/amazon_like_7001.expected.json",
+      "store_mode": "empty",
+      "ci_tiers": ["regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "amazon_like_order"
+    },
+    {
+      "case_id": "walmart_like_8801",
+      "platform_family": "walmart_like",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/walmart_like_8801.eml",
+      "expected_path": "tests/regression_pack/expected/walmart_like_8801.expected.json",
+      "store_mode": "empty",
+      "ci_tiers": ["regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "walmart_like_order"
+    },
+    {
+      "case_id": "unknown_custom_9901",
+      "platform_family": "unknown_custom",
+      "kind": "synthetic",
+      "severity": "medium",
+      "eml_path": "tests/regression_pack/synthetic/unknown_custom_9901.eml",
+      "expected_path": "tests/regression_pack/expected/unknown_custom_9901.expected.json",
+      "store_mode": "empty",
+      "ci_tiers": ["regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "unknown_custom_order"
+    },
+    {
+      "case_id": "unknown_contamination_9902",
+      "platform_family": "unknown_custom",
+      "kind": "contamination",
+      "severity": "high",
+      "eml_path": "tests/regression_pack/synthetic/unknown_contamination_9902.eml",
+      "expected_path": "tests/regression_pack/expected/unknown_contamination_9902.expected.json",
+      "trust_snapshot_path": "tests/regression_pack/trust_snapshots/unknown_contamination_9902.trust.json",
+      "store_mode": "empty",
+      "ci_tiers": ["fast", "regression", "audit"],
+      "required_fields": ["quantity", "price", "order_number", "order_date", "buyer_email", "ship_by", "buyer_name", "shipping_address"],
+      "family_group_key": "unknown_custom_contamination"
+    }
+  ]
+}

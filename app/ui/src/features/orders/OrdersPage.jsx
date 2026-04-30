@@ -40,6 +40,7 @@ import {
 
 const API = "http://127.0.0.1:8055";
 const EMPTY_TRAILING_ROW_COUNT = 6;
+const MAX_TWO_UP_CARD_FIELDS = 12;
 
 const primaryButton = {
   padding: "6px 14px",
@@ -792,6 +793,11 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     window.addEventListener("spaila:viewconfig", onViewConfigChange);
     return () => window.removeEventListener("spaila:viewconfig", onViewConfigChange);
   }, []);
+  React.useEffect(() => {
+    if (viewConfig.showCompleted === false && activeTab === "completed") {
+      onActiveTabChange?.("active");
+    }
+  }, [activeTab, onActiveTabChange, viewConfig.showCompleted]);
   React.useEffect(() => {
     setActiveSort(normalizeSortConfig(viewConfig.defaultSort));
   }, [viewConfig.defaultSort?.field, viewConfig.defaultSort?.direction]);
@@ -1625,7 +1631,57 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       summarySearch || "",
       weekdayFromSearch,
     ].filter(Boolean);
-    const printHtml = `<!doctype html>
+    const printMode = printConfig?.mode === "card" ? "card" : "sheet";
+    const cardOrderIndex = new Map(
+      (Array.isArray(printConfig?.cardOrder) ? printConfig.cardOrder : []).map((key, index) => [key, index])
+    );
+    const cardPrintColumns = [...visiblePrintColumns].sort((a, b) => (
+      (cardOrderIndex.get(a.key) ?? Number.MAX_SAFE_INTEGER)
+      - (cardOrderIndex.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    ));
+    const useOneUpCards = cardPrintColumns.length > MAX_TWO_UP_CARD_FIELDS;
+    const cardOrientation = printConfig?.orientation === "landscape" ? "landscape" : "portrait";
+    const cardColumnsPerPage = useOneUpCards ? 1 : (cardOrientation === "landscape" ? 2 : 1);
+    const cardRowsPerPage = useOneUpCards ? 1 : (cardOrientation === "landscape" ? 1 : 2);
+    const cardsPerPage = cardColumnsPerPage * cardRowsPerPage;
+    const printTitle = printMode === "card" ? "Order Cards" : "Orders Print";
+    const cardHtmlRows = safeDisplayOrders.length && cardPrintColumns.length
+      ? safeDisplayOrders.map((row) => {
+          const orderNumber = getDisplayedCellValue(row, "order_number") || row.order_number || "Order";
+          const buyerName = getDisplayedCellValue(row, "buyer_name") || row.buyer_name || "";
+          const shipByDate = getDisplayedCellValue(row, "ship_by") || row.ship_by || "";
+          const priceRule = matchPriceRule(row.price, priceList);
+          const identityBg = priceRule?.color || "#ffffff";
+          const identityColor = priceRule?.color ? contrastColor(priceRule.color) : "#0f172a";
+          const fields = cardPrintColumns.map((column) => {
+            const presentation = getPrintCellPresentation(row, column.key);
+            return `<div class="card-field">
+              <div class="card-label">${escapeHtml(column.label)}</div>
+              <div class="card-value">${escapeHtml(presentation.text)}</div>
+            </div>`;
+          }).join("");
+          return `<article class="order-card">
+            <div class="card-topline">
+              <div class="card-identity" style="background:${identityBg};color:${identityColor};border-color:${identityBg};">
+                <div class="card-title">#${escapeHtml(orderNumber)}</div>
+                <div class="card-subtitle">${escapeHtml(buyerName)}</div>
+              </div>
+              <div class="card-ship-by">
+                <div class="card-ship-by-label">Ship by</div>
+                <div class="card-ship-by-value">${escapeHtml(shipByDate || "—")}</div>
+              </div>
+              <div class="card-pill">${escapeHtml(getDisplayedCellValue(row, "status") || "Order")}</div>
+            </div>
+            <div class="card-fields">${fields}</div>
+          </article>`;
+        })
+      : [];
+    const cardRowsHtml = cardHtmlRows.length
+      ? Array.from({ length: Math.ceil(cardHtmlRows.length / cardsPerPage) }, (_unused, pageIndex) => (
+          `<section class="card-page">${cardHtmlRows.slice(pageIndex * cardsPerPage, pageIndex * cardsPerPage + cardsPerPage).join("")}</section>`
+        )).join("")
+      : `<div class="empty-card">${safeDisplayOrders.length ? "No print fields are enabled" : "No orders to print"}</div>`;
+    const sheetPrintHtml = `<!doctype html>
 <html>
   <head>
     <title>${escapeHtml(shopName)} - Orders Print</title>
@@ -1661,9 +1717,148 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     </div>
   </body>
 </html>`;
+    const cardPrintHtml = `<!doctype html>
+<html>
+  <head>
+    <title>${escapeHtml(shopName)} - Order Cards</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: "Segoe UI", sans-serif; color: #111827; background: #ffffff; }
+      .page { padding: 0; background: #fff; }
+      .cards { display: block; }
+      .card-page {
+        display: grid;
+        grid-template-columns: repeat(${cardColumnsPerPage}, minmax(0, 1fr));
+        grid-template-rows: repeat(${cardRowsPerPage}, minmax(0, 1fr));
+        gap: 16px;
+        height: ${cardOrientation === "landscape" ? "7.05in" : "9.55in"};
+      }
+      .card-page:not(:last-child) {
+        break-after: page;
+        page-break-after: always;
+      }
+      .order-card {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        border: 1px solid #cbd5e1;
+        border-radius: 14px;
+        padding: 16px;
+        background: #ffffff;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .card-topline {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        position: relative;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 10px;
+      }
+      .card-identity {
+        max-width: 72%;
+        border: 2px solid;
+        border-radius: 999px;
+        padding: 10px 18px 11px;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.42), 0 1px 2px rgba(15,23,42,0.12);
+        overflow-wrap: anywhere;
+      }
+      .card-title { font-size: 20px; font-weight: 800; color: inherit; line-height: 1.1; }
+      .card-subtitle { margin-top: 5px; color: inherit; font-size: 13px; font-weight: 700; line-height: 1.2; opacity: 0.92; }
+      .card-ship-by {
+        position: absolute;
+        left: 50%;
+        top: 2px;
+        transform: translateX(-50%);
+        text-align: center;
+        color: #0f172a;
+        min-width: 112px;
+      }
+      .card-ship-by-label {
+        color: #64748b;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .card-ship-by-value {
+        margin-top: 3px;
+        color: #111827;
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+      .card-pill {
+        max-width: 42%;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        color: #334155;
+        background: #ffffff;
+        padding: 4px 9px;
+        font-size: 11px;
+        font-weight: 800;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .card-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px 12px;
+      }
+      .card-field {
+        min-width: 0;
+        border-bottom: 1px solid #f1f5f9;
+        padding-bottom: 6px;
+      }
+      .card-label {
+        margin-bottom: 3px;
+        color: #64748b;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .card-value {
+        min-height: 18px;
+        border-radius: 5px;
+        color: #111827;
+        font-size: 12px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+      .empty-card {
+        grid-column: 1 / -1;
+        padding: 28px;
+        border: 1px dashed #cbd5e1;
+        border-radius: 14px;
+        text-align: center;
+        color: #64748b;
+      }
+      @media print {
+        * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        @page { size: ${printConfig?.orientation === "landscape" ? "landscape" : "portrait"}; margin: 0.5in; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="cards">${cardRowsHtml}</div>
+    </div>
+  </body>
+</html>`;
+    const printHtml = printMode === "card" ? cardPrintHtml : sheetPrintHtml;
 
     const result = await window.parserApp?.exportPrintPdf?.({
-      title: "Orders Print",
+      title: printTitle,
       html: printHtml,
       orientation: printConfig?.orientation === "landscape" ? "landscape" : "portrait",
     });
@@ -1789,6 +1984,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         onSelectTab={onActiveTabChange}
         activeCount={totalCounts.active}
         completedCount={totalCounts.completed}
+        showCompletedTab={viewConfig.showCompleted !== false}
         tabCounts={tabCounts}
         rightContent={
           <>
@@ -2557,12 +2753,10 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
             const n = contextMenu.row && selectedIds.has(contextMenu.row.id) && selectedIds.size > 1 ? selectedIds.size : 1;
             const menuItems = activeTab === "completed"
               ? [
-                  { label: n > 1 ? `Archive ${n} to filesystem` : "Archive to filesystem", action: handleOffloadToFilesystem, color: "#6366f1" },
                   { label: n > 1 ? `Move ${n} to Active` : "Move to Active", action: handleMoveToActive, color: "#111" },
                   { label: n > 1 ? `Delete ${n} Orders`  : "Delete Order",   action: handleDelete,        color: "#dc2626" },
                 ]
               : [
-                  { label: n > 1 ? `Archive ${n} to filesystem` : "Archive to filesystem", action: handleOffloadToFilesystem, color: "#6366f1" },
                   { label: n > 1 ? `Move ${n} to Completed` : "Move to Completed", action: handleMoveToCompleted, color: "#111" },
                   { label: n > 1 ? `Delete ${n} Orders`     : "Delete Order",       action: handleDelete,          color: "#dc2626" },
                 ];

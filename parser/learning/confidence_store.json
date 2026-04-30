@@ -13,7 +13,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2353",
-    "streak_count": 16
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|order_number|order": {
     "field": "order_number",
@@ -21,7 +27,7 @@
     "extraction_signature": "number_regex|order_number|order",
     "source": "",
     "last_value": "4024391570",
-    "streak_count": 101
+    "streak_count": 109
   },
   "aa43ea0afc2adea6103956ca6c64dd95bc38300edcc08346f6958b2983ec64c8:order_number:number_regex|order|order": {
     "field": "order_number",
@@ -45,7 +51,7 @@
     "extraction_signature": "date_header|none|header",
     "source": "",
     "last_value": "April 9, 2026",
-    "streak_count": 20
+    "streak_count": 37
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|email|body": {
     "field": "buyer_email",
@@ -53,7 +59,7 @@
     "extraction_signature": "email_regex|email|body",
     "source": "",
     "last_value": "djfurlong18@yahoo.com",
-    "streak_count": 24
+    "streak_count": 41
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:ship_by:ship_by_subject_regex|ship_by|order": {
     "field": "ship_by",
@@ -61,7 +67,7 @@
     "extraction_signature": "ship_by_subject_regex|ship_by|order",
     "source": "",
     "last_value": "Apr 16",
-    "streak_count": 23
+    "streak_count": 40
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_block_first_line|none|body": {
     "field": "buyer_name",
@@ -69,7 +75,7 @@
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
     "last_value": "Doug Furlong",
-    "streak_count": 24
+    "streak_count": 41
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:address_block_with_recipient|none|body": {
     "field": "shipping_address",
@@ -93,7 +99,7 @@
     "extraction_signature": "number_regex|quantity|qty_label",
     "source": "unknown",
     "last_value": "5",
-    "streak_count": 20
+    "streak_count": 80
   },
   "5cf1fcebfdb0cc213ff76d1c089010476acf033d241d7a4a73001b93e5b9b1bc:price:number_regex|total|pricing": {
     "field": "price",
@@ -101,7 +107,7 @@
     "extraction_signature": "number_regex|total|pricing",
     "source": "",
     "last_value": "99.99",
-    "streak_count": 20
+    "streak_count": 80
   },
   "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:quantity:number_regex|none|order_summary:woo": {
     "field": "quantity",
@@ -165,7 +171,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2025",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -205,7 +217,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "28037",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -245,7 +263,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2023",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -285,7 +309,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "29907",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -325,7 +355,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "32668",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -365,7 +401,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "01033",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -429,7 +471,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "28387",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -469,7 +517,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "28387",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -509,7 +563,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2037",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -549,7 +609,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2038",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -589,7 +655,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "06016",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -629,7 +701,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "75248",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -669,7 +747,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "02481",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -709,7 +793,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "08037",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -749,7 +839,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "76309",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -789,7 +885,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "30012",
-    "streak_count": 2
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -837,7 +939,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2101",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -877,7 +985,13 @@
     "extraction_signature": "number_regex|none|body",
     "source": "",
     "last_value": "2041",
-    "streak_count": 1
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
   },
   "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46:order_date:date_regex|order|order": {
     "field": "order_date",
@@ -901,6 +1015,558 @@
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
     "last_value": "Jenny Conway",
+    "streak_count": 1
+  },
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "78.00",
+    "streak_count": 2
+  },
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "83619",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "April 28, 2026",
+    "streak_count": 2
+  },
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "tonyarenee11@yahoo.com",
+    "streak_count": 2
+  },
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Tonya Wilkins",
+    "streak_count": 1
+  },
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "52.00",
+    "streak_count": 1
+  },
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "1927",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 1, 2025",
+    "streak_count": 1
+  },
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "wcsnipes@gmail.com",
+    "streak_count": 1
+  },
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Lee Czajkowski",
+    "streak_count": 1
+  },
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "78.00",
+    "streak_count": 1
+  },
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "55906",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 1, 2025",
+    "streak_count": 1
+  },
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "Brenda_pineda75@hotmail.com",
+    "streak_count": 1
+  },
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Brenda Espinosa",
+    "streak_count": 1
+  },
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "54.00",
+    "streak_count": 1
+  },
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "75065",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 5, 2025",
+    "streak_count": 1
+  },
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "fdss@mac.com",
+    "streak_count": 1
+  },
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Sarah Brattain",
+    "streak_count": 1
+  },
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "78.00",
+    "streak_count": 1
+  },
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "75501",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 7, 2025",
+    "streak_count": 1
+  },
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "ninjac430@gmail.com",
+    "streak_count": 1
+  },
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Ryan Baird",
+    "streak_count": 1
+  },
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "78.00",
+    "streak_count": 1
+  },
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "1936",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 8, 2025",
+    "streak_count": 1
+  },
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "jwolff2552@gmail.com",
+    "streak_count": 1
+  },
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "John Ryan Wolff",
+    "streak_count": 1
+  },
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "29.99",
+    "streak_count": 1
+  },
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "1957",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 15, 2025",
+    "streak_count": 1
+  },
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "cgovero1@msn.com",
+    "streak_count": 1
+  },
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Angela Keeting",
+    "streak_count": 1
+  },
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "74.00",
+    "streak_count": 1
+  },
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "34203",
+    "streak_count": 0,
+    "quarantined": true,
+    "quarantine_reason": "unsafe_order_number_confidence",
+    "safety_reasons": [
+      "generic_number_without_order_support"
+    ],
+    "quarantined_at": "20260429T030004Z"
+  },
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "December 15, 2025",
+    "streak_count": 1
+  },
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "julieamerring@gmail.com",
+    "streak_count": 1
+  },
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Julie Merring",
+    "streak_count": 1
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:price:number_regex|none|body": {
+    "field": "price",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "29.99",
+    "streak_count": 22
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_number:number_regex|none|body": {
+    "field": "order_number",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "number_regex|none|body",
+    "source": "",
+    "last_value": "2006",
+    "streak_count": 11
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_date:date_regex|order|order": {
+    "field": "order_date",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "date_regex|order|order",
+    "source": "",
+    "last_value": "April 10, 2026",
+    "streak_count": 23
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_email:email_regex|none|body": {
+    "field": "buyer_email",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "email_regex|none|body",
+    "source": "",
+    "last_value": "jenna_lowry@comcast.net",
+    "streak_count": 23
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:address_block_first_line|none|body": {
+    "field": "buyer_name",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "address_block_first_line|none|body",
+    "source": "",
+    "last_value": "Jenna Lowry",
+    "streak_count": 23
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:shipping_address:shipping_address_block_street_forward|none|body": {
+    "field": "shipping_address",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "shipping_address_block_street_forward|none|body",
+    "source": "",
+    "last_value": "Prestige Realty\n121 N Main\nCedar City, UT 84720",
+    "streak_count": 18
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_number:number_regex|explicit_order_label|order_header|order_header_number|early_header": {
+    "field": "order_number",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "number_regex|explicit_order_label|order_header|order_header_number|early_header",
+    "source": "",
+    "last_value": "4024391570",
+    "streak_count": 9
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_number:number_regex|explicit_order_label|order_header|order_header_number|early_header": {
+    "field": "order_number",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "number_regex|explicit_order_label|order_header|order_header_number|early_header",
+    "source": "",
+    "last_value": "2353",
+    "streak_count": 7
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_date:date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|none": {
+    "field": "order_date",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|none",
+    "source": "",
+    "last_value": "April 27, 2026",
+    "streak_count": 2
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_email:email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body": {
+    "field": "buyer_email",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body",
+    "source": "",
+    "last_value": "ccm7ccm@gmail.com",
+    "streak_count": 3
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
+    "field": "buyer_name",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body",
+    "source": "",
+    "last_value": "Carla Williams",
+    "streak_count": 3
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none": {
+    "field": "order_date",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
+    "source": "",
+    "last_value": "April 30, 2026",
+    "streak_count": 8
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body": {
+    "field": "buyer_email",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body",
+    "source": "",
+    "last_value": "shay.galto@gmail.com",
+    "streak_count": 4
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:ship_by:ship_by_subject_regex|subject|ship_by|ship_by_date|subject|subject|subject_line": {
+    "field": "ship_by",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "ship_by_subject_regex|subject|ship_by|ship_by_date|subject|subject|subject_line",
+    "source": "",
+    "last_value": "May 5",
+    "streak_count": 4
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body": {
+    "field": "buyer_name",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body",
+    "source": "",
+    "last_value": "Nancy Worthington",
+    "streak_count": 4
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|payment_date": {
+    "field": "order_date",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|payment_date",
+    "source": "",
+    "last_value": "April 28, 2026",
+    "streak_count": 4
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
+    "field": "buyer_email",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body",
+    "source": "",
+    "last_value": "pxdqgmy892@privaterelay.appleid.com",
+    "streak_count": 2
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_date:date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|generic_unlabeled_date": {
+    "field": "order_date",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|generic_unlabeled_date",
+    "source": "",
+    "last_value": "April 29, 2026",
+    "streak_count": 1
+  },
+  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:order_number:number_regex|explicit_order_label|order_header|order_header_number|body": {
+    "field": "order_number",
+    "template_id": "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8",
+    "extraction_signature": "number_regex|explicit_order_label|order_header|order_header_number|body",
+    "source": "",
+    "last_value": "78451293",
+    "streak_count": 1
+  },
+  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:buyer_email:email_regex|buyer_email|customer_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
+    "field": "buyer_email",
+    "template_id": "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8",
+    "extraction_signature": "email_regex|buyer_email|customer_email|customer|business_or_custom_domain|person_like_local|primary_customer|body",
+    "source": "",
+    "last_value": "amelia.hart92@examplemail.com",
+    "streak_count": 1
+  },
+  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
+    "field": "buyer_name",
+    "template_id": "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8",
+    "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body",
+    "source": "",
+    "last_value": "Amelia Hart",
+    "streak_count": 1
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body": {
+    "field": "buyer_email",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body",
+    "source": "",
+    "last_value": "gunner726@verizon.net",
+    "streak_count": 1
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body": {
+    "field": "buyer_email",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body",
+    "source": "",
+    "last_value": "thegaffkes@gmail.com",
     "streak_count": 1
   }
 }

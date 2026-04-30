@@ -272,10 +272,29 @@ function defaultPrintWrap() {
   return Object.fromEntries(ALL_COLUMN_KEYS.map((key) => [key, key === "order_info"]));
 }
 
+function normalizePrintCardOrder(order) {
+  const seen = new Set();
+  const ordered = Array.isArray(order)
+    ? order.filter((key) => {
+        if (!ALL_COLUMN_KEYS.includes(key) || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+    : [];
+  return [
+    ...ordered,
+    ...ALL_COLUMN_KEYS.filter((key) => !seen.has(key)),
+  ];
+}
+
 export function defaultPrintConfig() {
   return {
+    mode: "sheet",
     columns: defaultPrintColumns(),
     wrap: defaultPrintWrap(),
+    cardOrder: normalizePrintCardOrder(),
     orientation: "portrait",
   };
 }
@@ -290,12 +309,14 @@ export function loadPrintConfig() {
       ? saved.columns
       : saved;
     return {
+      mode: saved?.mode === "card" ? "card" : "sheet",
       columns: Object.fromEntries(
         ALL_COLUMN_KEYS.map((key) => [key, savedColumns?.[key] !== false])
       ),
       wrap: Object.fromEntries(
         ALL_COLUMN_KEYS.map((key) => [key, saved?.wrap?.[key] ?? defaults.wrap[key]])
       ),
+      cardOrder: normalizePrintCardOrder(saved?.cardOrder),
       orientation: saved?.orientation === "landscape" ? "landscape" : "portrait",
     };
   } catch {
@@ -305,12 +326,14 @@ export function loadPrintConfig() {
 
 export function savePrintConfig(config) {
   const payload = {
+    mode: config?.mode === "card" ? "card" : "sheet",
     columns: Object.fromEntries(
       ALL_COLUMN_KEYS.map((key) => [key, config?.columns?.[key] !== false])
     ),
     wrap: Object.fromEntries(
       ALL_COLUMN_KEYS.map((key) => [key, !!config?.wrap?.[key]])
     ),
+    cardOrder: normalizePrintCardOrder(config?.cardOrder),
     orientation: config?.orientation === "landscape" ? "landscape" : "portrait",
   };
   localStorage.setItem(PRINT_CONFIG_KEY, JSON.stringify(payload));
@@ -510,6 +533,8 @@ export const DEFAULT_SAVE_FOLDER = "C:\\Spaila\\Backup";
 
 export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
+  shopLogoPath:  "",
+  shopLogoName:  "",
   /** @type {number | null} Days after last activity before auto-archiving; null = off */
   autoArchiveDays: null,
   /** Absolute path for archived order folders; empty = backend default (e.g. C:\\Spaila\\archive) */
@@ -532,7 +557,7 @@ export const DEFAULT_SHOP_CONFIG = {
   mailBackgroundSyncEnabled: true,
   mailStartupAutoConnect: true,
   mailReconnectEnabled: true,
-  sentMailRetentionDays: 60,
+  sentMailRetentionDays: 30,
 };
 
 function persistOrderArchiveSettings(config) {
@@ -573,7 +598,7 @@ function persistEmailSettings(config) {
       mailBackgroundSyncEnabled: config?.mailBackgroundSyncEnabled !== false,
       mailStartupAutoConnect: config?.mailStartupAutoConnect !== false,
       mailReconnectEnabled: config?.mailReconnectEnabled !== false,
-      sentMailRetentionDays: Math.max(1, Math.min(365, Number.parseInt(String(config?.sentMailRetentionDays || 60), 10) || 60)),
+      sentMailRetentionDays: Math.max(1, Math.min(365, Number.parseInt(String(config?.sentMailRetentionDays || 30), 10) || 30)),
     };
     window.parserApp.saveJson({
       folderPath: "C:\\Spaila",
@@ -591,6 +616,8 @@ export function loadShopConfig() {
     if (!raw) return { ...DEFAULT_SHOP_CONFIG };
     const saved = JSON.parse(raw);
     const merged = { ...DEFAULT_SHOP_CONFIG, ...saved, saveFolder: DEFAULT_SAVE_FOLDER };
+    merged.shopLogoPath = String(merged.shopLogoPath ?? "").trim();
+    merged.shopLogoName = String(merged.shopLogoName ?? "").trim();
     merged.orderArchiveRoot = String(merged.orderArchiveRoot ?? "").trim();
     const aad = merged.autoArchiveDays;
     if (aad === null || aad === undefined || aad === "") {

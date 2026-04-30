@@ -1,0 +1,21 @@
+From: orders@marketflow.test
+To: seller@example.com
+Subject: MarketFlow order #1001
+Date: Sun, 12 Apr 2026 09:00:00 -0500
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+MarketFlow
+New order: #1001
+Order summary
+Order #1001 ( April 12, 2026 )
+Product Quantity Price
+Custom Slate Marker
+Quantity: 2
+Price: $45.00
+Ship by: Apr 18
+Customer email: morgan.lee@example.com
+Shipping address
+Morgan Lee
+12 Cedar Trail
+Denver, CO 80202

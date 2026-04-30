@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fields": {
+    "quantity": {
+      "final_value": "1"
+    },
+    "item_price": {
+      "final_value": "58.00"
+    },
+    "order_number": {
+      "final_value": "9902"
+    },
+    "order_date": {
+      "final_value": "April 18, 2026"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[
+  { "field": "quantity", "value": "2" },
+  { "field": "price", "value": "45.00" },
+  { "field": "order_number", "value": "1001" },
+  { "field": "order_date", "value": "April 12, 2026" },
+  { "field": "buyer_email", "value": "morgan.lee@example.com" },
+  { "field": "ship_by", "value": "Apr 18" },
+  { "field": "buyer_name", "value": "Morgan Lee" },
+  { "field": "shipping_address", "value": "12 Cedar Trail\nDenver, CO 80202" }
+]

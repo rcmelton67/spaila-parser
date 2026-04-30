@@ -386,10 +386,28 @@ _ETSY_SIGNALS: list = [
     re.compile(r'etsy\s+(?:sale|order|payment|seller)',        re.IGNORECASE),
 ]
 
+_COMMERCE_ORDER_SKELETON: list = [
+    (re.compile(r'(?:new\s+)?order\s*:?\s*#?', re.IGNORECASE), 'order_header'),
+    (re.compile(r'order\s+summary', re.IGNORECASE), 'order_summary'),
+    (re.compile(r'billing\s+address', re.IGNORECASE), 'billing_address'),
+    (re.compile(r'shipping\s+address', re.IGNORECASE), 'shipping_address'),
+]
+
+_WOO_LIKE_SIGNALS: list = [
+    re.compile(r"you(?:['’])?ve\s+got\s+a\s+new\s+order", re.IGNORECASE),
+    re.compile(r'\bnew\s+order\s*:?\s*#', re.IGNORECASE),
+    re.compile(r'\border\s+summary\b.*\bbilling\s+address\b.*\bshipping\s+address\b', re.IGNORECASE),
+]
+
 
 def _is_etsy(normalized_text: str) -> bool:
     """Return True if *normalized_text* looks like an Etsy email."""
     return any(sig.search(normalized_text) for sig in _ETSY_SIGNALS)
+
+
+def _is_woo_like(normalized_text: str) -> bool:
+    """Return True for generic WooCommerce-like order notification skeletons."""
+    return any(sig.search(normalized_text) for sig in _WOO_LIKE_SIGNALS)
 
 
 def _build_skeleton(text: str, skeleton: list) -> str:
@@ -423,6 +441,12 @@ def normalize_for_family(clean_text: str) -> str:
         skeleton = _build_skeleton(text, _ETSY_SKELETON)
         # Guarantee a stable prefix even when no skeleton label is found.
         return f"etsy {skeleton}" if skeleton else "etsy order_details"
+
+    if _is_woo_like(text):
+        skeleton = _build_skeleton(text, _COMMERCE_ORDER_SKELETON)
+        if "order_header" in skeleton and "shipping_address" in skeleton:
+            return "commerce_order order_header order_summary billing_address shipping_address"
+        return f"commerce_order {skeleton}" if skeleton else "commerce_order order_header"
 
     # ── Non-Etsy: block collapsing ────────────────────────────────────────────
 

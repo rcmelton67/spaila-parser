@@ -1,0 +1,21 @@
+From: orders@marketflow.test
+To: seller@example.com
+Subject: MarketFlow order #1002
+Date: Mon, 13 Apr 2026 09:00:00 -0500
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+MarketFlow
+New order: #1002
+Order summary
+Order #1002 ( April 13, 2026 )
+Product Quantity Price
+Custom Slate Marker
+Quantity: 3
+Price: $48.00
+Ship by: Apr 19
+Customer email: riley.park@example.com
+Shipping address
+Riley Park
+44 Pine Road
+Denver, CO 80203

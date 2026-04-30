@@ -389,7 +389,6 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   const [statusConfig, setStatusConfig] = React.useState(() => loadStatusConfig());
   const [orderStatuses, setOrderStatuses] = React.useState(() => loadOrderStatuses());
   const [conversationMessages, setConversationMessages] = React.useState(() => readOrderMessages(order));
-  const [showNewMessageHint, setShowNewMessageHint] = React.useState(false);
   const threadScrollRef = React.useRef(null);
   const shouldAutoScrollRef = React.useRef(false);
   const replyFileInputRef = React.useRef(null);
@@ -437,7 +436,6 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     setReplyAttachments([]);
     setIsSendingReply(false);
     setConversationMessages(readOrderMessages(order));
-    setShowNewMessageHint(false);
     // Intentionally omit `order` from deps: parent list refresh must not reset draft, attachments, or thread (sync handles messages).
   }, [orderIdentityKey, launchContext]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -868,10 +866,6 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       if (cancelled) return;
       const incoming = await fetchOrderMessagesFromApi(modalOrderId);
       if (cancelled || !Array.isArray(incoming)) return;
-      const scrollNode = threadScrollRef.current;
-      const nearBottom = !!scrollNode
-        && (scrollNode.scrollHeight - scrollNode.scrollTop - scrollNode.clientHeight) <= 80;
-
       setConversationMessages((current) => {
         const existingCount = current.length;
         const incomingCount = incoming.length;
@@ -885,10 +879,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
           reconciled_count: merged.reconciled,
         });
         const hadNew = merged.added > 0 || merged.reconciled > 0;
-        if (hadNew && !nearBottom) {
-          queueMicrotask(() => setShowNewMessageHint(true));
-        }
-        if ((hadNew || merged.updated > 0) && nearBottom) {
+        if (hadNew || merged.updated > 0) {
           shouldAutoScrollRef.current = true;
         }
         return merged.next;
@@ -910,22 +901,6 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     };
   }, [modalOrderId, isNewOrder]);
 
-  function handleThreadScroll() {
-    const node = threadScrollRef.current;
-    if (!node) return;
-    const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight <= 80;
-    if (nearBottom) setShowNewMessageHint(false);
-  }
-
-  function scrollThreadToBottom() {
-    const node = threadScrollRef.current;
-    if (!node) return;
-    setShowNewMessageHint(false);
-    window.requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight;
-    });
-  }
-
   React.useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     shouldAutoScrollRef.current = false;
@@ -934,6 +909,13 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       node.scrollTop = node.scrollHeight;
     }
   }, [conversationMessages]);
+
+  React.useEffect(() => {
+    window.requestAnimationFrame(() => {
+      const node = threadScrollRef.current;
+      if (node) node.scrollTop = node.scrollHeight;
+    });
+  }, [modalOrderId]);
 
   return ReactDOM.createPortal(
     <div
@@ -1145,33 +1127,8 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
           </div>
 
           <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
-            {showNewMessageHint ? (
-              <button
-                type="button"
-                onClick={scrollThreadToBottom}
-                style={{
-                  position: "absolute",
-                  top: 10,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  zIndex: 3,
-                  border: "1px solid #bfdbfe",
-                  background: "#eff6ff",
-                  color: "#1e40af",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  cursor: "pointer",
-                  boxShadow: "0 4px 12px rgba(15, 23, 42, 0.08)",
-                }}
-              >
-                New message
-              </button>
-            ) : null}
             <div
               ref={threadScrollRef}
-              onScroll={handleThreadScroll}
               style={{ flex: 1, overflowY: "auto", padding: "18px 20px", background: "#f8fafc", minWidth: 0 }}
             >
               {conversationMessages.length ? (
@@ -1281,7 +1238,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 900, color: "#1e40af", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                      Composing customer preview email
+                      Composing customer email
                     </div>
                     <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
                       Standalone outbound email. This is not a thread reply.
@@ -1436,7 +1393,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                       fontWeight: 900,
                     }}
                   >
-                    {previewSendState.sending ? "Sending..." : "Send Preview Email"}
+                    {previewSendState.sending ? "Sending..." : "Send Email"}
                   </button>
                 </div>
               </div>

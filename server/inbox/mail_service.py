@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict
 
 from workspace_paths import get_workspace_root
 
-from .imap_client import check_imap_connection, delete_message
+from .imap_client import check_imap_connection, delete_message, move_message_to_trash
 from .inbox_service import fetch_and_store_emails
 
 
@@ -105,12 +105,14 @@ class MailService:
         fetcher: Callable[..., Dict[str, object]] = fetch_and_store_emails,
         checker: Callable[..., bool] = check_imap_connection,
         deleter: Callable[..., None] = delete_message,
+        trasher: Callable[..., Dict[str, object]] = move_message_to_trash,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._settings_loader = settings_loader
         self._fetcher = fetcher
         self._checker = checker
         self._deleter = deleter
+        self._trasher = trasher
         self._sleeper = sleeper
         self._state_lock = threading.RLock()
         self._operation_lock = threading.Lock()
@@ -147,6 +149,9 @@ class MailService:
 
         if settings.configured:
             self.connect(reason="startup" if auto else "manual_start")
+
+        if auto and settings.background_sync_enabled and settings.configured and self._connected:
+            self._poll_now_safely(reason="startup")
 
         if settings.background_sync_enabled and settings.configured:
             self._ensure_thread()
@@ -262,6 +267,8 @@ class MailService:
                 "skipped": result.get("skipped", 0),
                 "fetched": result.get("fetched", 0),
                 "last_seen_uid": result.get("last_seen_uid", 0),
+                "source_deleted_missing": result.get("source_deleted_missing", 0),
+                "source_deleted_changed": result.get("source_deleted_changed", 0),
             }
             with self._state_lock:
                 self._connected = True
@@ -285,7 +292,7 @@ class MailService:
                 self._in_flight = False
             self._operation_lock.release()
 
-    def delete_email(self, email_id: str) -> Dict[str, object]:
+    def delete_email(self, email_id: str, *, mailbox: str | None = None) -> Dict[str, object]:
         settings = self._load_settings()
         if not settings.configured:
             raise ValueError("Email settings have not been saved yet.")
@@ -304,12 +311,42 @@ class MailService:
                 username=settings.username,
                 password=settings.password,
                 email_id=str(email_id or "").strip(),
-                mailbox=settings.mailbox,
+                mailbox=str(mailbox or settings.mailbox).strip() or settings.mailbox,
                 port=settings.port,
                 use_ssl=settings.use_ssl,
                 timeout=2.5,
             )
             return {"status": "ok"}
+        finally:
+            with self._state_lock:
+                self._in_flight = False
+            self._operation_lock.release()
+
+    def move_email_to_trash(self, email_id: str) -> Dict[str, object]:
+        settings = self._load_settings()
+        if not settings.configured:
+            raise ValueError("Email settings have not been saved yet.")
+        if not self._operation_lock.acquire(timeout=20.0):
+            self._log("[MAIL_SERVICE_SKIP_INFLIGHT]", {"reason": "trash"})
+            raise RuntimeError("Mail service is busy. Try again shortly.")
+        with self._state_lock:
+            self._in_flight = True
+        try:
+            if not self._connected:
+                self.connect(reason="trash")
+            if not self._connected:
+                raise RuntimeError("Email connection unavailable. Cannot move to Trash.")
+            result = self._trasher(
+                host=settings.host,
+                username=settings.username,
+                password=settings.password,
+                email_id=str(email_id or "").strip(),
+                mailbox=settings.mailbox,
+                port=settings.port,
+                use_ssl=settings.use_ssl,
+                timeout=2.5,
+            )
+            return {"status": "ok", **(result or {})}
         finally:
             with self._state_lock:
                 self._in_flight = False
@@ -354,6 +391,15 @@ class MailService:
             self._thread = threading.Thread(target=self._loop, name="spaila-mail-service", daemon=True)
             self._thread.start()
 
+    def _poll_now_safely(self, *, reason: str) -> None:
+        try:
+            self.poll(force=True, reason=reason)
+        except Exception as error:
+            self._log("[MAIL_SERVICE_INITIAL_FETCH_FAIL]", {
+                "reason": reason,
+                "error": str(error) or "Could not fetch inbox emails.",
+            })
+
     def _load_settings(self, *, raise_errors: bool = True) -> MailSettings | None:
         try:
             return MailSettings.from_raw(self._settings_loader())
@@ -370,7 +416,16 @@ class MailService:
         with self._state_lock:
             self._last_error = error
             self._connected = False
-        return {"status": "ok", "saved": 0, "skipped": 0, "fetched": 0, "last_seen_uid": 0, "error": error}
+        return {
+            "status": "ok",
+            "saved": 0,
+            "skipped": 0,
+            "fetched": 0,
+            "last_seen_uid": 0,
+            "source_deleted_missing": 0,
+            "source_deleted_changed": 0,
+            "error": error,
+        }
 
     def _log(self, label: str, payload: dict) -> None:
         print(f"{label} " + json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)

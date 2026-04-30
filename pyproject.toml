@@ -14,7 +14,16 @@ dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["parser*"]
+include = ["parser*", "parser_certification*"]
+
+[tool.setuptools.package-data]
+parser_certification = ["manifests/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["parser/tests"]
+markers = [
+  "regression_pack: manifest-driven real and synthetic email regression pack",
+  "cross_platform: cross-platform parser audit and family grouping checks",
+  "self_healing: parser learning self-healing and unlearn/restore stress scenarios",
+  "slow_audit: expanded audit runs that may be slower than the fast parser suite",
+]

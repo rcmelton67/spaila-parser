@@ -1,0 +1,69 @@
+{
+  "manifest_id": "standalone_parser_certification_smoke",
+  "manifest_version": "1",
+  "cases": [
+    {
+      "case_id": "synthetic_unknown_marketplace_order_header",
+      "category": "synthetic_marketplace",
+      "tier": "smoke",
+      "seed": 1001,
+      "input": {
+        "subject": "New order #1935",
+        "order_label": "New order",
+        "order_number": "1935",
+        "order_date": "April 10, 2026",
+        "ship_by": "Apr 16",
+        "buyer_name": "Alex Rivers",
+        "buyer_email": "alex@example.net",
+        "quantity": "2",
+        "item_price": "24.50",
+        "street": "120 Market St",
+        "city_state_zip": "Rochester, MN 55906"
+      },
+      "expected": {
+        "order_number": "1935"
+      },
+      "forbidden": {
+        "order_number": ["55906"]
+      }
+    },
+    {
+      "case_id": "synthetic_zip_order_contamination",
+      "category": "contamination",
+      "tier": "smoke",
+      "seed": 1002,
+      "input": {
+        "subject": "Purchase #48291",
+        "order_label": "Purchase",
+        "order_number": "48291",
+        "buyer_name": "Jordan Lee",
+        "buyer_email": "jordan@example.net",
+        "street": "55906 Cedar Ave",
+        "city_state_zip": "Austin, TX 78701"
+      },
+      "expected": {
+        "order_number": "48291"
+      },
+      "forbidden": {
+        "order_number": ["55906", "78701"]
+      }
+    },
+    {
+      "case_id": "malformed_missing_subject_minimal_body",
+      "category": "malformed_input",
+      "tier": "core",
+      "seed": 2001,
+      "input": {
+        "subject": "",
+        "body": "Order: #7281\nOrder date: April 11, 2026\nCustomer email: casey@example.net\nQuantity: 1\nItem price: $19.00\nShipping address\nCasey Morgan\n44 Lake Rd\nMadison, WI 53703\n"
+      },
+      "expected": {
+        "order_number": "7281"
+      },
+      "forbidden": {
+        "order_number": ["53703"]
+      }
+    }
+  ]
+}
+

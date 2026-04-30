@@ -225,6 +225,27 @@ def get_currently_promoted_fields(template_id: str, source_scopes: Dict[str, str
     return frozenset(promoted)
 
 
+def get_promoted_signature_records(template_id: str, field: str, source: str = "") -> list[Dict]:
+    """Return promoted confidence records for one field/template."""
+    store = _load()
+    promoted: list[Dict] = []
+    prefix = f"{template_id}:{field}:"
+    for key, record in store.items():
+        if not key.startswith(prefix):
+            continue
+        if record.get("field") != field:
+            continue
+        if field == "quantity" and source and record.get("source", "") not in {"", source}:
+            continue
+        sig = record.get("extraction_signature", "")
+        if record.get("streak_count", 0) < CONFIDENCE_PROMOTION_THRESHOLD:
+            continue
+        if _is_quarantined(sig, field):
+            continue
+        promoted.append({**record, "key": key})
+    return promoted
+
+
 def reset_field(template_id: str, field: str, source: str = "") -> int:
     """Remove confidence streaks for one field after an explicit user action."""
     store = _load()
