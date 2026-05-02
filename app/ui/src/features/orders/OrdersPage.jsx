@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 
 import EditOrderModal from "./EditOrderModal.jsx";
 import AppHeader from "../../shared/components/AppHeader.jsx";
+import AttachmentPreviewCard from "../../shared/components/AttachmentPreviewCard.jsx";
 import {
   loadFieldConfig,
   loadPriceList,
@@ -26,6 +27,7 @@ import {
   loadOrderStatuses,
   setOrderStatus,
   loadDateConfig,
+  saveDateConfig,
   DATE_FIELD_KEYS,
   formatDate,
   loadEmailTemplates,
@@ -36,11 +38,48 @@ import {
   loadDocumentsConfig,
   loadPrintConfig,
   loadViewConfig,
+  saveViewConfig,
 } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
 const EMPTY_TRAILING_ROW_COUNT = 6;
 const MAX_TWO_UP_CARD_FIELDS = 12;
+const WIDTH_PROFILE_TOLERANCE = 0.02;
+
+function buildColumnWidthProfile(columns = [], widths = {}) {
+  const visibleColumns = columns
+    .map((column) => ({
+      key: column.key,
+      width: Number(widths[column.key] ?? column.defaultWidth ?? 120),
+    }))
+    .filter((column) => column.key && Number.isFinite(column.width) && column.width > 0);
+  const totalWidth = visibleColumns.reduce((sum, column) => sum + column.width, 0);
+  if (!totalWidth) return null;
+  return {
+    source: "desktop",
+    unit: "percent",
+    tolerance: WIDTH_PROFILE_TOLERANCE,
+    updatedAt: new Date().toISOString(),
+    columns: Object.fromEntries(
+      visibleColumns.map((column) => [
+        column.key,
+        {
+          percent: Number((column.width / totalWidth).toFixed(4)),
+          rawDesktopPx: Math.round(column.width),
+        },
+      ])
+    ),
+  };
+}
+
+function syncSharedDesktopWidthProfile(columns, widths) {
+  const profile = buildColumnWidthProfile(columns, widths);
+  if (!profile) return;
+  window.parserApp?.updateOrderFieldLayout?.({
+    column_width_profiles: { desktop: profile },
+    layout_version: 1,
+  }).catch(() => {});
+}
 
 const primaryButton = {
   padding: "6px 14px",
@@ -52,6 +91,296 @@ const primaryButton = {
   fontSize: "13px",
   fontWeight: 600,
 };
+
+const BACKUP_STEPS = [
+  { key: "start", label: "Preparing backup" },
+  { key: "scanning", label: "Scanning workspace" },
+  { key: "database", label: "Backing up database/settings" },
+  { key: "copying", label: "Backing up orders/files" },
+  { key: "internal", label: "Backing up internal system data" },
+  { key: "manifest", label: "Writing manifest" },
+  { key: "compressing", label: "Building archive" },
+  { key: "validating", label: "Validating backup" },
+  { key: "finalizing", label: "Finalizing" },
+];
+
+const BACKUP_STAGE_INDEX = {
+  start: 0,
+  scanning: 1,
+  database: 2,
+  copying: 3,
+  internal: 4,
+  manifest: 5,
+  compressing: 6,
+  validating: 7,
+  finalizing: 8,
+  complete: BACKUP_STEPS.length,
+  failed: -1,
+};
+
+function emptyBackupDialog() {
+  return {
+    open: false,
+    status: "idle",
+    stage: "start",
+    message: "",
+    startedAt: 0,
+    endedAt: 0,
+    path: "",
+    filename: "",
+    error: "",
+    fileCount: null,
+    payloadBytes: null,
+    archiveBytes: null,
+  };
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function BackupProgressModal({ backup, now, onClose, onRetry, onOpenFolder }) {
+  if (!backup.open) return null;
+  const isRunning = backup.status === "running";
+  const isSuccess = backup.status === "success";
+  const isFailure = backup.status === "failure";
+  const stepIndex = isSuccess ? BACKUP_STEPS.length : Math.max(0, BACKUP_STAGE_INDEX[backup.stage] ?? 0);
+  const percent = isFailure ? 100 : Math.min(100, Math.round((stepIndex / BACKUP_STEPS.length) * 100));
+  const elapsed = backup.startedAt ? formatDuration((backup.endedAt || now) - backup.startedAt) : "0s";
+  const estimate = isRunning && stepIndex > 0
+    ? formatDuration((((now - backup.startedAt) / stepIndex) * (BACKUP_STEPS.length - stepIndex)))
+    : "Estimating";
+  const archiveSizeLabel = formatBytes(backup.archiveBytes) || (isRunning ? "Calculating..." : "Not available");
+  const payloadSizeLabel = formatBytes(backup.payloadBytes) || (isRunning ? "Calculating..." : "Not available");
+  const isFinalizing = isRunning && backup.stage === "finalizing";
+  const finalizingSubstep = isFinalizing
+    ? (backup.message || "Securing archive, recording final size, and cleaning up temporary files.")
+    : "";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="backup-progress-title"
+      onMouseDown={(event) => event.stopPropagation()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 200000,
+        background: "rgba(15, 23, 42, 0.62)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div style={{
+        width: "min(720px, 96vw)",
+        maxHeight: "calc(100vh - 32px)",
+        background: "#f8fafc",
+        borderRadius: 20,
+        boxShadow: "0 28px 90px rgba(15,23,42,0.38)",
+        border: "1px solid rgba(148,163,184,0.45)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}>
+        <div style={{
+          padding: "22px 26px",
+          background: "linear-gradient(135deg, #0f172a 0%, #1e3a8a 58%, #075985 100%)",
+          color: "#fff",
+        }}>
+          <div style={{ fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.78, fontWeight: 800 }}>
+            Full Workspace Backup
+          </div>
+          <h2 id="backup-progress-title" style={{ margin: "6px 0 0", fontSize: 24, fontWeight: 900 }}>
+            Creating Full Workspace Backup
+          </h2>
+          <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.55, color: "#dbeafe" }}>
+            Spaila is preserving orders, inbox files, settings, and internal recovery data. Interrupting this process can leave an incomplete archive, so keep the app open until verification finishes.
+          </p>
+        </div>
+
+        <div style={{ padding: 26, overflowY: "auto", minHeight: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 13, color: "#64748b", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Current Step
+              </div>
+              <div style={{ marginTop: 4, fontSize: 18, color: "#0f172a", fontWeight: 900 }}>
+                {isSuccess ? "Backup complete" : isFailure ? "Backup failed" : BACKUP_STEPS[stepIndex]?.label || "Preparing backup"}
+              </div>
+            </div>
+            <div style={{ textAlign: "right", fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
+              <div><strong>Elapsed:</strong> {elapsed}</div>
+              {isRunning ? <div><strong>Remaining:</strong> {estimate}</div> : null}
+            </div>
+          </div>
+
+          <div style={{ height: 12, borderRadius: 999, background: "#e2e8f0", overflow: "hidden", border: "1px solid #cbd5e1" }}>
+            <div style={{
+              height: "100%",
+              width: `${percent}%`,
+              background: isFailure
+                ? "linear-gradient(90deg, #ef4444, #b91c1c)"
+                : "linear-gradient(90deg, #2563eb, #06b6d4)",
+              transition: "width 0.25s ease",
+            }} />
+          </div>
+
+          <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+            <div style={{ padding: 12, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800 }}>Files Processed</div>
+              <div style={{ marginTop: 5, fontSize: 18, fontWeight: 900, color: "#0f172a" }}>{backup.fileCount ?? "..."}</div>
+            </div>
+            <div style={{ padding: 12, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800 }}>Payload Size</div>
+              <div style={{ marginTop: 5, fontSize: 18, fontWeight: 900, color: "#0f172a" }}>{payloadSizeLabel}</div>
+            </div>
+            <div style={{ padding: 12, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800 }}>Archive Size</div>
+              <div style={{ marginTop: 5, fontSize: 18, fontWeight: 900, color: "#0f172a" }}>{archiveSizeLabel}</div>
+            </div>
+          </div>
+
+          {isFinalizing ? (
+            <div style={{
+              marginTop: 14,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#eff6ff",
+              border: "1px solid #bfdbfe",
+              color: "#1e3a8a",
+              fontSize: 13,
+              fontWeight: 700,
+            }}>
+              <span style={{
+                width: 18,
+                height: 18,
+                borderRadius: 999,
+                border: "3px solid #bfdbfe",
+                borderTopColor: "#2563eb",
+                display: "inline-block",
+                animation: "spailaBackupSpin 0.9s linear infinite",
+              }} />
+              <span>{finalizingSubstep}</span>
+            </div>
+          ) : null}
+
+          <div style={{ marginTop: 18, display: "grid", gap: 8 }}>
+            {BACKUP_STEPS.map((step, index) => {
+              const done = isSuccess || (!isFailure && index < stepIndex);
+              const active = isRunning && index === stepIndex;
+              return (
+                <div key={step.key} style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: active ? "#eff6ff" : done ? "#f0fdf4" : "#fff",
+                  border: `1px solid ${active ? "#93c5fd" : done ? "#bbf7d0" : "#e2e8f0"}`,
+                  color: "#0f172a",
+                  fontSize: 13,
+                }}>
+                  <span style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 999,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    fontWeight: 900,
+                    background: done ? "#16a34a" : active ? "#2563eb" : "#e2e8f0",
+                    color: done || active ? "#fff" : "#64748b",
+                  }}>
+                    {done ? "OK" : index + 1}
+                  </span>
+                  <span style={{ fontWeight: active ? 900 : 700 }}>{step.label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{
+            marginTop: 18,
+            padding: 12,
+            borderRadius: 12,
+            background: isFailure ? "#fef2f2" : isSuccess ? "#f0fdf4" : "#f8fafc",
+            border: `1px solid ${isFailure ? "#fecaca" : isSuccess ? "#bbf7d0" : "#e2e8f0"}`,
+            color: isFailure ? "#991b1b" : "#334155",
+            fontSize: 13,
+            lineHeight: 1.55,
+          }}>
+            {isFailure ? backup.error : isSuccess ? (
+              <div>
+                <div style={{ fontWeight: 900, color: "#166534", marginBottom: 6 }}>Backup complete and integrity verified.</div>
+                <div><strong>Path:</strong> {backup.path}</div>
+                <div><strong>Final archive size:</strong> {archiveSizeLabel}</div>
+                <div><strong>Elapsed time:</strong> {elapsed}</div>
+              </div>
+            ) : backup.message || "Backup is running."}
+          </div>
+        </div>
+
+        <div style={{
+          padding: "14px 26px",
+          borderTop: "1px solid #e2e8f0",
+          background: "rgba(248,250,252,0.98)",
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 10,
+          flexShrink: 0,
+        }}>
+            {isSuccess ? (
+              <button onClick={onOpenFolder} style={{ ...primaryButton, background: "#0f766e" }}>Open Backup Folder</button>
+            ) : null}
+            {isFailure ? (
+              <>
+                <button onClick={onRetry} style={{ ...primaryButton }}>Retry</button>
+                <button onClick={onOpenFolder} style={{ ...primaryButton, background: "#475569" }}>View Diagnostics</button>
+              </>
+            ) : null}
+            <button
+              onClick={onClose}
+              disabled={isRunning}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 8,
+                border: "1px solid #cbd5e1",
+                background: isRunning ? "#e2e8f0" : "#fff",
+                color: isRunning ? "#94a3b8" : "#0f172a",
+                cursor: isRunning ? "not-allowed" : "pointer",
+                fontWeight: 800,
+              }}
+            >
+              {isRunning ? "Backup in Progress..." : "Close"}
+            </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── Order-info badge cell (computed, no storage) ───────────────────────── */
 
@@ -122,7 +451,7 @@ function OrderInfoCell({ row }) {
   );
 }
 
-function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, canSendEmail }) {
+function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onOpenAttachment, onSendEmail, canSendEmail }) {
   if (!dock) return null;
   const [currentSubject, setCurrentSubject] = React.useState(dock.currentSubject ?? dock.originalSubject ?? dock.subject ?? "");
   const [currentBody, setCurrentBody] = React.useState(dock.currentBody ?? dock.originalBody ?? dock.body ?? "");
@@ -300,11 +629,15 @@ function MailDockModal({ dock, onClose, onOpenEmail, onOpenFolder, onSendEmail, 
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 Attachments ({dock.attachmentPaths?.length || 0})
               </div>
-              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: "4px 12px", alignItems: "center" }}>
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                 {dock.attachmentPaths?.length ? dock.attachmentPaths.map((filePath) => (
-                  <div key={filePath} style={{ fontSize: 13, color: "#0f172a" }}>
-                    {String(filePath).split(/[/\\]/).pop()}
-                  </div>
+                  <AttachmentPreviewCard
+                    key={filePath}
+                    attachment={{ name: String(filePath).split(/[/\\]/).pop() || "Attachment", path: filePath }}
+                    compact
+                    maxWidth={300}
+                    onOpen={onOpenAttachment}
+                  />
                 )) : (
                   <div style={{ fontSize: 13, color: "#0f172a" }}>No attachments ready.</div>
                 )}
@@ -371,6 +704,11 @@ function isCompletedOrder(row) {
 
 function isArchivedOrder(row) {
   return String(row?.status || "").toLowerCase() === "archived";
+}
+
+function getInventoryQuantity(row) {
+  const parsed = Number.parseFloat(String(row?.quantity ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function parseNumericValue(value) {
@@ -561,6 +899,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const [error, setError] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchExcludedColumns, setSearchExcludedColumns] = React.useState(() => new Set());
+  const [searchScope, setSearchScope] = React.useState("current");
   const [viewConfig, setViewConfig] = React.useState(() => loadViewConfig());
   const [activeSort, setActiveSort] = React.useState(() => normalizeSortConfig(loadViewConfig().defaultSort));
   const [editingOrder, setEditingOrder] = React.useState(null);
@@ -580,14 +919,21 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     if (activeTab === "archived") {
       onActiveTabChange?.("active");
     }
-  }, [activeTab, onActiveTabChange]);
+    if (activeTab === "inventory" && viewConfig.showInventoryTab !== true) {
+      onActiveTabChange?.("active");
+    }
+  }, [activeTab, onActiveTabChange, viewConfig.showInventoryTab]);
 
   const [archiveResults, setArchiveResults] = React.useState([]);
   const [archiveSearching, setArchiveSearching] = React.useState(false);
 
   React.useEffect(() => {
     const q = searchQuery.trim();
-    if (!q) { setArchiveResults([]); setArchiveSearching(false); return; }
+    if (!q || (searchScope !== "archived" && searchScope !== "all")) {
+      setArchiveResults([]);
+      setArchiveSearching(false);
+      return;
+    }
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       setArchiveSearching(true);
@@ -600,7 +946,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       if (!cancelled) setArchiveSearching(false);
     }, 400);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [searchQuery]);
+  }, [searchQuery, searchScope]);
 
   async function handleRestoreFromSearch(folderPath) {
     const confirmed = window.confirm("Restore this archived order?");
@@ -617,6 +963,29 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       await loadOrders();
     } catch (err) {
       alert(`Restore failed: ${err.message}`);
+    }
+  }
+
+  async function handleReindexArchive() {
+    try {
+      setArchiveSearching(true);
+      const res = await fetch(`${API}/orders/archive/reindex`, { method: "POST" });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.detail || "Archive reindex failed.");
+      }
+      alert(`Archive index updated. Indexed ${payload.indexed || 0} archived order${payload.indexed === 1 ? "" : "s"}.`);
+      if (searchQuery.trim()) {
+        const searchRes = await fetch(`${API}/orders/archive/search?q=${encodeURIComponent(searchQuery.trim())}`);
+        if (searchRes.ok) {
+          const data = await searchRes.json();
+          setArchiveResults(Array.isArray(data) ? data : []);
+        }
+      }
+    } catch (err) {
+      alert(`Archive reindex failed: ${err.message}`);
+    } finally {
+      setArchiveSearching(false);
     }
   }
 
@@ -698,7 +1067,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   }, []);
 
   const [giftLetterToast, setGiftLetterToast] = React.useState(null); // { error?: string }
-  const [saveToast, setSaveToast] = React.useState(null); // { ok, message }
+  const [backupSaving, setBackupSaving] = React.useState(false);
+  const [backupDialog, setBackupDialog] = React.useState(() => emptyBackupDialog());
+  const [backupNow, setBackupNow] = React.useState(() => Date.now());
 
   React.useEffect(() => {
     if (!emailToast || emailToast.kind !== "success") return undefined;
@@ -706,11 +1077,58 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     return () => window.clearTimeout(timer);
   }, [emailToast]);
 
+  React.useEffect(() => {
+    const unsubscribe = window.parserApp?.onBackupProgress?.((progress) => {
+      if (!progress?.message) return;
+      setBackupDialog((prev) => {
+        if (!prev.open) return prev;
+        return {
+          ...prev,
+          status: progress.stage === "failed" ? "failure" : prev.status,
+          stage: progress.stage || prev.stage,
+          message: progress.message || prev.message,
+          error: progress.stage === "failed" ? progress.message || prev.error : prev.error,
+          fileCount: progress.fileCount ?? prev.fileCount,
+          payloadBytes: progress.payloadBytes ?? prev.payloadBytes,
+          archiveBytes: progress.archiveBytes ?? prev.archiveBytes,
+        };
+      });
+    });
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!backupDialog.open || backupDialog.status !== "running") return undefined;
+    const timer = window.setInterval(() => setBackupNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [backupDialog.open, backupDialog.status]);
+
+  React.useEffect(() => {
+    if (!backupSaving) return undefined;
+    const onBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "Backup in progress. Closing now may corrupt your backup. Are you sure?";
+      return event.returnValue;
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [backupSaving]);
+
   async function handleSaveToFolder() {
+    if (backupSaving) return;
     const folder = DEFAULT_SAVE_FOLDER;
     if (!folder) {
-      setSaveToast({ ok: false, message: "No save folder available." });
-      setTimeout(() => setSaveToast(null), 5000);
+      setBackupDialog({
+        ...emptyBackupDialog(),
+        open: true,
+        status: "failure",
+        error: "No save folder available.",
+        message: "No save folder available.",
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+      });
       return;
     }
     // Collect ALL localStorage entries so they're included in the backup
@@ -722,17 +1140,61 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       }
     } catch (_) {}
 
-    const result = await window.parserApp?.backupSave?.({
-      folderPath: folder,
-      localStorageData,
+    setBackupSaving(true);
+    const startedAt = Date.now();
+    setBackupNow(startedAt);
+    setBackupDialog({
+      ...emptyBackupDialog(),
+      open: true,
+      status: "running",
+      stage: "start",
+      message: "Preparing full workspace backup.",
+      startedAt,
     });
-    if (result?.ok) {
-      setSaveToast(null);
-      setSessionDirty(false); // dim again until next change
-    } else {
-      setSaveToast({ ok: false, message: `Backup failed: ${result?.error ?? "unknown error"}` });
+    try {
+      const result = await window.parserApp?.backupSave?.({
+        folderPath: folder,
+        localStorageData,
+      });
+      if (result?.ok) {
+        setBackupDialog((prev) => ({
+          ...prev,
+          open: true,
+          status: "success",
+          stage: "complete",
+          message: "Backup complete.",
+          endedAt: Date.now(),
+          path: result.path || "",
+          filename: result.filename || "",
+          fileCount: result.metadata?.fileCount ?? prev.fileCount,
+          payloadBytes: result.metadata?.payloadBytes ?? prev.payloadBytes,
+          archiveBytes: result.metadata?.archiveBytes ?? prev.archiveBytes,
+        }));
+        setSessionDirty(false); // dim again until next change
+      } else {
+        setBackupDialog((prev) => ({
+          ...prev,
+          open: true,
+          status: "failure",
+          stage: "failed",
+          message: "Backup failed.",
+          error: result?.error ?? "unknown error",
+          endedAt: Date.now(),
+        }));
+      }
+    } catch (error) {
+      setBackupDialog((prev) => ({
+        ...prev,
+        open: true,
+        status: "failure",
+        stage: "failed",
+        message: "Backup failed.",
+        error: error?.message || "unknown error",
+        endedAt: Date.now(),
+      }));
+    } finally {
+      setBackupSaving(false);
     }
-    setTimeout(() => setSaveToast(null), 5000);
   }
 
   async function handleGenerateGiftLetter(row) {
@@ -789,9 +1251,71 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     return () => window.removeEventListener("spaila:dateconfig", onDateChange);
   }, []);
   React.useEffect(() => {
+    let cancelled = false;
+    async function syncSharedDateConfig() {
+      try {
+        const response = await fetch(`${API}/account/date-config`);
+        if (!response.ok) return;
+        const config = await response.json();
+        if (cancelled || !config || typeof config !== "object") return;
+        if (!config.updated_at) return;
+        saveDateConfig({ ...loadDateConfig(), ...config });
+      } catch (_) {}
+    }
+    syncSharedDateConfig();
+    window.addEventListener("focus", syncSharedDateConfig);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", syncSharedDateConfig);
+    };
+  }, []);
+  React.useEffect(() => {
     function onViewConfigChange() { setViewConfig(loadViewConfig()); }
     window.addEventListener("spaila:viewconfig", onViewConfigChange);
     return () => window.removeEventListener("spaila:viewconfig", onViewConfigChange);
+  }, []);
+  React.useEffect(() => {
+    let cancelled = false;
+    async function syncSharedViewConfig() {
+      try {
+        const response = await fetch(`${API}/account/order-field-layout`);
+        if (!response.ok) return;
+        const layout = await response.json();
+        if (cancelled || !layout || typeof layout !== "object") return;
+        const patch = {};
+        if (layout.search_defaults && typeof layout.search_defaults === "object") {
+          patch.searchableFields = layout.search_defaults.searchableFields || {};
+          patch.includeOrderInfo = layout.search_defaults.includeOrderInfo !== false;
+          patch.searchMode = layout.search_defaults.searchMode === "exact" ? "exact" : "smart";
+        }
+        if (layout.sort_defaults && typeof layout.sort_defaults === "object") {
+          patch.defaultSort = {
+            field: layout.sort_defaults.field || "order_date",
+            direction: layout.sort_defaults.direction === "asc" ? "asc" : "desc",
+          };
+        }
+        if (!Object.keys(patch).length) return;
+        const current = loadViewConfig();
+        saveViewConfig({
+          ...current,
+          ...patch,
+          searchableFields: {
+            ...(current.searchableFields || {}),
+            ...(patch.searchableFields || {}),
+          },
+          defaultSort: {
+            ...(current.defaultSort || {}),
+            ...(patch.defaultSort || {}),
+          },
+        });
+      } catch (_) {}
+    }
+    syncSharedViewConfig();
+    window.addEventListener("focus", syncSharedViewConfig);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", syncSharedViewConfig);
+    };
   }, []);
   React.useEffect(() => {
     if (viewConfig.showCompleted === false && activeTab === "completed") {
@@ -1222,6 +1746,17 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     }
   }
 
+  async function handleOpenMailDockAttachment(attachment) {
+    try {
+      const result = await window.parserApp?.openAttachment?.({ attachment });
+      if (!result?.ok) {
+        setEmailToast({ warnings: [result?.error || "Could not open attachment."] });
+      }
+    } catch (error) {
+      setEmailToast({ warnings: [error?.message || "Could not open attachment."] });
+    }
+  }
+
   async function handleSendDockEmail(draft = {}) {
     if (!mailDock) return { ok: false, error: "Mail Dock is not ready." };
     const result = await window.parserApp?.sendDockEmail?.({
@@ -1390,6 +1925,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       colWidthsRef.current = nextWidths;
       setColWidths(nextWidths);
       try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(nextWidths)); } catch (_) {}
+      syncSharedDesktopWidthProfile(visibleColumns, nextWidths);
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -1500,7 +2036,13 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   const filteredOrders = React.useMemo(() => {
     let base;
-    if (activeTab === "completed") {
+    if (searchScope === "active") {
+      base = safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row));
+    } else if (searchScope === "completed") {
+      base = safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row));
+    } else if (searchScope === "archived") {
+      base = [];
+    } else if (activeTab === "completed") {
       base = safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row));
     } else {
       base = safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row));
@@ -1512,7 +2054,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     }
 
     return base.filter((row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery)));
-  }, [activeTab, getRowSearchValues, safeOrders, searchQuery]);
+  }, [activeTab, getRowSearchValues, safeOrders, searchQuery, searchScope]);
 
   const displayOrders = React.useMemo(() => {
     const indexedRows = filteredOrders.map((row, index) => ({ row, index }));
@@ -1532,6 +2074,33 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row)).length,
     completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row)).length,
   }), [safeOrders]);
+
+  const inventoryNeeded = React.useMemo(() => {
+    const byRuleId = new Map();
+    for (const rule of priceList || []) {
+      const key = String(rule?.id || rule?.price || rule?.typeValue || "").trim();
+      if (!key) continue;
+      byRuleId.set(key, {
+        key,
+        price: String(rule?.price || "").trim(),
+        typeValue: String(rule?.typeValue || "").trim() || String(rule?.price || "").trim() || "Untitled type",
+        color: rule?.color || "#e5e7eb",
+        quantity: 0,
+        orderCount: 0,
+      });
+    }
+    for (const row of safeOrders) {
+      if (isArchivedOrder(row) || isCompletedOrder(row)) continue;
+      const rule = matchPriceRule(row.price, priceList);
+      if (!rule) continue;
+      const key = String(rule?.id || rule?.price || rule?.typeValue || "").trim();
+      if (!key || !byRuleId.has(key)) continue;
+      const entry = byRuleId.get(key);
+      entry.quantity += getInventoryQuantity(row);
+      entry.orderCount += 1;
+    }
+    return [...byRuleId.values()].filter((entry) => entry.quantity > 0);
+  }, [priceList, safeOrders]);
 
   React.useEffect(() => {
     onCountsChange?.(totalCounts);
@@ -1901,8 +2470,19 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         onClose={() => setMailDock(null)}
         onOpenEmail={handleLaunchMailDock}
         onOpenFolder={handleOpenAttachmentFolder}
+        onOpenAttachment={handleOpenMailDockAttachment}
         onSendEmail={handleSendDockEmail}
         canSendEmail={smtpConfigured}
+      />
+      <BackupProgressModal
+        backup={backupDialog}
+        now={backupNow}
+        onRetry={handleSaveToFolder}
+        onOpenFolder={() => window.parserApp?.openFolder?.(DEFAULT_SAVE_FOLDER)}
+        onClose={() => {
+          if (backupDialog.status === "running") return;
+          setBackupDialog(emptyBackupDialog());
+        }}
       />
 
       {/* Email warnings toast */}
@@ -1952,28 +2532,12 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         </div>
       )}
 
-      {/* Save toast */}
-      {saveToast && (
-        <div style={{
-          position: "fixed", top: 56, right: 16, zIndex: 99999,
-          background: saveToast.ok ? "#14532d" : "#7f1d1d",
-          color: "#fff", borderRadius: 8,
-          padding: "12px 16px", maxWidth: 360,
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-          fontSize: 12, lineHeight: 1.6,
-          display: "flex", alignItems: "flex-start", gap: 10,
-        }}>
-          <span style={{ flex: 1 }}>{saveToast.ok ? "✓" : "⚠"} {saveToast.message}</span>
-          <button onClick={() => setSaveToast(null)}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
-        </div>
-      )}
-
       <AppHeader
-        canSave={safeOrders.length > 0}
+        canSave={safeOrders.length > 0 && !backupSaving}
         onSave={handleSaveToFolder}
         saveTitle={
-          !safeOrders.length ? "No orders to back up"
+          backupSaving ? "Creating backup..."
+          : !safeOrders.length ? "No orders to back up"
           : `Save to ${DEFAULT_SAVE_FOLDER}`
         }
         onSettings={onSettings}
@@ -2077,6 +2641,28 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                   Search active
                 </div>
               )}
+              {hasActiveSearch && (
+                <select
+                  value={searchScope}
+                  onChange={(e) => setSearchScope(e.target.value)}
+                  title="Search scope"
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #bfdbfe",
+                    borderRadius: 999,
+                    background: "#fff",
+                    color: "#1e3a8a",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  <option value="current">Current tab</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Completed</option>
+                  <option value="archived">Archived</option>
+                  <option value="all">All</option>
+                </select>
+              )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               <select
@@ -2133,7 +2719,8 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
             gap: "12px",
           }}>
             <span>
-              Showing filtered results for <strong>{activeSearchTerm}</strong>.
+              Showing filtered <strong>{searchScope === "current" ? activeTab : searchScope}</strong> results for <strong>{activeSearchTerm}</strong>
+              {(searchScope === "archived" || searchScope === "all") ? " across the archive index." : "."}
             </span>
             <button
               onClick={() => setSearchQuery("")}
@@ -2165,6 +2752,70 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
           </div>
         ) : (!rows || loading) ? (
           <div style={{ color: "#888", padding: "12px", fontSize: "13px" }}>Loading orders…</div>
+        ) : activeTab === "inventory" ? (
+          <div style={{ width: "min(880px, 100%)", margin: "0 auto" }}>
+            <div style={{
+              marginBottom: 10,
+              padding: "8px 12px",
+              border: "1px solid #dbeafe",
+              background: "#eff6ff",
+              color: "#1e3a8a",
+              borderRadius: 8,
+              fontSize: 12,
+              lineHeight: 1.35,
+            }}>
+              Inventory Needed summarizes active orders only. Completed orders and archived orders are excluded.
+            </div>
+            {inventoryNeeded.length ? (
+              <div style={{ display: "grid", gap: 5 }}>
+                {inventoryNeeded.map((entry) => {
+                  const bg = entry.color || "#e5e7eb";
+                  const fg = contrastColor(bg);
+                  return (
+                    <div
+                      key={entry.key}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(260px, 1fr) 110px",
+                        alignItems: "stretch",
+                        gap: 0,
+                        padding: 0,
+                        border: "1px solid #dbe3ee",
+                        borderRadius: 8,
+                        background: "#f8fafc",
+                        boxShadow: "0 1px 2px rgba(15, 23, 42, 0.035)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10, padding: "5px 10px", background: bg, color: fg }}>
+                        <div style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 800 }}>
+                          {entry.typeValue}
+                        </div>
+                        <div style={{ flexShrink: 0, fontSize: 11, color: fg, opacity: 0.78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          Price {entry.price || "—"} · {entry.orderCount} active order{entry.orderCount === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "center", padding: "5px 10px", background: "linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)", borderLeft: "1px solid #dbe3ee" }}>
+                        <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.045em" }}>Quantity</div>
+                        <div style={{ fontSize: 16, lineHeight: 1, color: "#0f172a", fontWeight: 900 }}>{entry.quantity}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{
+                padding: "12px 14px",
+                border: "1px dashed #cbd5e1",
+                borderRadius: 9,
+                color: "#64748b",
+                background: "#fff",
+                fontSize: 12,
+              }}>
+                No active orders match your pricing types right now.
+              </div>
+            )}
+          </div>
         ) : (
           <>
             {safeDisplayOrders.length === 0 && (
@@ -2592,6 +3243,23 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
             borderRadius: "6px 6px 0 0",
           }}>
             {archiveSearching ? "Searching archive…" : `Archived Orders (${archiveResults.length})`}
+            <button
+              type="button"
+              onClick={handleReindexArchive}
+              style={{
+                float: "right",
+                border: "1px solid #818cf8",
+                background: "#312e81",
+                color: "#e0e7ff",
+                borderRadius: 5,
+                padding: "2px 8px",
+                cursor: "pointer",
+                fontSize: 10,
+                fontWeight: 800,
+              }}
+            >
+              Reindex Archive
+            </button>
           </div>
           {archiveResults.length > 0 && (
             <div style={{
@@ -2623,6 +3291,21 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                       <span style={{ marginLeft: 8, color: "#64748b", fontSize: 12 }}>
                         {order.buyer_email}
                       </span>
+                    )}
+                    {order.pet_name && (
+                      <span style={{ marginLeft: 8, color: "#1d4ed8", fontSize: 12, fontWeight: 700 }}>
+                        Pet: {order.pet_name}
+                      </span>
+                    )}
+                    {Array.isArray(order.match_fields) && order.match_fields.length > 0 && (
+                      <div style={{ marginTop: 4, color: "#64748b", fontSize: 11 }}>
+                        Matched: {order.match_fields.join(", ")}
+                      </div>
+                    )}
+                    {order.snippet && (
+                      <div style={{ marginTop: 4, color: "#475569", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {order.snippet}
+                      </div>
                     )}
                   </div>
                   {order.archived_at && (

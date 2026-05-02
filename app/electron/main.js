@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
 const fs = require("fs");
+const fsp = fs.promises;
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
@@ -19,10 +20,25 @@ const ROOT = path.join(__dirname, "..", "..");
 const APP_ICON = path.join(ROOT, "spaila-logo.blue.ico");
 const DEFAULT_APP_NAME = "Parser Viewer";
 const DOCS_FOLDER = "C:\\Spaila\\Docs";
+const DEFAULT_HELPER_SETTINGS = {
+  runInBackground: true,
+  runOnStartup: true,
+  autoRestart: true,
+  duplicateHandling: "quarantine",
+  unmatchedHandling: "leave",
+  unmatchedStoragePath: "",
+};
 let currentBrandName = DEFAULT_APP_NAME;
 let helperProcess = null;
 let helperRestarting = false;
+let helperStopRequested = false;
+let helperStatus = "stopped";
+let helperLastActivityAt = "";
+let helperLastError = "";
+const helperLogs = [];
 let cachedWorkspaceDirs = null;
+let backupInProgress = false;
+let restoreInProgress = false;
 
 function getWorkspaceDirs() {
   if (!cachedWorkspaceDirs) {
@@ -119,6 +135,110 @@ function safeStat(targetPath) {
   } catch (_error) {
     return null;
   }
+}
+
+function getHelperSettingsPath() {
+  return path.join(getWorkspaceDirs().root, "helper_settings.json");
+}
+
+function loadHelperSettings() {
+  try {
+    const raw = fs.readFileSync(getHelperSettingsPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return normalizeHelperSettings(parsed);
+  } catch (_error) {
+    return { ...DEFAULT_HELPER_SETTINGS };
+  }
+}
+
+function normalizeHelperSettings(settings = {}) {
+  const duplicateHandling = ["quarantine", "ignore", "delete"].includes(settings.duplicateHandling)
+    ? settings.duplicateHandling
+    : DEFAULT_HELPER_SETTINGS.duplicateHandling;
+  const unmatchedHandling = ["move", "prompt", "review"].includes(settings.unmatchedHandling)
+    ? "leave"
+    : ["leave", "ignore"].includes(settings.unmatchedHandling)
+      ? settings.unmatchedHandling
+      : DEFAULT_HELPER_SETTINGS.unmatchedHandling;
+  return {
+    ...DEFAULT_HELPER_SETTINGS,
+    ...settings,
+    runInBackground: settings.runInBackground !== false,
+    runOnStartup: settings.runOnStartup !== false,
+    autoRestart: settings.autoRestart !== false,
+    duplicateHandling,
+    unmatchedHandling,
+    unmatchedStoragePath: typeof settings.unmatchedStoragePath === "string" ? settings.unmatchedStoragePath : "",
+  };
+}
+
+function saveHelperSettings(settings = {}) {
+  const next = normalizeHelperSettings(settings);
+  fs.mkdirSync(getWorkspaceDirs().root, { recursive: true });
+  fs.writeFileSync(getHelperSettingsPath(), JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
+function appendHelperLog(level, message) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message: String(message || ""),
+  };
+  helperLogs.push(entry);
+  while (helperLogs.length > 200) helperLogs.shift();
+  helperLastActivityAt = entry.timestamp;
+  if (level === "error") {
+    helperLastError = entry.message;
+  }
+}
+
+function getHelperFolderSummary() {
+  const dirs = getWorkspaceDirs();
+  const settings = loadHelperSettings();
+  const unmatchedPath = settings.unmatchedStoragePath && path.isAbsolute(settings.unmatchedStoragePath)
+    ? settings.unmatchedStoragePath
+    : dirs.Unmatched;
+  return {
+    workspaceRoot: dirs.root,
+    inbox: dirs.Inbox,
+    duplicates: dirs.Duplicates,
+    unmatched: unmatchedPath,
+  };
+}
+
+function countFolderFiles(folderPath) {
+  try {
+    return fs.readdirSync(folderPath, { withFileTypes: true }).filter((entry) => entry.isFile()).length;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function getHelperState() {
+  const folders = getHelperFolderSummary();
+  const visibilityDiagnostics = getInboxVisibilityDiagnostics();
+  return {
+    ok: true,
+    status: helperStatus,
+    running: !!helperProcess,
+    pid: helperProcess?.pid || null,
+    lastActivityAt: helperLastActivityAt,
+    lastError: helperLastError,
+    settings: loadHelperSettings(),
+    folders,
+    review: {
+      duplicateCount: countFolderFiles(folders.duplicates),
+      unmatchedCount: countFolderFiles(folders.unmatched),
+    },
+    logs: [...helperLogs].slice(-80),
+    diagnostics: {
+      logCount: helperLogs.length,
+      pythonProcess: helperProcess ? "active" : "not running",
+      activitySummary: "Spaila monitors inbox folders and processes new order emails automatically.",
+      ...visibilityDiagnostics,
+    },
+  };
 }
 
 function focusExplorerWindowSoon(delayMs = 250) {
@@ -625,6 +745,7 @@ function inferMimeTypeFromPath(filePath) {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".bmp": "image/bmp",
     ".svg": "image/svg+xml",
     ".pdf": "application/pdf",
     ".txt": "text/plain",
@@ -791,6 +912,65 @@ function getInboxSourceStatePath() {
   return path.join(getWorkspaceDirs().root, ".spaila_internal", "inbox_source_state.json");
 }
 
+function getDedupStorePath() {
+  return path.join(getWorkspaceDirs().root, ".spaila_internal", "dedup_store.json");
+}
+
+function getProcessedInboxRefsPath() {
+  return path.join(getWorkspaceDirs().root, ".processedInboxRefs.json");
+}
+
+function getManualImportedInboxRefsPath() {
+  return path.join(getWorkspaceDirs().root, ".spaila_internal", "manual_imported_inbox.json");
+}
+
+function normalizeInboxRef(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getInboxItemManualImportRefs(item) {
+  return [
+    item?.email_id,
+    item?.id,
+    item?.message_id,
+    item?.imap_uid,
+    item?.path,
+    item?.relativePath,
+    item?.name,
+  ].map(normalizeInboxRef).filter(Boolean);
+}
+
+function loadManualImportedInboxRefs() {
+  try {
+    const storePath = getManualImportedInboxRefsPath();
+    if (!fs.existsSync(storePath)) {
+      return new Set();
+    }
+    const parsed = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const refs = Array.isArray(parsed?.refs) ? parsed.refs : parsed;
+    return new Set((Array.isArray(refs) ? refs : []).map(normalizeInboxRef).filter(Boolean));
+  } catch (_error) {
+    return new Set();
+  }
+}
+
+function saveManualImportedInboxRefs(refs) {
+  const storePath = getManualImportedInboxRefsPath();
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify({
+    refs: [...refs].sort(),
+    updated_at: new Date().toISOString(),
+  }, null, 2), "utf8");
+}
+
+function addManualImportedInboxItem(item) {
+  const refs = loadManualImportedInboxRefs();
+  for (const ref of getInboxItemManualImportRefs(item)) {
+    refs.add(ref);
+  }
+  saveManualImportedInboxRefs(refs);
+}
+
 function loadSourceDeletedInboxUids() {
   try {
     const sourceStatePath = getInboxSourceStatePath();
@@ -806,6 +986,42 @@ function loadSourceDeletedInboxUids() {
   } catch (_error) {
     return new Set();
   }
+}
+
+function getInboxVisibilityDiagnostics() {
+  const dirs = getWorkspaceDirs();
+  const hiddenCount = loadHiddenEmailIds().size + loadWorkspaceInboxHiddenIds().size;
+  const sourceDeletedCount = loadSourceDeletedInboxUids().size;
+  let processedRefsCount = 0;
+  let dedupHitCount = 0;
+  try {
+    const processedPath = getProcessedInboxRefsPath();
+    if (fs.existsSync(processedPath)) {
+      const parsed = JSON.parse(fs.readFileSync(processedPath, "utf8"));
+      processedRefsCount = Array.isArray(parsed) ? parsed.length : 0;
+    }
+  } catch (_error) {
+    processedRefsCount = 0;
+  }
+  try {
+    const dedupPath = getDedupStorePath();
+    if (fs.existsSync(dedupPath)) {
+      const parsed = JSON.parse(fs.readFileSync(dedupPath, "utf8"));
+      dedupHitCount = parsed?.messages && typeof parsed.messages === "object"
+        ? Object.keys(parsed.messages).length
+        : 0;
+    }
+  } catch (_error) {
+    dedupHitCount = 0;
+  }
+  return {
+    inboxEmlCount: countFolderFiles(dirs.InboxModule),
+    unmatchedEmlCount: countFolderFiles(dirs.Unmatched),
+    hiddenEmailCount: hiddenCount,
+    processedRefsCount,
+    sourceDeletedRefsCount: sourceDeletedCount,
+    dedupHitCount,
+  };
 }
 
 function loadWorkspaceInboxHiddenIds() {
@@ -1557,6 +1773,7 @@ function listInboxItems(inboxPath) {
   const hiddenIds = loadHiddenEmailIds();
   const workspaceHiddenIds = loadWorkspaceInboxHiddenIds();
   const sourceDeletedUids = loadSourceDeletedInboxUids();
+  const manualImportedRefs = loadManualImportedInboxRefs();
   const orderLearning = loadOrderLearningStore();
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".eml"))
@@ -1574,8 +1791,10 @@ function listInboxItems(inboxPath) {
       const notOrder = orderFlag === false;
       const linkedMap = orderLearning.linked_order_ids || {};
       const linkedOrderId = String(linkedMap[itemId] || linkedMap[savedUid] || "").trim();
+      const manualImported = getInboxItemManualImportRefs(item).some((ref) => manualImportedRefs.has(ref));
       return {
         ...item,
+        manual_imported: manualImported,
         order_flagged: flagged,
         order_not_order: notOrder,
         order_score: flagged ? 100 : notOrder ? 0 : scoreOrderSuggestion(orderLearning, item),
@@ -1611,6 +1830,19 @@ function makeUniqueFilePath(targetPath) {
     suffix += 1;
   }
   return candidate;
+}
+
+function getSupportAppInfo() {
+  return {
+    appName: getBrandName(),
+    version: app.getVersion(),
+    platform: process.platform,
+    release: os.release(),
+    arch: process.arch,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+  };
 }
 
 function moveInboxItemToCurrent(filePath) {
@@ -1704,36 +1936,70 @@ function resolveAttachmentPayload({ orderFolderPath, sourceEmlPath, mode, extens
 
 function startHelper() {
   if (helperProcess) return;
+  const settings = loadHelperSettings();
+  if (settings.runInBackground === false) {
+    helperStatus = "stopped";
+    appendHelperLog("info", "Helper start skipped because background helper is disabled.");
+    return;
+  }
 
   // Spawn tray_app.py — it owns the tray icon and starts sync_folders.py internally
   helperProcess = spawn("py", [path.join(ROOT, "helper", "tray_app.py")], {
     cwd: ROOT,
     detached: false,
     windowsHide: false,   // must be false so the tray icon can attach to the shell
-    env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1" },
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUNBUFFERED: "1",
+      SPALIA_HELPER_SETTINGS_PATH: getHelperSettingsPath(),
+      SPALIA_DUPLICATE_HANDLING: settings.duplicateHandling,
+      SPALIA_UNMATCHED_HANDLING: settings.unmatchedHandling,
+      SPAILA_HELPER_SETTINGS_PATH: getHelperSettingsPath(),
+      SPAILA_DUPLICATE_HANDLING: settings.duplicateHandling,
+      SPAILA_UNMATCHED_HANDLING: settings.unmatchedHandling,
+    },
   });
+  helperStatus = "running";
+  helperLastError = "";
 
   helperProcess.stdout.on("data", (data) => {
-    console.log("[HELPER]", data.toString().trimEnd());
+    const text = data.toString().trimEnd();
+    console.log("[HELPER]", text);
+    appendHelperLog("info", text);
   });
 
   helperProcess.stderr.on("data", (data) => {
-    console.error("[HELPER ERR]", data.toString().trimEnd());
+    const text = data.toString().trimEnd();
+    console.error("[HELPER ERR]", text);
+    appendHelperLog("error", text);
   });
 
   helperProcess.on("error", (err) => {
+    helperStatus = "error";
+    appendHelperLog("error", err.message);
     console.error("[HELPER SPAWN ERROR]", err.message);
     helperProcess = null;
   });
 
   helperProcess.on("close", (code) => {
     helperProcess = null;
+    helperStatus = code === 0 ? "stopped" : "error";
+    appendHelperLog(code === 0 ? "info" : "error", `Helper exited with code ${code}.`);
     if (helperRestarting) return;     // Electron is quitting — don't restart
+    if (helperStopRequested) {
+      helperStopRequested = false;
+      return;
+    }
     if (code === 0) return;           // User clicked "Exit" in tray — respect that
+    if (loadHelperSettings().autoRestart === false) return;
+    helperStatus = "restarting";
+    appendHelperLog("info", "Helper restarting in 3 seconds.");
     console.log(`[HELPER EXITED] code=${code} — restarting in 3s…`);
     setTimeout(startHelper, 3000);
   });
 
+  appendHelperLog("info", `Helper started pid ${helperProcess.pid}.`);
   console.log("[HELPER] started pid", helperProcess.pid);
 }
 
@@ -1763,6 +2029,27 @@ function createWindow() {
   window.on("unresponsive", () => {
     console.error("[WINDOW unresponsive]");
   });
+  window.on("close", (event) => {
+    if (!backupInProgress && !restoreInProgress) return;
+    const isRestore = restoreInProgress;
+    const choice = dialog.showMessageBoxSync(window, {
+      type: "warning",
+      buttons: [isRestore ? "Keep Restore Running" : "Keep Backup Running", "Close Anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      title: withBrandTitle(isRestore ? "Restore in Progress" : "Backup in Progress"),
+      message: isRestore
+        ? "Restore in progress. Closing now may leave your workspace partially restored. Are you sure?"
+        : "Backup in progress. Closing now may corrupt your backup. Are you sure?",
+      detail: isRestore
+        ? "Spaila is restoring a full workspace backup. It is safest to wait until restore completes."
+        : "Spaila is creating or validating a full workspace backup. It is safest to wait until the backup completes.",
+      noLink: true,
+    });
+    if (choice !== 1) {
+      event.preventDefault();
+    }
+  });
   window.on("closed", () => {
     console.log("[WINDOW closed]");
   });
@@ -1771,11 +2058,13 @@ function createWindow() {
   window.maximize();
   window.show();
   window.loadFile(path.join(__dirname, "..", "ui", "index.html"));
-  window.webContents.once("did-finish-load", () => {
-    if (!window.isDestroyed() && !window.webContents.isDevToolsOpened()) {
-      window.webContents.openDevTools({ mode: "detach" });
-    }
-  });
+  if (process.env.SPALIA_OPEN_DEVTOOLS === "1" || process.env.NODE_ENV === "development") {
+    window.webContents.once("did-finish-load", () => {
+      if (!window.isDestroyed() && !window.webContents.isDevToolsOpened()) {
+        window.webContents.openDevTools({ mode: "detach" });
+      }
+    });
+  }
 }
 
 function runBridge(argsObj) {
@@ -1956,10 +2245,10 @@ async function resolveParserPath(payload) {
   return resolvedPath;
 }
 
-ipcMain.handle("parser:parse-file", async (_event, { filePath }) => {
+ipcMain.handle("parser:parse-file", async (_event, { filePath, businessTimezone }) => {
   if (!filePath) throw new Error("No file path provided.");
   const resolvedPath = await resolveParserPath({ filePath });
-  const parsed = await runBridge({ action: "parse", path: resolvedPath });
+  const parsed = await runBridge({ action: "parse", path: resolvedPath, businessTimezone: String(businessTimezone || "").trim() });
   if (parsed.error) throw new Error(parsed.error);
   return { filePath: resolvedPath, ...parsed };
 });
@@ -1970,6 +2259,7 @@ ipcMain.handle("parser:teach", async (_event, payload) => {
     action: payload.action,
     path: payload.filePath,
     decision: payload.decision,
+    businessTimezone: String(payload.businessTimezone || "").trim(),
   });
   if (parsed.error) {
     throw new Error(parsed.error);
@@ -1986,6 +2276,7 @@ ipcMain.handle("parser:save-assignment", async (_event, payload) => {
     action: "save_assignment",
     path: resolvedPath,
     decision: payload.decision,
+    businessTimezone: String(payload.businessTimezone || "").trim(),
   });
   if (parsed.error) {
     throw new Error(parsed.error);
@@ -2002,6 +2293,7 @@ ipcMain.handle("parser:save-rejection", async (_event, payload) => {
     action: "save_rejection",
     path: resolvedPath,
     decision: payload.decision,
+    businessTimezone: String(payload.businessTimezone || "").trim(),
   });
   if (parsed.error) {
     throw new Error(parsed.error);
@@ -2073,10 +2365,124 @@ ipcMain.handle("app:set-title", (_event, title) => {
   return { ok: true, title: nextTitle };
 });
 
+ipcMain.handle("helper:get-state", async () => getHelperState());
+
+ipcMain.handle("helper:save-settings", async (_event, payload = {}) => {
+  const previous = loadHelperSettings();
+  const next = saveHelperSettings(payload.settings || payload);
+  appendHelperLog("info", "Helper settings saved.");
+  if (previous.runInBackground !== next.runInBackground) {
+    if (next.runInBackground) {
+      startHelper();
+    } else {
+      killHelper({ intentional: true });
+    }
+  }
+  return getHelperState();
+});
+
+ipcMain.handle("helper:restart", async () => {
+  appendHelperLog("info", "Helper restart requested.");
+  helperStatus = "restarting";
+  killHelper({ intentional: true });
+  setTimeout(startHelper, 500);
+  return getHelperState();
+});
+
+ipcMain.handle("helper:open-logs", async () => {
+  const supportFolder = path.join(app.getPath("userData"), "support");
+  fs.mkdirSync(supportFolder, { recursive: true });
+  const logPath = path.join(supportFolder, "helper-log.json");
+  fs.writeFileSync(logPath, JSON.stringify(helperLogs, null, 2), "utf8");
+  await openFolderVisible(supportFolder, "helper:open-logs");
+  return { ok: true, path: logPath, folderPath: supportFolder };
+});
+
+ipcMain.handle("helper:open-folder", async (_event, payload = {}) => {
+  const folders = getHelperFolderSummary();
+  const key = String(payload.folder || payload.key || "").trim();
+  const targetPath = key === "duplicates" ? folders.duplicates : key === "unmatched" ? folders.unmatched : "";
+  if (!targetPath) {
+    return { ok: false, error: "Unknown helper folder." };
+  }
+  fs.mkdirSync(targetPath, { recursive: true });
+  return openFolderVisible(targetPath, "helper:open-folder");
+});
+
+ipcMain.handle("helper:clear-folder", async (_event, payload = {}) => {
+  const folders = getHelperFolderSummary();
+  const key = String(payload.folder || payload.key || "").trim();
+  const targetPath = key === "duplicates" ? folders.duplicates : key === "unmatched" ? folders.unmatched : "";
+  if (!targetPath) {
+    return { ok: false, error: "Unknown helper folder." };
+  }
+  fs.mkdirSync(targetPath, { recursive: true });
+  const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+  let removed = 0;
+  entries.forEach((entry) => {
+    if (!entry.isFile()) return;
+    fs.rmSync(path.join(targetPath, entry.name), { force: true });
+    removed += 1;
+  });
+  appendHelperLog("info", `Cleared ${removed} file(s) from helper ${key} storage.`);
+  return { ok: true, removed, ...getHelperState() };
+});
+
+ipcMain.handle("helper:pick-unmatched-folder", async (event) => {
+  const window = getSenderWindow(event);
+  const result = await dialog.showOpenDialog(window || undefined, {
+    title: withBrandTitle("Choose Needs Review storage folder"),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths?.[0]) {
+    return { ok: false, canceled: true };
+  }
+  const settings = saveHelperSettings({ ...loadHelperSettings(), unmatchedStoragePath: result.filePaths[0] });
+  appendHelperLog("info", "Updated Needs Review storage folder.");
+  return { ok: true, settings, ...getHelperState() };
+});
+
+ipcMain.handle("support:get-app-info", async () => {
+  return { ok: true, appInfo: getSupportAppInfo() };
+});
+
+ipcMain.handle("support:create-diagnostics", async (_event, payload = {}) => {
+  try {
+    const supportFolder = path.join(app.getPath("userData"), "support");
+    fs.mkdirSync(supportFolder, { recursive: true });
+    const createdAt = new Date();
+    const reportType = sanitizeFilenamePart(payload.type || "support", "support").toLowerCase().replace(/\s+/g, "-");
+    const targetPath = makeUniqueFilePath(path.join(supportFolder, `${reportType}-${createdAt.toISOString().replace(/[:.]/g, "-")}.json`));
+    const report = {
+      createdAt: createdAt.toISOString(),
+      appInfo: getSupportAppInfo(),
+      context: {
+        type: String(payload.type || "bug"),
+        route: String(payload.route || ""),
+        description: String(payload.description || ""),
+        screenshotPath: String(payload.screenshotPath || ""),
+      },
+    };
+    fs.writeFileSync(targetPath, JSON.stringify(report, null, 2), "utf8");
+    return { ok: true, path: targetPath, folderPath: supportFolder, report };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not create support diagnostics." };
+  }
+});
+
 ipcMain.handle("open-external", async (_event, url) => {
   const targetUrl = String(url || "").trim();
   if (!targetUrl) {
     return { ok: false, error: "No URL provided." };
+  }
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch (_error) {
+    return { ok: false, error: "Invalid URL." };
+  }
+  if (!["https:", "http:", "mailto:"].includes(parsed.protocol)) {
+    return { ok: false, error: "Unsupported external link type." };
   }
   await shell.openExternal(targetUrl);
   return { ok: true };
@@ -2253,15 +2659,1161 @@ ipcMain.handle("documents:generate-gift-letter", async (_event, {
 // ── Full backup / restore ─────────────────────────────────────────────────
 
 const DB_PATH = path.join(ROOT, "spaila.db");
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
+const BACKUP_KIND = "spaila-full-workspace-backup";
+const QUICK_BACKUP_KIND = "spaila-incremental-workspace-backup";
+const SUPPORTED_BACKUP_VERSIONS = new Set([2]);
+const MAX_INCREMENTAL_CHAIN = 20;
+const MAX_INCREMENTAL_CHANGE_RATIO = 0.35;
 
-ipcMain.handle("backup:save", async (_event, { folderPath, localStorageData }) => {
+function timestampForFilename(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+function copyDirectoryRecursive(sourceDir, targetDir, options = {}) {
+  const shouldExclude = typeof options.exclude === "function" ? options.exclude : () => false;
+  if (!fs.existsSync(sourceDir)) return;
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const relativePath = path.relative(sourceDir, sourcePath);
+    if (shouldExclude(sourcePath, relativePath, entry)) continue;
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, targetPath, {
+        exclude: (childPath, childRelative, childEntry) => {
+          const nestedRelative = path.join(entry.name, childRelative);
+          return shouldExclude(childPath, nestedRelative, childEntry);
+        },
+      });
+    } else if (entry.isFile()) {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+  }
+}
+
+async function copyDirectoryRecursiveAsync(sourceDir, targetDir, options = {}) {
+  const shouldExclude = typeof options.exclude === "function" ? options.exclude : () => false;
+  if (!fs.existsSync(sourceDir)) return;
+  await fsp.mkdir(targetDir, { recursive: true });
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const relativePath = path.relative(sourceDir, sourcePath);
+    if (shouldExclude(sourcePath, relativePath, entry)) continue;
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectoryRecursiveAsync(sourcePath, targetPath, {
+        exclude: (childPath, childRelative, childEntry) => {
+          const nestedRelative = path.join(entry.name, childRelative);
+          return shouldExclude(childPath, nestedRelative, childEntry);
+        },
+      });
+    } else if (entry.isFile()) {
+      await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+      await fsp.copyFile(sourcePath, targetPath);
+    }
+  }
+}
+
+function clearDirectoryContents(targetDir, options = {}) {
+  if (!fs.existsSync(targetDir)) return;
+  const shouldKeep = typeof options.keep === "function" ? options.keep : () => false;
+  for (const entry of fs.readdirSync(targetDir, { withFileTypes: true })) {
+    const targetPath = path.join(targetDir, entry.name);
+    if (shouldKeep(targetPath, entry)) continue;
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  }
+}
+
+function sha256File(filePath) {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
+}
+
+function emailLifecycleIndexPath() {
+  return path.join(getWorkspaceDirs().Internal, "email_retention_index.json");
+}
+
+function loadEmailLifecycleIndex() {
+  try {
+    const indexPath = emailLifecycleIndexPath();
+    if (!fs.existsSync(indexPath)) return { version: 1, records: {} };
+    const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+    return {
+      version: 1,
+      migration_version: parsed?.migration_version || "email_archive_v1",
+      updated_at: parsed?.updated_at || "",
+      records: parsed?.records && typeof parsed.records === "object" ? parsed.records : {},
+    };
+  } catch (_error) {
+    return { version: 1, records: {} };
+  }
+}
+
+function saveEmailLifecycleIndex(index) {
+  const indexPath = emailLifecycleIndexPath();
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.writeFileSync(indexPath, JSON.stringify({
+    version: 1,
+    migration_version: "email_archive_v1",
+    updated_at: new Date().toISOString(),
+    records: index?.records && typeof index.records === "object" ? index.records : {},
+  }, null, 2), "utf8");
+}
+
+function safeLifecycleToken(value, fallback = "unknown") {
+  const token = String(value || "").trim().replace(/[^A-Za-z0-9._-]+/g, "").slice(0, 80);
+  return token || fallback;
+}
+
+function uniqueLifecyclePath(targetPath) {
+  if (!fs.existsSync(targetPath)) return targetPath;
+  const dir = path.dirname(targetPath);
+  const ext = path.extname(targetPath);
+  const stem = path.basename(targetPath, ext);
+  let suffix = 1;
+  while (true) {
+    const candidate = path.join(dir, `${stem}__${suffix}${ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+    suffix += 1;
+  }
+}
+
+function findInboxFileForLifecycle(emailId, imapUid) {
+  const dirs = getWorkspaceDirs();
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dirs.InboxModule, { withFileTypes: true });
+  } catch (_error) {
+    return "";
+  }
+  const wanted = new Set([String(emailId || "").trim(), String(imapUid || "").trim()].filter(Boolean));
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".eml")) continue;
+    const fullPath = path.join(dirs.InboxModule, entry.name);
+    const metadata = extractEmailMetadata(fullPath);
+    if (wanted.has(String(metadata.email_id || "").trim()) || wanted.has(String(metadata.imap_uid || "").trim())) {
+      return fullPath;
+    }
+  }
+  return "";
+}
+
+function archiveAndDeactivateInboxFile(filePath, reason = "handled") {
+  const dirs = getWorkspaceDirs();
+  const sourcePath = String(filePath || "").trim();
+  if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath)) {
+    return { ok: false, reason: "source_missing" };
+  }
+  const inboxRoot = path.resolve(dirs.InboxModule).toLowerCase();
+  const resolvedSource = path.resolve(sourcePath);
+  if (!resolvedSource.toLowerCase().startsWith(inboxRoot)) {
+    return { ok: false, reason: "outside_inbox", path: sourcePath };
+  }
+
+  const metadata = extractEmailMetadata(resolvedSource);
+  const checksum = sha256File(resolvedSource);
+  const received = Number.isFinite(Date.parse(metadata.received_at || "")) ? new Date(metadata.received_at) : new Date();
+  const archiveDir = path.join(
+    dirs.Internal,
+    "email_archive",
+    String(received.getUTCFullYear()),
+    String(received.getUTCMonth() + 1).padStart(2, "0"),
+  );
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const archiveName = `${received.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}_${safeLifecycleToken(metadata.imap_uid || metadata.email_id)}_${checksum.slice(0, 12)}.eml`;
+  const archivePath = uniqueLifecyclePath(path.join(archiveDir, archiveName));
+  const tmpPath = `${archivePath}.tmp`;
+  fs.copyFileSync(resolvedSource, tmpPath);
+  if (sha256File(tmpPath) !== checksum) {
+    fs.rmSync(tmpPath, { force: true });
+    return { ok: false, reason: "archive_checksum_failed", path: resolvedSource };
+  }
+  fs.renameSync(tmpPath, archivePath);
+  if (sha256File(archivePath) !== checksum) {
+    return { ok: false, reason: "archive_verify_failed", path: resolvedSource };
+  }
+
+  const inactiveDir = path.join(dirs.Internal, "inbox_inactive", new Date().toISOString().slice(0, 10).replace(/-/g, ""));
+  fs.mkdirSync(inactiveDir, { recursive: true });
+  const inactivePath = uniqueLifecyclePath(path.join(inactiveDir, path.basename(resolvedSource)));
+  fs.renameSync(resolvedSource, inactivePath);
+
+  const messageId = String(metadata.email_id || "").trim();
+  const uid = String(metadata.imap_uid || "").trim();
+  const key = messageId.includes("@") ? `message:${messageId.toLowerCase().replace(/^<|>$/g, "")}` : uid ? `uid:${uid.toLowerCase()}` : `sha256:${checksum}`;
+  const index = loadEmailLifecycleIndex();
+  index.records[key] = {
+    ...(index.records[key] || {}),
+    email_id: messageId,
+    message_id: messageId.includes("@") ? messageId.toLowerCase().replace(/^<|>$/g, "") : "",
+    uid,
+    checksum,
+    original_inbox_path: resolvedSource,
+    archive_path: archivePath,
+    inactive_path: inactivePath,
+    inactive_reason: reason,
+    status: "inactive_archived",
+    archived_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    migration_version: "email_archive_v1",
+    verified: true,
+  };
+  saveEmailLifecycleIndex(index);
+  console.log("[INBOX_LIFECYCLE_MOVE]", {
+    source: resolvedSource,
+    inactive_path: inactivePath,
+    archive_path: archivePath,
+    reason,
+  });
+  return { ok: true, archive_path: archivePath, inactive_path: inactivePath, reason };
+}
+
+function sha256FileAsync(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+function readAppPackageVersion() {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    return String(packageJson.version || app.getVersion() || "");
+  } catch (_error) {
+    return String(app.getVersion() || "");
+  }
+}
+
+function readParserVersion() {
+  try {
+    const regressionAuditPath = path.join(ROOT, "parser", "regression_audit.py");
+    const raw = fs.readFileSync(regressionAuditPath, "utf8");
+    const match = raw.match(/return\s+["']([^"']+)["']\s*$/m);
+    return match?.[1] || "0.1.0";
+  } catch (_error) {
+    return "0.1.0";
+  }
+}
+
+function buildFileManifest(rootDir) {
+  const files = [];
+  function walk(currentDir) {
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const filePath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(filePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const stat = fs.statSync(filePath);
+      files.push({
+        path: path.relative(rootDir, filePath).split(path.sep).join("/"),
+        size: stat.size,
+        sha256: sha256File(filePath),
+      });
+    }
+  }
+  walk(rootDir);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
+}
+
+async function buildFileManifestAsync(rootDir) {
+  const filePaths = [];
+  async function walk(currentDir) {
+    const entries = await fsp.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const filePath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(filePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      filePaths.push(filePath);
+    }
+  }
+  await walk(rootDir);
+  const files = [];
+  let cursor = 0;
+  const workerCount = Math.min(4, Math.max(1, filePaths.length));
+  async function worker() {
+    while (cursor < filePaths.length) {
+      const filePath = filePaths[cursor];
+      cursor += 1;
+      const stat = await fsp.stat(filePath);
+      files.push({
+        path: path.relative(rootDir, filePath).split(path.sep).join("/"),
+        size: stat.size,
+        sha256: await sha256FileAsync(filePath),
+      });
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
+}
+
+function checksumManifestFiles(files) {
+  const hash = crypto.createHash("sha256");
+  files.forEach((file) => {
+    hash.update(file.path);
+    hash.update("\0");
+    hash.update(String(file.size));
+    hash.update("\0");
+    hash.update(file.sha256);
+    hash.update("\n");
+  });
+  return hash.digest("hex");
+}
+
+function normalizeBackupRelativePath(filePath) {
+  return String(filePath || "").split(path.sep).join("/");
+}
+
+function getBackupIndexPath(dirs = getWorkspaceDirs()) {
+  return path.join(dirs.Internal, "backup_index.json");
+}
+
+function loadBackupIndex(dirs = getWorkspaceDirs()) {
+  try {
+    const indexPath = getBackupIndexPath(dirs);
+    if (!fs.existsSync(indexPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+    if (!parsed || parsed.version !== 1 || !parsed.baseline?.filename) return null;
+    return parsed;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function saveBackupIndex(dirs, index) {
+  await fsp.mkdir(dirs.Internal, { recursive: true });
+  await fsp.writeFile(getBackupIndexPath(dirs), JSON.stringify(index, null, 2), "utf8");
+}
+
+function backupIndexBaselineExists(index, targetFolder) {
+  if (!index?.baseline?.filename) return false;
+  return fs.existsSync(path.join(targetFolder, index.baseline.filename));
+}
+
+async function scanWorkspaceFiles(dirs, indexFiles = {}) {
+  const records = [];
+  async function walk(currentDir) {
+    const entries = await fsp.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const filePath = path.join(currentDir, entry.name);
+      if (path.resolve(filePath).toLowerCase().startsWith(path.resolve(dirs.Backup).toLowerCase())) continue;
+      const relativePath = normalizeBackupRelativePath(path.relative(dirs.root, filePath));
+      if (entry.isDirectory()) {
+        await walk(filePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const stat = await fsp.stat(filePath);
+      const previous = indexFiles[relativePath];
+      const sameSignature = previous
+        && Number(previous.size) === stat.size
+        && Number(previous.mtimeMs) === Math.round(stat.mtimeMs);
+      records.push({
+        path: relativePath,
+        sourcePath: filePath,
+        size: stat.size,
+        mtimeMs: Math.round(stat.mtimeMs),
+        sha256: sameSignature ? previous.sha256 : "",
+        changed: !sameSignature,
+      });
+    }
+  }
+  await walk(dirs.root);
+  records.sort((a, b) => a.path.localeCompare(b.path));
+  return records;
+}
+
+async function hashChangedRecords(records) {
+  const changed = records.filter((record) => record.changed || !record.sha256);
+  let cursor = 0;
+  const workerCount = Math.min(4, Math.max(1, changed.length));
+  async function worker() {
+    while (cursor < changed.length) {
+      const record = changed[cursor];
+      cursor += 1;
+      record.sha256 = await sha256FileAsync(record.sourcePath);
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return records;
+}
+
+function recordsToIndexMap(records) {
+  return Object.fromEntries(records.map((record) => [record.path, {
+    size: record.size,
+    mtimeMs: record.mtimeMs,
+    sha256: record.sha256,
+  }]));
+}
+
+function recordsToManifestFiles(records, prefix = "workspace/") {
+  return records.map((record) => ({
+    path: `${prefix}${record.path}`,
+    size: record.size,
+    sha256: record.sha256,
+  })).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function shouldCreateFullBaseline(index, targetFolder, changedBytes, totalBytes) {
+  if (!backupIndexBaselineExists(index, targetFolder)) return { full: true, reason: "missing-baseline" };
+  const incrementalCount = Array.isArray(index.incrementals) ? index.incrementals.length : 0;
+  if (incrementalCount >= MAX_INCREMENTAL_CHAIN) return { full: true, reason: "refresh-chain-length" };
+  if (totalBytes > 0 && changedBytes / totalBytes > MAX_INCREMENTAL_CHANGE_RATIO) {
+    return { full: true, reason: "refresh-change-ratio" };
+  }
+  return { full: false, reason: "quick" };
+}
+
+function runPowerShell(script, fallbackError) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", script], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(stderr || stdout || fallbackError));
+      }
+    });
+  });
+}
+
+function listBackupInventory(backupDir) {
+  try {
+    return fs.readdirSync(backupDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.(zip|spailabackup)$/i.test(entry.name))
+      .map((entry) => {
+        const filePath = path.join(backupDir, entry.name);
+        const stat = fs.statSync(filePath);
+        return {
+          name: entry.name,
+          size: stat.size,
+          modifiedAt: new Date(stat.mtimeMs).toISOString(),
+        };
+      })
+      .sort((a, b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt)));
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function createZipArchive(sourceDir, zipPath) {
+  if (process.platform !== "win32") {
+    throw new Error("Compressed workspace backups are currently supported on Windows.");
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    `if (Test-Path -LiteralPath '${zipPath.replaceAll("'", "''")}') { Remove-Item -LiteralPath '${zipPath.replaceAll("'", "''")}' -Force }`,
+    `[System.IO.Compression.ZipFile]::CreateFromDirectory('${sourceDir.replaceAll("'", "''")}', '${zipPath.replaceAll("'", "''")}', [System.IO.Compression.CompressionLevel]::Fastest, $false)`,
+  ].join("\n");
+  await runPowerShell(script, "Could not create backup archive.");
+}
+
+async function expandZipArchive(zipPath, targetDir) {
+  if (process.platform !== "win32") {
+    throw new Error("Compressed workspace restore is currently supported on Windows.");
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `Expand-Archive -Path '${zipPath.replaceAll("'", "''")}' -DestinationPath '${targetDir.replaceAll("'", "''")}' -Force`,
+  ].join("\n");
+  await runPowerShell(script, "Could not expand backup archive.");
+}
+
+function resolveBackupPackageRoot(expandedRoot) {
+  const nestedPackageRoot = path.join(expandedRoot, "spaila_backup");
+  if (fs.existsSync(path.join(nestedPackageRoot, "backup-manifest.json"))) {
+    return nestedPackageRoot;
+  }
+  if (fs.existsSync(path.join(expandedRoot, "backup-manifest.json"))) {
+    return expandedRoot;
+  }
+  let entries = [];
+  try {
+    entries = fs.readdirSync(expandedRoot).slice(0, 12);
+  } catch (_error) {}
+  throw new Error(`Backup manifest was not found after extraction. Checked ${nestedPackageRoot} and ${expandedRoot}. Extracted entries: ${entries.join(", ") || "none"}.`);
+}
+
+async function validateBackupManifest(packageRoot) {
+  const manifestPath = path.join(packageRoot, "backup-manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error("Backup manifest was not found.");
+  }
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  if (![BACKUP_KIND, QUICK_BACKUP_KIND].includes(manifest.kind)) {
+    throw new Error("Unsupported backup package.");
+  }
+  if (!SUPPORTED_BACKUP_VERSIONS.has(Number(manifest.backupVersion))) {
+    throw new Error(`Unsupported backup version: ${manifest.backupVersion || "unknown"}.`);
+  }
+  if (!manifest.sections?.workspace) {
+    throw new Error("Backup is missing the workspace section.");
+  }
+  if (!fs.existsSync(path.join(packageRoot, "workspace"))) {
+    throw new Error("Backup workspace payload was not found.");
+  }
+  const files = (await buildFileManifestAsync(packageRoot))
+    .filter((file) => !["backup-manifest.json", "backup-metadata.json"].includes(file.path));
+  const checksum = checksumManifestFiles(files);
+  if (checksum !== manifest.checksum) {
+    throw new Error("Backup checksum validation failed.");
+  }
+  return manifest;
+}
+
+async function validateZipArchive(zipPath) {
+  if (process.platform !== "win32") {
+    throw new Error("Compressed workspace backup validation is currently supported on Windows.");
+  }
+  const safeZipPath = zipPath.replaceAll("'", "''");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    `$zip = [System.IO.Compression.ZipFile]::OpenRead('${safeZipPath}')`,
+    "try {",
+    "  $entries = @($zip.Entries | Where-Object { $_.FullName -and -not $_.FullName.EndsWith('/') })",
+    "  $manifestEntry = $entries | Where-Object { $_.FullName -eq 'backup-manifest.json' -or $_.FullName -eq 'spaila_backup/backup-manifest.json' -or $_.FullName -eq 'spaila_backup\\backup-manifest.json' } | Select-Object -First 1",
+    "  if (-not $manifestEntry) { throw 'Backup manifest was not found in archive.' }",
+    "  $reader = [System.IO.StreamReader]::new($manifestEntry.Open())",
+    "  try { $manifestRaw = $reader.ReadToEnd() } finally { $reader.Dispose() }",
+    "  $names = @($entries | ForEach-Object { $_.FullName })",
+    "  [pscustomobject]@{",
+    "    manifestRaw = $manifestRaw",
+    "    entryCount = $entries.Count",
+    "    hasWorkspace = [bool]($names | Where-Object { $_ -like 'workspace/*' -or $_ -like 'workspace\\*' -or $_ -like 'spaila_backup/workspace/*' -or $_ -like 'spaila_backup\\workspace\\*' } | Select-Object -First 1)",
+    "    hasLocalStorage = [bool]($names | Where-Object { $_ -eq 'localStorage.json' -or $_ -eq 'spaila_backup/localStorage.json' -or $_ -eq 'spaila_backup\\localStorage.json' } | Select-Object -First 1)",
+    "  } | ConvertTo-Json -Compress",
+    "} finally {",
+    "  $zip.Dispose()",
+    "}",
+  ].join("\n");
+  const result = await runPowerShell(script, "Could not validate backup archive.");
+  const validation = JSON.parse(String(result.stdout || "").trim());
+  const manifest = JSON.parse(validation.manifestRaw);
+  if (![BACKUP_KIND, QUICK_BACKUP_KIND].includes(manifest.kind)) {
+    throw new Error("Unsupported backup package.");
+  }
+  if (!SUPPORTED_BACKUP_VERSIONS.has(Number(manifest.backupVersion))) {
+    throw new Error(`Unsupported backup version: ${manifest.backupVersion || "unknown"}.`);
+  }
+  if (!manifest.sections?.workspace || !validation.hasWorkspace) {
+    throw new Error("Backup archive is missing the workspace section.");
+  }
+  if (!validation.hasLocalStorage) {
+    throw new Error("Backup archive is missing settings data.");
+  }
+  const payloadEntryCount = Number(validation.entryCount || 0) - 2;
+  if (Number.isFinite(Number(manifest.fileCount)) && payloadEntryCount < Number(manifest.fileCount)) {
+    throw new Error("Backup archive file count is lower than the manifest file count.");
+  }
+  return manifest;
+}
+
+function emitBackupProgress(event, stage, message, details = {}) {
+  try {
+    event?.sender?.send("backup:progress", {
+      stage,
+      message,
+      timestamp: new Date().toISOString(),
+      ...details,
+    });
+  } catch (_) {}
+}
+
+function emitRestoreProgress(event, stage, message, details = {}) {
+  try {
+    event?.sender?.send("restore:progress", {
+      stage,
+      message,
+      timestamp: new Date().toISOString(),
+      ...details,
+    });
+  } catch (_) {}
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryFsOperation(operation, description, { attempts = 5, delayMs = 450 } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      lastError = error;
+      const code = error?.code || "";
+      const retryable = ["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"].includes(code);
+      if (!retryable || attempt === attempts) break;
+      await sleep(delayMs * attempt);
+    }
+  }
+  const code = lastError?.code ? ` (${lastError.code})` : "";
+  throw new Error(`${description} failed${code}: ${lastError?.message || "unknown filesystem lock"}`);
+}
+
+function describeFsError(error) {
+  const code = error?.code ? ` (${error.code})` : "";
+  return `${error?.message || "unknown filesystem lock"}${code}`;
+}
+
+async function movePathWithPowerShell(sourcePath, targetPath) {
+  if (process.platform !== "win32") {
+    throw new Error("PowerShell move fallback is only available on Windows.");
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `Move-Item -LiteralPath '${sourcePath.replaceAll("'", "''")}' -Destination '${targetPath.replaceAll("'", "''")}' -Force`,
+  ].join("\n");
+  await runPowerShell(script, `Could not move ${sourcePath}`);
+}
+
+async function stopBackgroundOperationsForRestore(onProgress = () => {}) {
+  onProgress("suspend", "Stopping helper and file watchers.");
+  killHelper({ intentional: true, silent: true });
+  if (process.platform === "win32") {
+    const helperRoot = ROOT.replaceAll("'", "''");
+    const script = [
+      "$ErrorActionPreference = 'SilentlyContinue'",
+      `$root = '${helperRoot}'`,
+      "$procs = Get-CimInstance Win32_Process | Where-Object {",
+      "  $_.CommandLine -and (",
+      "    $_.CommandLine -match 'helper[\\\\/]sync_folders\\.py' -or",
+      "    $_.CommandLine -match 'helper[\\\\/]tray_app\\.py'",
+      "  ) -and $_.CommandLine -like \"*$root*\"",
+      "}",
+      "$procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ].join("\n");
+    await runPowerShell(script, "Could not stop helper processes.");
+  }
+  await sleep(700);
+}
+
+async function moveWorkspaceAsideForRestore(dirs, onProgress = () => {}) {
+  const timestamp = timestampForFilename();
+  const restoreSafetyRoot = path.join(dirs.Backup, `pre_restore_workspace_${timestamp}`);
+  await fsp.mkdir(restoreSafetyRoot, { recursive: true });
+  const entries = await fsp.readdir(dirs.root, { withFileTypes: true });
+  const moved = [];
+  const copiedFallback = [];
+  const diagnostics = [];
+  for (const entry of entries) {
+    if (entry.name.toLowerCase() === "backup") continue;
+    const sourcePath = path.join(dirs.root, entry.name);
+    const targetPath = path.join(restoreSafetyRoot, entry.name);
+    onProgress("renaming", `Moving current ${entry.name} aside before restore.`);
+    try {
+      await retryFsOperation(
+        async () => fsp.rename(sourcePath, targetPath),
+        `Move current workspace item aside: ${sourcePath}`,
+      );
+      moved.push({ from: sourcePath, to: targetPath, method: "rename" });
+      continue;
+    } catch (renameError) {
+      diagnostics.push(`Node rename failed for ${sourcePath}: ${describeFsError(renameError)}`);
+    }
+    try {
+      await retryFsOperation(
+        async () => movePathWithPowerShell(sourcePath, targetPath),
+        `PowerShell move current workspace item aside: ${sourcePath}`,
+        { attempts: 3, delayMs: 650 },
+      );
+      moved.push({ from: sourcePath, to: targetPath, method: "powershell-move" });
+      continue;
+    } catch (moveError) {
+      diagnostics.push(`PowerShell move failed for ${sourcePath}: ${describeFsError(moveError)}`);
+    }
+    onProgress("renaming", `${entry.name} is locked. Preserving a safety copy and restoring over the active folder.`);
+    await retryFsOperation(
+      async () => copyDirectoryRecursiveAsync(sourcePath, targetPath),
+      `Copy locked workspace item to safety location: ${sourcePath}`,
+      { attempts: 3, delayMs: 650 },
+    );
+    copiedFallback.push({ from: sourcePath, to: targetPath, method: "copy-locked-fallback" });
+    diagnostics.push(`Locked item preserved by copy fallback: ${sourcePath} -> ${targetPath}. Restore will merge over the active folder because it could not be renamed.`);
+  }
+  return { path: restoreSafetyRoot, moved, copiedFallback, diagnostics };
+}
+
+async function restoreAppDatabase(appDbPath, onProgress = () => {}) {
+  if (!fs.existsSync(appDbPath)) return { restored: false };
+  onProgress("database", "Restoring application database.");
+  const dbSafetyPath = `${DB_PATH}.pre_restore_${timestampForFilename()}`;
+  if (fs.existsSync(DB_PATH)) {
+    await retryFsOperation(
+      async () => fsp.rename(DB_PATH, dbSafetyPath),
+      `Move existing database aside: ${DB_PATH}`,
+    );
+  }
+  await retryFsOperation(
+    async () => fsp.copyFile(appDbPath, DB_PATH),
+    `Restore application database: ${DB_PATH}`,
+  );
+  return { restored: true, previousPath: fs.existsSync(dbSafetyPath) ? dbSafetyPath : "" };
+}
+
+async function deleteWorkspaceRelativePaths(root, deletedPaths = []) {
+  for (const relativePath of deletedPaths) {
+    const targetPath = path.join(root, ...String(relativePath || "").split("/"));
+    if (!isWithinWorkspace(targetPath) || !fs.existsSync(targetPath)) continue;
+    await retryFsOperation(
+      async () => fsp.rm(targetPath, { recursive: true, force: true }),
+      `Remove deleted path during incremental restore: ${targetPath}`,
+      { attempts: 3, delayMs: 450 },
+    );
+  }
+}
+
+async function applyWorkspacePackage(packageRoot, dirs, manifest) {
+  const workspaceSource = path.join(packageRoot, "workspace");
+  if (!fs.existsSync(workspaceSource)) {
+    throw new Error("Backup workspace payload was not found.");
+  }
+  if (manifest.kind === QUICK_BACKUP_KIND) {
+    await deleteWorkspaceRelativePaths(dirs.root, manifest.deletedPaths || []);
+  }
+  await copyDirectoryRecursiveAsync(workspaceSource, dirs.root, {
+    exclude: (_sourcePath, relativePath) => (
+      /^Backup(?:[\\/]|$)/i.test(relativePath)
+      || relativePath === "_incremental_marker.json"
+    ),
+  });
+}
+
+function resolveBackupChainPaths(selectedBackupPath, manifest, targetFolder) {
+  if (manifest.kind !== QUICK_BACKUP_KIND) {
+    return [selectedBackupPath];
+  }
+  const baselinePath = path.join(targetFolder, manifest.baselineFilename || "");
+  if (!manifest.baselineFilename || !fs.existsSync(baselinePath)) {
+    throw new Error(`Quick backup restore requires baseline backup: ${manifest.baselineFilename || "missing"}`);
+  }
+  const previous = Array.isArray(manifest.previousIncrementals) ? manifest.previousIncrementals : [];
+  const previousPaths = previous.map((filename) => {
+    const candidate = path.join(targetFolder, filename);
+    if (!fs.existsSync(candidate)) {
+      throw new Error(`Quick backup restore chain is missing incremental backup: ${filename}`);
+    }
+    return candidate;
+  });
+  return [baselinePath, ...previousPaths, selectedBackupPath];
+}
+
+function pruneBackups(targetFolder, maxBackups = 30, keepFilenames = []) {
+  try {
+    const keep = new Set((keepFilenames || []).map((name) => String(name || "").toLowerCase()).filter(Boolean));
+    const allFiles = fs.readdirSync(targetFolder)
+      .filter((file) => /\.(zip|spailabackup)$/i.test(file))
+      .map((name) => ({ name, mtime: fs.statSync(path.join(targetFolder, name)).mtimeMs }))
+      .sort((a, b) => a.mtime - b.mtime);
+    const excess = allFiles.length - maxBackups;
+    for (let i = 0; i < excess; i += 1) {
+      if (keep.has(allFiles[i].name.toLowerCase())) continue;
+      try { fs.unlinkSync(path.join(targetFolder, allFiles[i].name)); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+async function buildWorkspaceBackupPackage({
+  targetFolder,
+  localStorageData,
+  reason = "manual",
+  onProgress = () => {},
+  backupType = "full",
+  updateIndex = true,
+  pruneKeepFilenames = [],
+}) {
+  const dirs = ensureWorkspaceLayout((message) => console.log(message));
+  const createdAt = new Date();
+  const timingStartMs = Date.now();
+  let lastTimingMs = timingStartMs;
+  const timings = [];
+  function markTiming(stage) {
+    const now = Date.now();
+    timings.push({
+      stage,
+      elapsedMs: now - timingStartMs,
+      deltaMs: now - lastTimingMs,
+    });
+    lastTimingMs = now;
+  }
+  const timestamp = timestampForFilename(createdAt);
+  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spaila-backup-"));
+  const packageRoot = path.join(stagingRoot, "spaila_backup");
+  const workspaceTarget = path.join(packageRoot, "workspace");
+  const appTarget = path.join(packageRoot, "app");
+  const filename = `spaila_backup_${timestamp}.zip`;
+  const dest = path.join(targetFolder, filename);
+  const partialDest = path.join(stagingRoot, `${filename}.partial.zip`);
+  try {
+    onProgress("start", "Starting full workspace backup.");
+    await fsp.mkdir(workspaceTarget, { recursive: true });
+    await fsp.mkdir(appTarget, { recursive: true });
+
+    onProgress("scanning", "Scanning workspace and backup inventory.");
+    const backupInventory = listBackupInventory(dirs.Backup);
+    onProgress("copying", "Backing up orders, inbox files, archives, conversations, and attachments.");
+    await copyDirectoryRecursiveAsync(dirs.root, workspaceTarget, {
+      exclude: (sourcePath) => path.resolve(sourcePath).toLowerCase().startsWith(path.resolve(dirs.Backup).toLowerCase()),
+    });
+    markTiming("copying");
+    if (fs.existsSync(dirs.Internal)) {
+      onProgress("internal", "Backing up internal system recovery data.");
+    }
+    await fsp.mkdir(path.join(workspaceTarget, "Backup"), { recursive: true });
+    await fsp.writeFile(path.join(workspaceTarget, "Backup", "_backup_inventory.json"), JSON.stringify(backupInventory, null, 2), "utf8");
+    onProgress("database", "Backing up database and settings.");
+    if (fs.existsSync(DB_PATH)) {
+      await fsp.copyFile(DB_PATH, path.join(appTarget, "spaila.db"));
+    }
+    await fsp.writeFile(path.join(packageRoot, "localStorage.json"), JSON.stringify(localStorageData || {}, null, 2), "utf8");
+    markTiming("database-and-settings");
+
+    onProgress("manifest", "Generating backup manifest and checksums.");
+    const includedFiles = await buildFileManifestAsync(packageRoot);
+    markTiming("manifest-hashing");
+    const baselineId = crypto.randomUUID();
+    const manifest = {
+      kind: BACKUP_KIND,
+      appVersion: readAppPackageVersion(),
+      parserVersion: readParserVersion(),
+      backupVersion: BACKUP_VERSION,
+      backupType,
+      baselineId,
+      createdAt: createdAt.toISOString(),
+      timestamp,
+      reason,
+      workspaceRoot: dirs.root,
+      sections: {
+        workspace: true,
+        appDatabase: fs.existsSync(DB_PATH),
+        localStorage: true,
+        internalRecoveryStorage: fs.existsSync(dirs.Internal),
+        emailArchive: fs.existsSync(path.join(dirs.Internal, "email_archive")),
+        emailRetentionIndex: fs.existsSync(path.join(dirs.Internal, "email_retention_index.json")),
+        backupInventory: true,
+        existingBackupArchives: false,
+      },
+      includedSections: [
+        "workspace",
+        "app",
+        "localStorage",
+        "internalRecoveryStorage",
+        "emailArchive",
+        "emailRetentionIndex",
+        "backupInventory",
+      ].filter((section) => {
+        if (section === "app") return fs.existsSync(DB_PATH);
+        if (section === "emailArchive") return fs.existsSync(path.join(dirs.Internal, "email_archive"));
+        if (section === "emailRetentionIndex") return fs.existsSync(path.join(dirs.Internal, "email_retention_index.json"));
+        return true;
+      }),
+      fileCount: includedFiles.length,
+      payloadBytes: includedFiles.reduce((total, file) => total + file.size, 0),
+      includedPaths: {
+        workspace: "workspace/",
+        appDatabase: fs.existsSync(DB_PATH) ? "app/spaila.db" : "",
+        settings: "localStorage.json",
+        internalRecoveryStorage: "workspace/.spaila_internal/",
+        emailArchive: "workspace/.spaila_internal/email_archive/",
+        emailRetentionIndex: "workspace/.spaila_internal/email_retention_index.json",
+        backupInventory: "workspace/Backup/_backup_inventory.json",
+      },
+      checksumAlgorithm: "sha256",
+      checksum: checksumManifestFiles(includedFiles),
+      storageOptimization: {
+        excludesExistingBackupArchives: true,
+        reliesOnZipCompressionForDuplicateRecoveryFiles: true,
+      },
+    };
+    await fsp.writeFile(path.join(packageRoot, "backup-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await fsp.writeFile(path.join(packageRoot, "backup-metadata.json"), JSON.stringify(manifest, null, 2), "utf8");
+
+    onProgress("compressing", "Compressing backup archive.", { fileCount: manifest.fileCount, payloadBytes: manifest.payloadBytes });
+    fs.rmSync(partialDest, { force: true });
+    fs.rmSync(dest, { force: true });
+    await createZipArchive(packageRoot, partialDest);
+    markTiming("compressing");
+    onProgress("validating", "Validating archive integrity and manifest.");
+    const archiveManifest = await validateZipArchive(partialDest);
+    markTiming("validating");
+    const archiveChecksum = await sha256FileAsync(partialDest);
+    markTiming("archive-checksum");
+    await fsp.rename(partialDest, dest);
+    onProgress("finalizing", "Finalizing backup archive.", { filename });
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    pruneBackups(targetFolder, 30, [filename, ...pruneKeepFilenames]);
+    markTiming("finalizing");
+    if (updateIndex) {
+      const workspaceFiles = includedFiles
+        .filter((file) => file.path.startsWith("workspace/") && file.path !== "workspace/Backup/_backup_inventory.json")
+        .map((file) => ({
+          ...file,
+          path: file.path.slice("workspace/".length),
+        }));
+      const sourceRecords = await scanWorkspaceFiles(dirs, {});
+      const workspaceHashByPath = Object.fromEntries(workspaceFiles.map((file) => [file.path, file.sha256]));
+      await saveBackupIndex(dirs, {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        workspaceRoot: dirs.root,
+        baseline: {
+          id: baselineId,
+          filename,
+          createdAt: manifest.createdAt,
+          payloadBytes: manifest.payloadBytes,
+          fileCount: manifest.fileCount,
+        },
+        incrementals: [],
+        files: Object.fromEntries(sourceRecords.map((record) => [record.path, {
+          size: record.size,
+          sha256: workspaceHashByPath[record.path] || "",
+          mtimeMs: record.mtimeMs,
+        }])),
+      });
+    }
+    onProgress("complete", "Backup archive validated and saved.", { filename });
+    return {
+      path: dest,
+      filename,
+      metadata: {
+        ...archiveManifest,
+        archiveChecksum,
+        archiveBytes: (await fsp.stat(dest)).size,
+        finalized: true,
+        timings,
+        quickBackup: false,
+      },
+    };
+  } catch (error) {
+    fs.rmSync(partialDest, { force: true });
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    onProgress("failed", error?.message || "Backup failed.");
+    throw error;
+  }
+}
+
+async function buildSafetyWorkspaceBackupPackage({ targetFolder, localStorageData, reason, onProgress, keepFilenames = [] }) {
+  return buildWorkspaceBackupPackage({
+    targetFolder,
+    localStorageData,
+    reason,
+    onProgress,
+    backupType: "safety-full",
+    updateIndex: false,
+    pruneKeepFilenames: keepFilenames,
+  });
+}
+
+async function buildQuickWorkspaceBackupPackage({ targetFolder, localStorageData, index, onProgress = () => {} }) {
+  const dirs = ensureWorkspaceLayout((message) => console.log(message));
+  const createdAt = new Date();
+  const timestamp = timestampForFilename(createdAt);
+  const timingStartMs = Date.now();
+  let lastTimingMs = timingStartMs;
+  const timings = [];
+  function markTiming(stage) {
+    const now = Date.now();
+    timings.push({ stage, elapsedMs: now - timingStartMs, deltaMs: now - lastTimingMs });
+    lastTimingMs = now;
+  }
+
+  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spaila-quick-backup-"));
+  const packageRoot = path.join(stagingRoot, "spaila_backup");
+  const workspaceTarget = path.join(packageRoot, "workspace");
+  const appTarget = path.join(packageRoot, "app");
+  const filename = `spaila_quick_backup_${timestamp}.zip`;
+  const dest = path.join(targetFolder, filename);
+  const partialDest = path.join(stagingRoot, `${filename}.partial.zip`);
+  try {
+    onProgress("start", "Starting quick incremental backup.");
+    await fsp.mkdir(workspaceTarget, { recursive: true });
+    await fsp.mkdir(appTarget, { recursive: true });
+
+    onProgress("scanning", "Scanning for changed files.");
+    const scanned = await scanWorkspaceFiles(dirs, index.files || {});
+    const currentPaths = new Set(scanned.map((record) => record.path));
+    const deletedPaths = Object.keys(index.files || {}).filter((relativePath) => !currentPaths.has(relativePath));
+    const changedRecords = scanned.filter((record) => record.changed || !record.sha256);
+    const totalBytes = scanned.reduce((total, record) => total + record.size, 0);
+    const changedBytes = changedRecords.reduce((total, record) => total + record.size, 0);
+    markTiming("scan");
+
+    const baselineDecision = shouldCreateFullBaseline(index, targetFolder, changedBytes, totalBytes);
+    if (baselineDecision.full) {
+      onProgress("scanning", `Refreshing full backup baseline (${baselineDecision.reason}).`);
+      return buildWorkspaceBackupPackage({
+        targetFolder,
+        localStorageData,
+        reason: baselineDecision.reason,
+        onProgress,
+        backupType: "full",
+      });
+    }
+
+    onProgress("manifest", `Hashing ${changedRecords.length} changed file(s).`, {
+      fileCount: changedRecords.length,
+      payloadBytes: changedBytes,
+    });
+    await hashChangedRecords(changedRecords);
+    markTiming("hash-changed");
+
+    onProgress("copying", "Packaging changed files only.");
+    for (const record of changedRecords) {
+      const targetPath = path.join(workspaceTarget, ...record.path.split("/"));
+      await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+      await fsp.copyFile(record.sourcePath, targetPath);
+    }
+    await fsp.writeFile(path.join(workspaceTarget, "_incremental_marker.json"), JSON.stringify({
+      createdAt: createdAt.toISOString(),
+      changedFileCount: changedRecords.length,
+      deletedFileCount: deletedPaths.length,
+    }, null, 2), "utf8");
+    if (fs.existsSync(DB_PATH)) {
+      await fsp.copyFile(DB_PATH, path.join(appTarget, "spaila.db"));
+    }
+    await fsp.writeFile(path.join(packageRoot, "localStorage.json"), JSON.stringify(localStorageData || {}, null, 2), "utf8");
+    markTiming("copy-changed");
+
+    const nextFileRecords = scanned.map((record) => ({
+      ...record,
+      sha256: record.sha256 || changedRecords.find((changed) => changed.path === record.path)?.sha256 || "",
+    }));
+    const previousIncrementals = Array.isArray(index.incrementals) ? index.incrementals.map((item) => item.filename) : [];
+    const payloadFiles = await buildFileManifestAsync(packageRoot);
+    const sequence = previousIncrementals.length + 1;
+    const manifest = {
+      kind: QUICK_BACKUP_KIND,
+      appVersion: readAppPackageVersion(),
+      parserVersion: readParserVersion(),
+      backupVersion: BACKUP_VERSION,
+      backupType: "incremental",
+      baselineId: index.baseline.id,
+      baselineFilename: index.baseline.filename,
+      previousIncrementals,
+      sequence,
+      createdAt: createdAt.toISOString(),
+      timestamp,
+      workspaceRoot: dirs.root,
+      sections: {
+        workspace: true,
+        appDatabase: fs.existsSync(DB_PATH),
+        localStorage: true,
+        internalRecoveryStorage: true,
+        emailArchive: fs.existsSync(path.join(dirs.Internal, "email_archive")),
+        emailRetentionIndex: fs.existsSync(path.join(dirs.Internal, "email_retention_index.json")),
+        existingBackupArchives: false,
+      },
+      changedFiles: recordsToManifestFiles(changedRecords),
+      deletedPaths,
+      fileIndex: recordsToManifestFiles(nextFileRecords, ""),
+      fileCount: payloadFiles.length,
+      payloadBytes: payloadFiles.reduce((total, file) => total + file.size, 0),
+      changedBytes,
+      checksumAlgorithm: "sha256",
+      checksum: checksumManifestFiles(payloadFiles),
+      storageOptimization: {
+        mode: "incremental",
+        reusesUnchangedHashes: true,
+        packagesChangedFilesOnly: true,
+      },
+      timings,
+    };
+    await fsp.writeFile(path.join(packageRoot, "backup-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await fsp.writeFile(path.join(packageRoot, "backup-metadata.json"), JSON.stringify(manifest, null, 2), "utf8");
+    markTiming("manifest");
+
+    onProgress("compressing", "Compressing quick backup archive.", {
+      fileCount: changedRecords.length,
+      payloadBytes: changedBytes,
+    });
+    fs.rmSync(partialDest, { force: true });
+    fs.rmSync(dest, { force: true });
+    await createZipArchive(packageRoot, partialDest);
+    markTiming("compressing");
+    onProgress("validating", "Validating quick backup archive.");
+    const archiveManifest = await validateZipArchive(partialDest);
+    markTiming("validating");
+    const archiveChecksum = await sha256FileAsync(partialDest);
+    await fsp.rename(partialDest, dest);
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    const archiveStat = await fsp.stat(dest);
+    const nextIndex = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      workspaceRoot: dirs.root,
+      baseline: index.baseline,
+      incrementals: [
+        ...(Array.isArray(index.incrementals) ? index.incrementals : []),
+        {
+          filename,
+          createdAt: manifest.createdAt,
+          sequence,
+          changedFileCount: changedRecords.length,
+          deletedFileCount: deletedPaths.length,
+          changedBytes,
+        },
+      ],
+      files: recordsToIndexMap(nextFileRecords),
+    };
+    await saveBackupIndex(dirs, nextIndex);
+    pruneBackups(targetFolder, 30, [
+      index.baseline.filename,
+      ...(Array.isArray(index.incrementals) ? index.incrementals.map((item) => item.filename) : []),
+      filename,
+    ]);
+    markTiming("finalizing");
+    onProgress("complete", "Quick backup validated and saved.", { filename });
+    return {
+      path: dest,
+      filename,
+      metadata: {
+        ...archiveManifest,
+        archiveChecksum,
+        archiveBytes: archiveStat.size,
+        finalized: true,
+        timings,
+        quickBackup: true,
+      },
+    };
+  } catch (error) {
+    fs.rmSync(partialDest, { force: true });
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    onProgress("failed", error?.message || "Quick backup failed.");
+    throw error;
+  }
+}
+
+ipcMain.handle("backup:save", async (event, { folderPath, localStorageData }) => {
+  if (backupInProgress) {
+    return { ok: false, error: "A backup is already in progress." };
+  }
+  backupInProgress = true;
   try {
     console.log("[backup:save] requested", { folderPath });
-    if (!fs.existsSync(DB_PATH)) {
-      console.error("[backup:save] database file missing", DB_PATH);
-      return { ok: false, error: "Database file not found." };
-    }
     const targetFolder = String(folderPath || "").trim() || getWorkspaceDirs().Backup;
     if (!path.isAbsolute(targetFolder)) {
       console.error("[backup:save] folder path not absolute", targetFolder);
@@ -2269,60 +3821,154 @@ ipcMain.handle("backup:save", async (_event, { folderPath, localStorageData }) =
     }
     fs.mkdirSync(targetFolder, { recursive: true });
 
-    const dbBytes  = fs.readFileSync(DB_PATH);
-    const dbBase64 = dbBytes.toString("base64");
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const filename  = `spaila-backup-${timestamp}.spailabackup`;
-    const dest      = path.join(targetFolder, filename);
-
-    const payload = JSON.stringify({
-      version:    BACKUP_VERSION,
-      createdAt:  new Date().toISOString(),
-      database:   dbBase64,
-      settings:   localStorageData,   // all localStorage key→value pairs
-    });
-
-    fs.writeFileSync(dest, payload, "utf8");
-    console.log("[backup:save] wrote backup", dest);
-
-    // Keep only the 10 most recent .spailabackup files in the folder
-    try {
-      const MAX_BACKUPS = 10;
-      const allFiles = fs.readdirSync(targetFolder)
-        .filter((f) => f.endsWith(".spailabackup"))
-        .map((f) => ({ name: f, mtime: fs.statSync(path.join(targetFolder, f)).mtimeMs }))
-        .sort((a, b) => a.mtime - b.mtime); // oldest first
-
-      const excess = allFiles.length - MAX_BACKUPS;
-      for (let i = 0; i < excess; i++) {
-        try { fs.unlinkSync(path.join(targetFolder, allFiles[i].name)); } catch (_) {}
-      }
-    } catch (_) {}
-
-    return { ok: true, path: dest, filename };
+    const progress = (stage, message, details) => emitBackupProgress(event, stage, message, details);
+    const index = loadBackupIndex(getWorkspaceDirs());
+    const result = index && backupIndexBaselineExists(index, targetFolder)
+      ? await buildQuickWorkspaceBackupPackage({
+          targetFolder,
+          localStorageData,
+          index,
+          onProgress: progress,
+        })
+      : await buildWorkspaceBackupPackage({
+          targetFolder,
+          localStorageData,
+          reason: "baseline",
+          onProgress: progress,
+          backupType: "full",
+        });
+    console.log("[backup:save] wrote backup", result.path);
+    return { ok: true, path: result.path, filename: result.filename, metadata: result.metadata };
   } catch (err) {
     console.error("[backup:save] failed", err);
     return { ok: false, error: err.message };
+  } finally {
+    backupInProgress = false;
   }
 });
 
-ipcMain.handle("backup:restore", async (_event, { filePath }) => {
+ipcMain.handle("backup:restore", async (event, { filePath }) => {
+  if (backupInProgress || restoreInProgress) {
+    return { ok: false, error: backupInProgress ? "A backup is already in progress." : "A restore is already in progress." };
+  }
+  restoreInProgress = true;
+  const progress = (stage, message, details) => emitRestoreProgress(event, stage, message, details);
   try {
-    const raw     = fs.readFileSync(filePath, "utf8");
-    const payload = JSON.parse(raw);
-
-    if (!payload.version || !payload.database) {
-      return { ok: false, error: "Invalid backup file." };
+    const backupPath = String(filePath || "").trim();
+    if (!backupPath || !fs.existsSync(backupPath)) {
+      return { ok: false, error: "Backup file not found." };
+    }
+    progress("suspend", "Suspending background operations.");
+    await stopBackgroundOperationsForRestore(progress);
+    if (/\.spailabackup$/i.test(backupPath)) {
+      progress("validating", "Validating legacy backup file.");
+      const raw = fs.readFileSync(backupPath, "utf8");
+      const payload = JSON.parse(raw);
+      if (!payload.version || !payload.database) {
+        return { ok: false, error: "Invalid backup file." };
+      }
+      progress("safety", "Creating safety backup before restore.");
+      const safety = await buildSafetyWorkspaceBackupPackage({
+        targetFolder: getWorkspaceDirs().Backup,
+        localStorageData: {},
+        reason: "pre-legacy-restore",
+        onProgress: (stage, message, details) => progress(`safety:${stage}`, message, details),
+      });
+      const dbBytes = Buffer.from(payload.database, "base64");
+      const dbSafetyPath = `${DB_PATH}.pre_restore_${timestampForFilename()}`;
+      if (fs.existsSync(DB_PATH)) {
+        await retryFsOperation(async () => fsp.rename(DB_PATH, dbSafetyPath), `Move existing database aside: ${DB_PATH}`);
+      }
+      await retryFsOperation(async () => fsp.writeFile(DB_PATH, dbBytes), `Restore legacy database: ${DB_PATH}`);
+      progress("complete", "Legacy backup restored.", { safetyBackupPath: safety.path, dbSafetyPath });
+      return { ok: true, settings: payload.settings || {}, createdAt: payload.createdAt, safetyBackupPath: safety.path, dbSafetyPath };
+    }
+    if (!/\.zip$/i.test(backupPath)) {
+      return { ok: false, error: "Unsupported backup file type." };
     }
 
-    // Write database (overwrite existing)
-    const dbBytes = Buffer.from(payload.database, "base64");
-    fs.writeFileSync(DB_PATH, dbBytes);
+    const dirs = getWorkspaceDirs();
+    progress("validating", "Validating restore archive and manifest.");
+    const selectedManifest = await validateZipArchive(backupPath);
+    const backupChain = resolveBackupChainPaths(backupPath, selectedManifest, path.dirname(backupPath));
+    if (backupChain.length > 1) {
+      progress("validating", `Validated quick backup chain with ${backupChain.length} archives.`);
+    }
+    progress("safety", "Creating safety backup of current workspace.");
+    const safety = await buildSafetyWorkspaceBackupPackage({
+      targetFolder: dirs.Backup,
+      localStorageData: {},
+      reason: "pre-restore",
+      onProgress: (stage, message, details) => progress(`safety:${stage}`, message, details),
+      keepFilenames: backupChain.map((chainPath) => path.basename(chainPath)),
+    });
+    const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spaila-restore-"));
+    try {
+      const extractedPackages = [];
+      for (let i = 0; i < backupChain.length; i += 1) {
+        const chainPath = backupChain[i];
+        progress("extracting", `Extracting restore archive ${i + 1} of ${backupChain.length}.`);
+        const chainManifest = await validateZipArchive(chainPath);
+        if (i > 0 && chainManifest.baselineFilename && chainManifest.baselineFilename !== path.basename(backupChain[0])) {
+          throw new Error("Quick backup restore chain points to a different baseline.");
+        }
+        if (i > 0 && Number(chainManifest.sequence || 0) !== i) {
+          throw new Error("Quick backup restore chain sequence is invalid.");
+        }
+        const extractTarget = path.join(stagingRoot, `archive_${i}`);
+        await expandZipArchive(chainPath, extractTarget);
+        const packageRoot = resolveBackupPackageRoot(extractTarget);
+        const manifest = await validateBackupManifest(packageRoot);
+        if (i === 0 && manifest.kind !== BACKUP_KIND) {
+          throw new Error("Restore chain must start with a full backup baseline.");
+        }
+        if (i > 0 && manifest.kind !== QUICK_BACKUP_KIND) {
+          throw new Error("Restore chain contains a non-incremental archive after the baseline.");
+        }
+        extractedPackages.push({ packageRoot, manifest, chainPath });
+      }
+      const manifest = extractedPackages[extractedPackages.length - 1].manifest;
+      await fsp.mkdir(dirs.root, { recursive: true });
+      progress("renaming", "Moving current workspace aside for recoverability.");
+      const restoreSafety = await moveWorkspaceAsideForRestore(dirs, progress);
+      for (let i = 0; i < extractedPackages.length; i += 1) {
+        const item = extractedPackages[i];
+        progress("restoring", `Restoring ${i === 0 ? "full baseline" : `quick backup ${i}`} of ${extractedPackages.length - 1}.`);
+        await applyWorkspacePackage(item.packageRoot, dirs, item.manifest);
+      }
+      const packageRoot = extractedPackages[extractedPackages.length - 1].packageRoot;
+      const appDbPath = path.join(packageRoot, "app", "spaila.db");
+      const dbRestore = await restoreAppDatabase(appDbPath, progress);
+      const localStoragePath = path.join(packageRoot, "localStorage.json");
+      const settings = fs.existsSync(localStoragePath)
+        ? JSON.parse(fs.readFileSync(localStoragePath, "utf8"))
+        : {};
+      progress("complete", "Restore completed successfully.", {
+        safetyBackupPath: safety.path,
+        restoreSafetyPath: restoreSafety.path,
+        dbSafetyPath: dbRestore.previousPath || "",
+        diagnostics: restoreSafety.diagnostics || [],
+      });
 
-    return { ok: true, settings: payload.settings || {}, createdAt: payload.createdAt };
+      return {
+        ok: true,
+        settings,
+        createdAt: manifest.createdAt,
+        metadata: { ...manifest, archiveChecksum: await sha256FileAsync(backupPath), validatedAt: new Date().toISOString() },
+        safetyBackupPath: safety.path,
+        restoreSafetyPath: restoreSafety.path,
+        dbSafetyPath: dbRestore.previousPath || "",
+        diagnostics: restoreSafety.diagnostics || [],
+        copiedFallback: restoreSafety.copiedFallback || [],
+      };
+    } finally {
+      fs.rmSync(stagingRoot, { recursive: true, force: true });
+    }
   } catch (err) {
+    progress("failed", err?.message || "Restore failed.");
     return { ok: false, error: err.message };
+  } finally {
+    restoreInProgress = false;
   }
 });
 
@@ -2372,6 +4018,52 @@ ipcMain.handle("documents:copy-to-docs", async (_event, payload = {}) => {
     return { ok: true, path: targetPath, name: path.basename(targetPath), folderPath: DOCS_FOLDER };
   } catch (err) {
     return { ok: false, error: err.message || "Could not copy document." };
+  }
+});
+
+function getDocumentMimeType(filePath) {
+  const ext = path.extname(filePath || "").toLowerCase();
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".txt") return "text/plain";
+  if (ext === ".html" || ext === ".htm") return "text/html";
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  return "application/octet-stream";
+}
+
+ipcMain.handle("documents:sync-thank-you-template", async (_event, payload = {}) => {
+  try {
+    const filePath = String(payload.filePath || "").trim();
+    if (!filePath || !path.isAbsolute(filePath)) {
+      return { ok: false, error: "Thank-you template path is required." };
+    }
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, error: "Thank-you template file not found." };
+    }
+    const stat = safeStat(filePath);
+    if (!stat?.isFile()) {
+      return { ok: false, error: "Thank-you template is not a file." };
+    }
+    const content = await fsp.readFile(filePath);
+    const response = await fetch("http://127.0.0.1:8055/account/thank-you-template", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: String(payload.name || path.basename(filePath)).trim() || path.basename(filePath),
+        mime_type: getDocumentMimeType(filePath),
+        content_base64: content.toString("base64"),
+        source_path: filePath,
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      return { ok: false, error: detail || `Shared template import failed (${response.status}).` };
+    }
+    const template = await response.json();
+    return { ok: true, template };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not sync thank-you template." };
   }
 });
 
@@ -2435,6 +4127,7 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
         };
       }),
     inboxItems: listInboxItems(dirs.InboxModule),
+    inboxVisibilityDiagnostics: getInboxVisibilityDiagnostics(),
     sentMessages: loadSentMessages(),
     currentBucket: bucket,
     currentPath,
@@ -2471,7 +4164,14 @@ ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
 
     try {
       fs.copyFileSync(sourcePath, targetPath);
-      added.push({ path: targetPath, relativePath: relativeWorkspacePath(targetPath) });
+      const item = {
+        path: targetPath,
+        relativePath: relativeWorkspacePath(targetPath),
+        name: path.basename(targetPath),
+        ...extractEmailMetadata(targetPath),
+      };
+      addManualImportedInboxItem(item);
+      added.push({ path: targetPath, relativePath: item.relativePath, manual_imported: true });
     } catch (error) {
       skipped.push({ path: sourcePath, reason: error.message || "copy_failed" });
     }
@@ -2489,6 +4189,77 @@ ipcMain.handle("workspace:open-inbox-item", async (_event, payload = {}) => {
   }
 });
 
+function resolveAttachmentFilePathForOpen(attachment = {}) {
+  let filePath = String(attachment.path || attachment.filePath || "").trim();
+  const originalPath = String(attachment.original_path || attachment.originalPath || "").trim();
+  const sentCopyPath = String(attachment.sent_copy_path || attachment.sentCopyPath || "").trim();
+  if ((!filePath || !path.isAbsolute(filePath)) && originalPath && path.isAbsolute(originalPath)) {
+    filePath = originalPath;
+  }
+  if ((!filePath || !path.isAbsolute(filePath)) && sentCopyPath && path.isAbsolute(sentCopyPath)) {
+    filePath = sentCopyPath;
+  }
+  return filePath;
+}
+
+function isPreviewableImagePath(filePath, attachment = {}) {
+  const type = String(attachment.type || attachment.mime_type || attachment.mimeType || attachment.contentType || "").toLowerCase();
+  const name = String(attachment.name || attachment.filename || attachment.file || filePath || "").toLowerCase();
+  return type.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(name) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(String(filePath || ""));
+}
+
+async function createAttachmentThumbnailDataUrl(filePath) {
+  if (!filePath || !path.isAbsolute(filePath) || !fs.existsSync(filePath)) return "";
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) return "";
+  try {
+    const thumbnail = await nativeImage.createThumbnailFromPath(filePath, { width: 96, height: 96 });
+    if (thumbnail && !thumbnail.isEmpty()) {
+      return thumbnail.toDataURL();
+    }
+  } catch (_) {}
+  return pathToFileURL(filePath).href;
+}
+
+ipcMain.handle("workspace:attachment-info", async (_event, payload = {}) => {
+  try {
+    const attachment = payload.attachment || payload;
+    const url = String(attachment.url || attachment.href || "").trim();
+    if (/^https?:\/\//i.test(url)) {
+      return { ok: true, exists: true, remote: true, size: Number(attachment.size || attachment.bytes || 0) || 0 };
+    }
+    let filePath = resolveAttachmentFilePathForOpen(attachment);
+    if ((!filePath || !path.isAbsolute(filePath)) && attachment.sourcePath && attachment.attachmentIndex !== undefined && isPreviewableImagePath("", attachment)) {
+      filePath = extractEmailAttachmentToFile(
+        String(attachment.sourcePath || ""),
+        attachment.attachmentIndex,
+        attachment.name || attachment.filename || ""
+      );
+    }
+    if (!filePath || !path.isAbsolute(filePath)) {
+      return { ok: true, exists: false, missing: true, size: 0 };
+    }
+    if (!fs.existsSync(filePath)) {
+      return { ok: true, exists: false, missing: true, path: filePath, size: 0 };
+    }
+    const stat = fs.statSync(filePath);
+    const thumbnailDataUrl = stat.isFile() && isPreviewableImagePath(filePath, attachment)
+      ? await createAttachmentThumbnailDataUrl(filePath)
+      : "";
+    return {
+      ok: true,
+      exists: stat.isFile(),
+      missing: !stat.isFile(),
+      path: filePath,
+      size: stat.isFile() ? stat.size : 0,
+      thumbnailDataUrl,
+      previewSrc: thumbnailDataUrl || (stat.isFile() && isPreviewableImagePath(filePath, attachment) ? pathToFileURL(filePath).href : ""),
+    };
+  } catch (error) {
+    return { ok: false, exists: false, missing: true, error: error?.message || "Could not inspect attachment." };
+  }
+});
+
 ipcMain.handle("workspace:open-attachment", async (_event, payload = {}) => {
   try {
     const attachment = payload.attachment || payload;
@@ -2498,7 +4269,7 @@ ipcMain.handle("workspace:open-attachment", async (_event, payload = {}) => {
       return { ok: true };
     }
 
-    let filePath = String(attachment.path || attachment.filePath || "").trim();
+    let filePath = resolveAttachmentFilePathForOpen(attachment);
     if (!filePath && attachment.sourcePath && attachment.attachmentIndex !== undefined) {
       filePath = extractEmailAttachmentToFile(
         String(attachment.sourcePath || ""),
@@ -2519,8 +4290,14 @@ ipcMain.handle("workspace:open-attachment", async (_event, payload = {}) => {
 
 ipcMain.handle("workspace:hide-inbox-item", async (_event, payload = {}) => {
   try {
-    hideEmailId(payload.emailId || payload.email_id || "");
-    return { ok: true };
+    const emailId = payload.emailId || payload.email_id || "";
+    hideEmailId(emailId);
+    const sourcePath = String(payload.filePath || payload.path || "").trim()
+      || findInboxFileForLifecycle(emailId, payload.imap_uid || payload.imapUid || "");
+    const lifecycle = sourcePath
+      ? archiveAndDeactivateInboxFile(sourcePath, "global_hidden")
+      : { ok: false, reason: "source_not_found" };
+    return { ok: true, lifecycle };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not remove inbox email." };
   }
@@ -2531,7 +4308,12 @@ ipcMain.handle("workspace:hide-inbox-workspace-only", async (_event, payload = {
     const emailId = String(payload.emailId || payload.email_id || "").trim();
     const imapUid = String(payload.imap_uid || payload.imapUid || "").trim();
     addWorkspaceInboxHiddenIds(emailId, imapUid);
-    return { ok: true, workspace_only: true };
+    const sourcePath = String(payload.filePath || payload.path || "").trim()
+      || findInboxFileForLifecycle(emailId, imapUid);
+    const lifecycle = sourcePath
+      ? archiveAndDeactivateInboxFile(sourcePath, "workspace_hidden")
+      : { ok: false, reason: "source_not_found" };
+    return { ok: true, workspace_only: true, lifecycle };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not hide inbox email in workspace." };
   }
@@ -2762,6 +4544,86 @@ ipcMain.handle("email:compose", async (_event, { to, subject, body, attachmentFo
   return result;
 });
 
+// Fetch the shared account profile from the local backend API.
+// This lets the desktop pick up any shop identity changes made via the webapp.
+ipcMain.handle("account:get-profile", async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/profile");
+    if (!response.ok) return { ok: false };
+    const profile = await response.json();
+    return { ok: true, profile };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:update-profile", async (_event, patch) => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch || {}),
+    });
+    if (!response.ok) return { ok: false };
+    const profile = await response.json();
+    return { ok: true, profile };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:get-order-field-layout", async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/order-field-layout");
+    if (!response.ok) return { ok: false };
+    const layout = await response.json();
+    return { ok: true, layout };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:update-order-field-layout", async (_event, layout) => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/order-field-layout", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(layout || {}),
+    });
+    if (!response.ok) return { ok: false };
+    const saved = await response.json();
+    return { ok: true, layout: saved };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:get-pricing-rules", async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/pricing-rules");
+    if (!response.ok) return { ok: false };
+    const pricing = await response.json();
+    return { ok: true, pricing };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:update-pricing-rules", async (_event, pricing) => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/pricing-rules", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pricing || {}),
+    });
+    if (!response.ok) return { ok: false };
+    const saved = await response.json();
+    return { ok: true, pricing: saved };
+  } catch {
+    return { ok: false };
+  }
+});
+
 app.whenReady().then(() => {
   getWorkspaceDirs();
   try { app.setName(getBrandName()); } catch (_) {}
@@ -2772,7 +4634,12 @@ app.whenReady().then(() => {
   try { app.dock?.setIcon(APP_ICON); } catch (_) {} // macOS dock (no-op on Windows)
 
   createWindow();
-  startHelper();
+  if (loadHelperSettings().runOnStartup !== false) {
+    startHelper();
+  } else {
+    helperStatus = "stopped";
+    appendHelperLog("info", "Helper startup disabled by settings.");
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -2800,12 +4667,18 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", reason);
 });
 
-function killHelper() {
-  helperRestarting = true;
+function killHelper(options = {}) {
+  if (options.intentional) {
+    helperStopRequested = true;
+  } else {
+    helperRestarting = true;
+  }
   if (helperProcess) {
     try { helperProcess.kill(); } catch (_) {}
     helperProcess = null;
   }
+  helperStatus = "stopped";
+  if (!options.silent) appendHelperLog("info", "Helper stopped.");
 }
 
 app.on("before-quit", killHelper);

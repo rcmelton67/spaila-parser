@@ -1,6 +1,15 @@
 import React from "react";
 import AppHeader from "../../shared/components/AppHeader.jsx";
+import AttachmentPreviewCard from "../../shared/components/AttachmentPreviewCard.jsx";
 import { loadShopConfig } from "../../shared/utils/fieldConfig.js";
+import {
+  extractEmlUid,
+  filterProcessedInboxItems as filterProcessedInboxItemsBase,
+  getInboxItemId,
+  getProcessedEmailRefVariants,
+  mergeInboxItems as mergeInboxItemsBase,
+  normalizeProcessedEmailRef,
+} from "./inboxMerge.mjs";
 
 const panelStyle = {
   background: "#fff",
@@ -26,10 +35,6 @@ function formatTimestamp(value) {
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function getInboxItemId(item) {
-  return String(item?.id || item?.email_id || "").trim();
 }
 
 function sortByTimestamp(a, b) {
@@ -91,41 +96,6 @@ function getMessageId(item) {
   return String(item?.id || item?.message_id || item?.email_id || "").trim();
 }
 
-function normalizeProcessedEmailRef(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\\/g, "/")
-    .toLowerCase();
-}
-
-/** Extract the bare IMAP UID from a {timestamp}_{uid}.eml filename or path. */
-function extractEmlUid(filePath) {
-  const name = String(filePath || "").replace(/\\/g, "/").split("/").pop();
-  const m = name.match(/^\d+_([A-Za-z0-9]+)\.eml$/i);
-  return m ? m[1].toLowerCase() : "";
-}
-
-function getProcessedEmailRefVariants(value) {
-  const ref = normalizeProcessedEmailRef(value);
-  if (!ref) return [];
-  const parts = ref.split("/").filter(Boolean);
-  const filename = parts[parts.length - 1] || "";
-  return filename && filename !== ref ? [ref, filename] : [ref];
-}
-
-function getInboxItemRefs(item) {
-  return [
-    item?.id,
-    item?.email_id,
-    item?.message_id,
-    item?.imap_uid,
-    item?.path,
-    item?.relativePath,
-    item?.source_eml_path,
-    item?.name,
-  ].flatMap(getProcessedEmailRefVariants).filter(Boolean);
-}
-
 function loadProcessedInboxMemory() {
   try {
     const parsed = JSON.parse(window.localStorage?.getItem("spaila.processedInboxRefs") || "[]");
@@ -171,41 +141,10 @@ function buildProcessedEmailRefs(orders = []) {
   return refs;
 }
 
-function isProcessedInboxItem(item, processedRefs) {
-  return getInboxItemRefs(item).some((ref) => processedRefs.has(ref));
-}
-
-function hasStableReceivedAt(item) {
-  const receivedAt = String(item?.received_at || "").trim();
-  return receivedAt && Number.isFinite(Date.parse(receivedAt));
-}
-
 function filterProcessedInboxItems(items = [], processedRefs = new Set()) {
-  const nextProcessedRefs = new Set(processedRefs);
-  const filtered = [];
-  let removed = 0;
-  let missingReceivedAt = 0;
-  for (const item of items || []) {
-    if (!hasStableReceivedAt(item)) {
-      missingReceivedAt += 1;
-      continue;
-    }
-    if (isProcessedInboxItem(item, nextProcessedRefs)) {
-      removed += 1;
-      for (const ref of getInboxItemRefs(item)) {
-        nextProcessedRefs.add(ref);
-      }
-      continue;
-    }
-    filtered.push(item);
-  }
-  if (removed || missingReceivedAt) {
-    console.log("[INBOX_PROCESSED_FILTER]", { removed, missing_received_at: missingReceivedAt });
-  }
-  if (nextProcessedRefs.size !== processedRefs.size) {
-    saveProcessedInboxMemory(nextProcessedRefs);
-  }
-  return filtered;
+  return filterProcessedInboxItemsBase(items, processedRefs, {
+    onProcessedRefsExpanded: saveProcessedInboxMemory,
+  });
 }
 
 async function fetchOrdersForLinking() {
@@ -228,36 +167,9 @@ async function persistOrderMessage(orderId, message) {
 }
 
 function mergeInboxItems(previousItems = [], fetchedItems = [], processedRefs = new Set()) {
-  const previousVisibleItems = filterProcessedInboxItems(previousItems, processedRefs);
-  const filteredFetchedItems = filterProcessedInboxItems(fetchedItems, processedRefs);
-  const existingIds = new Set(previousVisibleItems.map(getInboxItemId).filter(Boolean));
-  const fetchedById = new Map();
-  for (const item of filteredFetchedItems) {
-    const id = getInboxItemId(item);
-    if (id && !fetchedById.has(id)) {
-      fetchedById.set(id, item);
-    }
-  }
-  const seenNewIds = new Set();
-  const newItems = filteredFetchedItems.filter((item) => {
-    const id = getInboxItemId(item);
-    if (!id || existingIds.has(id) || seenNewIds.has(id)) {
-      return false;
-    }
-    seenNewIds.add(id);
-    return true;
+  return mergeInboxItemsBase(previousItems, fetchedItems, processedRefs, {
+    onProcessedRefsExpanded: saveProcessedInboxMemory,
   });
-  const updatedExisting = previousVisibleItems.map((item) => {
-    const id = getInboxItemId(item);
-    const fresh = id ? fetchedById.get(id) : null;
-    return fresh ? { ...item, ...fresh } : item;
-  });
-  console.log("[INBOX_MERGE]", {
-    new_count: newItems.length,
-    existing_count: previousVisibleItems.length,
-  });
-  console.log("[INBOX_NO_REORDER]", { verified: true });
-  return [...newItems, ...updatedExisting];
 }
 
 function renderTextWithLinks(text) {
@@ -1061,6 +973,9 @@ function findSourceDeletedInboxItemForActivityEvent(event, sourceDeletedItems, o
 }
 
 function getInboxItemHandledState(item, orders) {
+  if (item?.manual_imported === true) {
+    return { handled: false, reason: "manual_import" };
+  }
   if (isHiddenInWorkspace(item)) {
     return { handled: true, reason: "hidden" };
   }
@@ -1660,41 +1575,13 @@ function AttachmentList({ attachments, onOpen, compact = false }) {
       </div>
       <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
         {attachments.map((attachment, index) => (
-          <button
+          <AttachmentPreviewCard
             key={`${attachment.name || "attachment"}-${attachment.path || attachment.url || (attachment.attachmentIndex ?? index)}`}
-            type="button"
-            onClick={() => onOpen?.(attachment)}
-            title={attachment.path || attachment.url || attachment.name}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              border: "1px solid #e5e7eb",
-              background: "#fff",
-              color: "#334155",
-              borderRadius: 999,
-              padding: compact ? "4px 10px" : "4px 10px",
-              fontSize: compact ? 11 : 12,
-              fontWeight: 600,
-              cursor: "pointer",
-              maxWidth: compact ? 240 : 320,
-            }}
-          >
-            {attachmentPreviewSrc(attachment) ? (
-              <img
-                src={attachmentPreviewSrc(attachment)}
-                alt=""
-                style={{ width: compact ? 22 : 28, height: compact ? 22 : 28, objectFit: "cover", borderRadius: 6, border: "1px solid #e5e7eb" }}
-              />
-            ) : (
-              <span style={{ color: "#64748b", fontSize: 12, lineHeight: 1 }}>
-                {getAttachmentIcon(attachment)}
-              </span>
-            )}
-            <span style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere" }}>
-              {attachment.name}
-            </span>
-          </button>
+            attachment={attachment}
+            compact={compact}
+            maxWidth={compact ? 260 : 340}
+            onOpen={onOpen}
+          />
         ))}
       </div>
     </div>
@@ -1758,48 +1645,15 @@ function InlineReplyBox({
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {attachments.map((file, index) => (
-              <span
+              <AttachmentPreviewCard
                 key={`${file.name || "attachment"}-${file.size || 0}-${file.lastModified || index}`}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 7,
-                  border: "1px solid #e2e8f0",
-                  background: "#f8fafc",
-                  color: "#334155",
-                  borderRadius: 999,
-                  padding: "4px 8px 4px 10px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  maxWidth: 260,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onOpenAttachment?.(file)}
-                  title={file.path || file.name || "Open attachment"}
-                  style={{ border: "none", background: "transparent", color: "#334155", cursor: "pointer", padding: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "inherit", fontWeight: 700 }}
-                >
-                  {file.name || "Attachment"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onRemoveAttachment?.(index)}
-                  aria-label={`Remove ${file.name || "attachment"}`}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: "#64748b",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 900,
-                    lineHeight: 1,
-                    padding: 0,
-                  }}
-                >
-                  ×
-                </button>
-              </span>
+                attachment={file}
+                compact
+                removable
+                maxWidth={290}
+                onOpen={onOpenAttachment}
+                onRemove={() => onRemoveAttachment?.(index)}
+              />
             ))}
           </div>
         </div>
@@ -2076,6 +1930,16 @@ export default function WorkspacePage({
       );
       const processedRefs = buildProcessedEmailRefs(orders);
       const nextInboxItems = filterProcessedInboxItems(nextState?.inboxItems || [], processedRefs);
+      const visibilityDiagnostics = nextState?.inboxVisibilityDiagnostics || {};
+      if (
+        Number(visibilityDiagnostics.inboxEmlCount || 0) === 0
+        && Number(visibilityDiagnostics.unmatchedEmlCount || 0) > 0
+      ) {
+        console.warn("[INBOX_VISIBILITY_INVARIANT]", {
+          reason: "visible_inbox_empty_with_unmatched_files",
+          ...visibilityDiagnostics,
+        });
+      }
       if (Array.isArray(orders)) {
         setOrdersForLinking(orders);
       }
@@ -2170,10 +2034,18 @@ export default function WorkspacePage({
         emailId,
         email_id: emailId,
         imap_uid: item?.imap_uid,
+        filePath: item?.path,
+        path: item?.path,
       });
       return { ok: !!result?.ok, error: result?.error, workspaceOnly: true };
     }
-    const result = await window.parserApp?.hideInboxItem?.({ emailId });
+    const result = await window.parserApp?.hideInboxItem?.({
+      emailId,
+      email_id: emailId,
+      imap_uid: item?.imap_uid,
+      filePath: item?.path,
+      path: item?.path,
+    });
     return { ok: !!result?.ok, error: result?.error, workspaceOnly: false };
   }, [ordersForLinking]);
 
@@ -2303,7 +2175,7 @@ export default function WorkspacePage({
         console.log("[INBOX_FILTER]", { email_id: emailId || "(unknown)", reason: "pending_removal" });
         continue;
       }
-      if (item?.source_deleted === true) {
+      if (item?.source_deleted === true && item?.manual_imported !== true) {
         console.log("[INBOX_SUPPRESS_PROVIDER_DELETE]", {
           email_id: emailId || "(unknown)",
           imap_uid: imapUid,

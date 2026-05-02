@@ -156,7 +156,7 @@ def extract_dates(segments: List[Segment]) -> List[Candidate]:
     return candidates
 
 
-def extract_header_date(email_date: str) -> List[Candidate]:
+def extract_header_date(email_date: str, provenance: Optional[dict] = None) -> List[Candidate]:
     if not email_date:
         return []
 
@@ -174,6 +174,7 @@ def extract_header_date(email_date: str) -> List[Candidate]:
     cand.segment_text = f"Date: {email_date}"
     cand.left_context = "Date: "
     cand.right_context = ""
+    cand.provenance_extra = dict(provenance or {})
     return [cand]
 
 

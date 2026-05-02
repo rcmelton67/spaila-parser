@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from .orders import router as orders_router
 from .db import init_db
+from .api.routes.account import router as account_router
 from server.inbox.inbox_routes import router as inbox_router
 from server.inbox.mail_service import mail_service
 from workspace_paths import ensure_workspace_layout
@@ -31,6 +32,7 @@ app.add_middleware(
 
 app.include_router(orders_router)
 app.include_router(inbox_router)
+app.include_router(account_router)
 
 
 @app.on_event("startup")

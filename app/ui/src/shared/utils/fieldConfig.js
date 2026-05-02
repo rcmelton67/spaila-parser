@@ -533,6 +533,7 @@ export const DEFAULT_SAVE_FOLDER = "C:\\Spaila\\Backup";
 
 export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
+  businessTimezone: "",
   shopLogoPath:  "",
   shopLogoName:  "",
   /** @type {number | null} Days after last activity before auto-archiving; null = off */
@@ -552,12 +553,16 @@ export const DEFAULT_SHOP_CONFIG = {
   imapUsername: "",
   imapPassword: "",
   imapUseSsl: true,
+  imapMailbox: "INBOX",
   imapFetchLimit: "20",
   mailPollingIntervalSeconds: 300,
   mailBackgroundSyncEnabled: true,
   mailStartupAutoConnect: true,
   mailReconnectEnabled: true,
   sentMailRetentionDays: 30,
+  trashRetentionDays: 30,
+  defaultInboxRemovalAction: "trash",
+  appendSentToProvider: true,
 };
 
 function persistOrderArchiveSettings(config) {
@@ -593,12 +598,16 @@ function persistEmailSettings(config) {
       imapUsername: String(config?.imapUsername || "").trim(),
       imapPassword: String(config?.imapPassword || ""),
       imapUseSsl: config?.imapUseSsl !== false,
+      imapMailbox: String(config?.imapMailbox || "INBOX").trim() || "INBOX",
       imapFetchLimit: String(config?.imapFetchLimit || "").trim() || "20",
       mailPollingIntervalSeconds: Math.max(60, Math.min(3600, Number.parseInt(String(config?.mailPollingIntervalSeconds || 300), 10) || 300)),
       mailBackgroundSyncEnabled: config?.mailBackgroundSyncEnabled !== false,
       mailStartupAutoConnect: config?.mailStartupAutoConnect !== false,
       mailReconnectEnabled: config?.mailReconnectEnabled !== false,
       sentMailRetentionDays: Math.max(1, Math.min(365, Number.parseInt(String(config?.sentMailRetentionDays || 30), 10) || 30)),
+      trashRetentionDays: Math.max(1, Math.min(365, Number.parseInt(String(config?.trashRetentionDays || 30), 10) || 30)),
+      defaultInboxRemovalAction: ["hide", "trash", "delete"].includes(config?.defaultInboxRemovalAction) ? config.defaultInboxRemovalAction : "trash",
+      appendSentToProvider: config?.appendSentToProvider !== false,
     };
     window.parserApp.saveJson({
       folderPath: "C:\\Spaila",
@@ -617,6 +626,7 @@ export function loadShopConfig() {
     const saved = JSON.parse(raw);
     const merged = { ...DEFAULT_SHOP_CONFIG, ...saved, saveFolder: DEFAULT_SAVE_FOLDER };
     merged.shopLogoPath = String(merged.shopLogoPath ?? "").trim();
+    merged.businessTimezone = String(merged.businessTimezone ?? "").trim();
     merged.shopLogoName = String(merged.shopLogoName ?? "").trim();
     merged.orderArchiveRoot = String(merged.orderArchiveRoot ?? "").trim();
     const aad = merged.autoArchiveDays;

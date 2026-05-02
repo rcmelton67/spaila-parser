@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
+import AttachmentPreviewCard from "../../shared/components/AttachmentPreviewCard.jsx";
 import { loadFieldConfig, buildLabelMap, loadShopConfig, loadStatusConfig, loadOrderStatuses, setOrderStatus, contrastColor } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
@@ -1165,39 +1166,13 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                           {messageAttachments.length ? (
                             <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                               {messageAttachments.map((attachment, attachmentIndex) => (
-                                <button
+                                <AttachmentPreviewCard
                                   key={`${attachment.name || "attachment"}-${attachment.path || attachmentIndex}`}
-                                  type="button"
-                                  onClick={() => handleOpenConversationAttachment(attachment)}
-                                  title={attachment.path || attachment.name}
-                                  style={{
-                                    border: "1px solid #cbd5e1",
-                                    background: "#fff",
-                                    color: "#334155",
-                                    borderRadius: 999,
-                                    padding: "4px 8px",
-                                    cursor: "pointer",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: 6,
-                                    maxWidth: 280,
-                                    fontSize: 12,
-                                    fontWeight: 700,
-                                  }}
-                                >
-                                  {attachmentPreviewSrc(attachment) ? (
-                                    <img
-                                      src={attachmentPreviewSrc(attachment)}
-                                      alt=""
-                                      style={{ width: 24, height: 24, borderRadius: 6, objectFit: "cover", border: "1px solid #e5e7eb" }}
-                                    />
-                                  ) : (
-                                    <span style={{ color: "#64748b", fontSize: 11 }}>FILE</span>
-                                  )}
-                                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {attachment.name || "Attachment"}
-                                  </span>
-                                </button>
+                                  attachment={attachment}
+                                  compact
+                                  maxWidth={300}
+                                  onOpen={handleOpenConversationAttachment}
+                                />
                               ))}
                             </div>
                           ) : null}
@@ -1302,39 +1277,15 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                   {previewCompose.attachments?.length ? (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {previewCompose.attachments.map((file, index) => (
-                        <span
+                        <AttachmentPreviewCard
                           key={`${file.name || "attachment"}-${file.path || index}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 7,
-                            border: "1px solid #e2e8f0",
-                            background: "#f8fafc",
-                            color: "#334155",
-                            borderRadius: 999,
-                            padding: "4px 8px 4px 10px",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            maxWidth: 320,
-                          }}
-                          title={file.path || file.name || "Attachment"}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleOpenConversationAttachment(file)}
-                            style={{ border: "none", background: "transparent", color: "#334155", cursor: "pointer", padding: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "inherit", fontWeight: 700 }}
-                          >
-                            {file.name || fileNameFromPath(file.path)}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemovePreviewAttachment(index)}
-                            aria-label={`Remove ${file.name || "attachment"}`}
-                            style={{ border: "none", background: "transparent", color: "#64748b", cursor: "pointer", fontSize: 13, fontWeight: 900, lineHeight: 1, padding: 0 }}
-                          >
-                            x
-                          </button>
-                        </span>
+                          attachment={file}
+                          compact
+                          removable
+                          maxWidth={330}
+                          onOpen={handleOpenConversationAttachment}
+                          onRemove={() => handleRemovePreviewAttachment(index)}
+                        />
                       ))}
                     </div>
                   ) : (
@@ -1408,38 +1359,15 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                 {replyAttachments.length ? (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                     {replyAttachments.map((file, index) => (
-                      <span
+                      <AttachmentPreviewCard
                         key={`${file.name || "attachment"}-${file.path || index}`}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 7,
-                          border: "1px solid #e2e8f0",
-                          background: "#f8fafc",
-                          color: "#334155",
-                          borderRadius: 999,
-                          padding: "4px 8px 4px 10px",
-                          fontSize: 12,
-                          fontWeight: 700,
-                          maxWidth: 300,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleOpenConversationAttachment(file)}
-                          style={{ border: "none", background: "transparent", color: "#334155", cursor: "pointer", padding: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "inherit", fontWeight: 700 }}
-                        >
-                          {file.name || "Attachment"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveReplyAttachment(index)}
-                          aria-label={`Remove ${file.name || "attachment"}`}
-                          style={{ border: "none", background: "transparent", color: "#64748b", cursor: "pointer", fontSize: 13, fontWeight: 900, lineHeight: 1, padding: 0 }}
-                        >
-                          x
-                        </button>
-                      </span>
+                        attachment={file}
+                        compact
+                        removable
+                        maxWidth={320}
+                        onOpen={handleOpenConversationAttachment}
+                        onRemove={() => handleRemoveReplyAttachment(index)}
+                      />
                     ))}
                   </div>
                 ) : null}

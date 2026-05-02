@@ -6,6 +6,7 @@ import {
   buildLabelMap,
   loadParserFieldOrder,
   loadDocumentsConfig,
+  loadShopConfig,
   normalizeFieldValue,
 } from "../../shared/utils/fieldConfig.js";
 
@@ -29,6 +30,13 @@ const _ORDER_FIELD_KEYS = Object.keys(_ORDER_FIELD_META).map((key) => ({
   ...(_ORDER_FIELD_META[key]),
 }));
 const REQUIRED_ORDER_FIELD_KEYS = new Set(["order_number", "buyer_name", "ship_by"]);
+function getBusinessTimezone() {
+  try {
+    return String(loadShopConfig()?.businessTimezone || "").trim();
+  } catch {
+    return "";
+  }
+}
 const MONTH_NAME_TO_NUMBER = {
   jan: 1,
   january: 1,
@@ -2096,6 +2104,7 @@ export default function App({
       const result = await window.parserApp.saveAssignment({
         filePath: parserPath,
         orderNumber: currentOrderNumber,
+        businessTimezone: getBusinessTimezone(),
         decision: {
           field,
           value: exactValue,
@@ -2206,6 +2215,7 @@ export default function App({
         await window.parserApp.saveAssignment({
           filePath: parserPath,
           orderNumber: currentOrderNumber,
+          businessTimezone: getBusinessTimezone(),
           decision: {
             field,
             value: exactValue,
@@ -2317,7 +2327,7 @@ export default function App({
     async function openSelectedFile() {
       resetParserUiRef.current?.({ loading: true });
       try {
-        const result = await window.parserApp?.parseFile?.({ filePath: selectedFilePath });
+        const result = await window.parserApp?.parseFile?.({ filePath: selectedFilePath, businessTimezone: getBusinessTimezone() });
         if (!cancelled && latestSelectedFileLoadRef.current === loadId) {
           setSuppressedFields([]);
           setActiveItemIndex(0);
@@ -2379,6 +2389,7 @@ export default function App({
         const payload = {
           filePath: parserPath,
           orderNumber: currentOrderNumber,
+          businessTimezone: getBusinessTimezone(),
           decision: {
             ...decision,
             value: normalizedDecisionValue,
@@ -2518,50 +2529,6 @@ export default function App({
     [_displayEmail.length, _emailTrimOffset, attentionHighlights, highlights]
   );
   const isOpeningSelectedEmail = Boolean(selectedFilePath) && !state.filePath && !state.error;
-  const trustReport = state.trustReport || null;
-  const trustSummary = trustReport?.summary || {};
-  const trustFields = trustReport?.fields || {};
-  const trustFieldCount = Object.keys(trustFields).length;
-  const trustSafetyFailedCount = Number(trustSummary.safety_failed_field_count || 0);
-  const trustReportArtifactPath = String(trustReport?.artifact_path || "").trim();
-  const trustReportJson = trustReport ? JSON.stringify(trustReport, null, 2) : "";
-
-  const copyTrustReport = React.useCallback(async () => {
-    if (!trustReportJson) return;
-    try {
-      await navigator.clipboard.writeText(trustReportJson);
-      setCreateToast("Trust report copied");
-    } catch (error) {
-      console.error("COPY_TRUST_REPORT_FAILED", error);
-      setCreateToast("Could not copy trust report");
-    }
-  }, [trustReportJson]);
-
-  const openTrustReportArtifact = React.useCallback(async () => {
-    if (!trustReportArtifactPath) return;
-    try {
-      const result = await window.parserApp?.openFile?.({ filePath: trustReportArtifactPath });
-      if (!result?.ok) {
-        setCreateToast(result?.error || "Could not open trust report");
-      }
-    } catch (error) {
-      console.error("OPEN_TRUST_REPORT_FAILED", error);
-      setCreateToast("Could not open trust report");
-    }
-  }, [trustReportArtifactPath]);
-
-  const openTrustReportFolder = React.useCallback(async () => {
-    if (!trustReportArtifactPath) return;
-    try {
-      const result = await window.parserApp?.openFolder?.(trustReportArtifactPath);
-      if (!result?.ok) {
-        setCreateToast(result?.error || "Could not open trust report folder");
-      }
-    } catch (error) {
-      console.error("OPEN_TRUST_REPORT_FOLDER_FAILED", error);
-      setCreateToast("Could not open trust report folder");
-    }
-  }, [trustReportArtifactPath]);
 
   return (
     <div className="app-shell">
@@ -2845,55 +2812,6 @@ export default function App({
                   .map((field) => requiredFieldLabels[field] || field)
                   .join(", ")}
               </div>
-            ) : null}
-
-            {trustReport ? (
-              <details className="trust-report-panel">
-                <summary>
-                  <span>Trust Report</span>
-                  <span className={trustSafetyFailedCount ? "trust-report-badge warning" : "trust-report-badge"}>
-                    {trustSafetyFailedCount ? `${trustSafetyFailedCount} safety flags` : "Ready"}
-                  </span>
-                </summary>
-                <div className="trust-report-grid">
-                  <div>
-                    <span className="trust-report-label">Parse run</span>
-                    <code>{trustReport.parse_run_id || "n/a"}</code>
-                  </div>
-                  <div>
-                    <span className="trust-report-label">Fields</span>
-                    <strong>{trustFieldCount}</strong>
-                  </div>
-                  <div>
-                    <span className="trust-report-label">Assigned</span>
-                    <strong>{trustSummary.assigned_count ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="trust-report-label">Suggested</span>
-                    <strong>{trustSummary.suggested_count ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="trust-report-label">Blocked candidates</span>
-                    <strong>{trustSummary.blocked_candidate_count ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="trust-report-label">Schema</span>
-                    <strong>{trustReport.schema_version ?? "n/a"}</strong>
-                  </div>
-                </div>
-                <div className="trust-report-path" title={trustReportArtifactPath || "No artifact path"}>
-                  {trustReportArtifactPath || "No artifact file was written for this parse."}
-                </div>
-                <div className="trust-report-actions">
-                  <button type="button" onClick={copyTrustReport}>Copy JSON</button>
-                  <button type="button" onClick={openTrustReportArtifact} disabled={!trustReportArtifactPath}>
-                    Open JSON
-                  </button>
-                  <button type="button" onClick={openTrustReportFolder} disabled={!trustReportArtifactPath}>
-                    Open Folder
-                  </button>
-                </div>
-              </details>
             ) : null}
 
             <button

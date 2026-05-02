@@ -300,21 +300,21 @@ def _apply_suppression(payload: Dict[str, Any], suppressed_fields: Optional[List
     return filtered
 
 
-def parse_file(path: str, suppressed_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+def parse_file(path: str, suppressed_fields: Optional[List[str]] = None, business_timezone: str = "") -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"error": "FILE_NOT_FOUND"}
-    result = parse_eml(path)
+    result = parse_eml(path, business_timezone=business_timezone)
     return _apply_suppression(_serialize_result(result), suppressed_fields)
 
 
-def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[str, Any]:
+def apply_learning(action_name: str, path: str, action: Dict[str, Any], business_timezone: str = "") -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"success": False, "reason": "FILE_NOT_FOUND", "error": "FILE_NOT_FOUND"}
 
     # update_confidence=False on BOTH parses here so that accept/reject events
     # never increment streak counters.  Confidence only advances on genuine
     # import parses (parse_file → parse_eml with the default update_confidence=True).
-    result = parse_eml(path, update_confidence=False)
+    result = parse_eml(path, update_confidence=False, business_timezone=business_timezone)
     # Use the family ID for all learning operations so that variants of the
     # same platform's email share their learned knowledge.
     template_id = result.get("template_family_id") or compute_template_family_id(result["clean_text"])
@@ -456,7 +456,7 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any]) -> Dict[
                 "source": "manual",
             }
         }
-    refreshed = parse_eml(path, update_confidence=False, assignment_lock=assignment_lock)
+    refreshed = parse_eml(path, update_confidence=False, assignment_lock=assignment_lock, business_timezone=business_timezone)
     return _apply_suppression(
         _serialize_result(refreshed),
         action.get("suppressed_fields", []),
@@ -506,11 +506,12 @@ def _main_json(argv: List[str]) -> Dict[str, Any]:
         return reset_learning_field(request["field"])
     path = request["path"]
     suppressed_fields = request.get("suppressed_fields", [])
+    business_timezone = str(request.get("businessTimezone") or request.get("business_timezone") or "").strip()
 
     if command == "parse":
-        return parse_file(path, suppressed_fields)
+        return parse_file(path, suppressed_fields, business_timezone)
     if command in {"save_assignment", "save_rejection"}:
-        return apply_learning(command, path, request["decision"])
+        return apply_learning(command, path, request["decision"], business_timezone)
     raise SystemExit(f"Unknown action: {command}")
 
 

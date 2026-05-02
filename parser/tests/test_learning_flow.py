@@ -30,6 +30,7 @@ from parser.pipeline import (
 )
 from parser.models import Candidate
 from parser.extract import extract_numbers
+from parser.ingest import format_header_date_for_business_timezone
 from parser.score import score_price, score_quantity
 from parser.anchors.match import apply_anchor_scoring
 from parser.decide import decide_buyer_name
@@ -50,6 +51,20 @@ def _make_eml(path: Path, body: str, subject: str = "Order update") -> str:
         "To: buyer@example.com\n"
         f"Subject: {subject}\n"
         "Date: Fri, 10 Apr 2026 12:00:00 -0500\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain; charset=utf-8\n\n"
+        f"{body}\n",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def _make_eml_with_header_date(path: Path, body: str, header_date: str, subject: str = "Order update") -> str:
+    path.write_text(
+        "From: seller@example.com\n"
+        "To: buyer@example.com\n"
+        f"Subject: {subject}\n"
+        f"Date: {header_date}\n"
         "MIME-Version: 1.0\n"
         "Content-Type: text/plain; charset=utf-8\n\n"
         f"{body}\n",
@@ -1344,6 +1359,78 @@ def test_order_date_metadata_fallback_and_body_suppression(tmp_path, isolated_le
     assert body_date.provenance["metadata_fallback_used"] is False
     header_candidate = next(c for c in body["candidates"] if c.extractor == "date_header")
     assert not is_safe_order_date_candidate(header_candidate, body["segments"], body["segment_map"], body["candidates"])
+
+
+def test_order_date_header_fallback_uses_business_timezone_for_late_evening_negative_offset(tmp_path, isolated_learning_store):
+    result = parse_eml(
+        _make_eml_with_header_date(
+            tmp_path / "order-date-header-late-evening.eml",
+            "Order #8310\nPrice: $35.00\n",
+            "Fri, 10 Apr 2026 02:15:00 +0000",
+        ),
+        update_confidence=True,
+        business_timezone="America/Chicago",
+    )
+
+    order_date = next(d for d in result["decisions"] if d.field == "order_date")
+    assert order_date.value == "April 9, 2026"
+    assert order_date.provenance["metadata_fallback_used"] is True
+    assert order_date.provenance["raw_header_date"] == "Fri, 10 Apr 2026 02:15:00 +0000"
+    assert order_date.provenance["business_timezone_used"] == "America/Chicago"
+    assert order_date.provenance["final_calendar_date"] == "April 9, 2026"
+    assert "calendar_date_shifted_from_header_timezone" in order_date.provenance["timezone_adjustment_reason"]
+
+    report_tz = result["trust_report"]["fields"]["order_date"]["timezone_provenance"]
+    assert report_tz["raw_header_date"] == "Fri, 10 Apr 2026 02:15:00 +0000"
+    assert report_tz["business_timezone_used"] == "America/Chicago"
+    assert report_tz["final_calendar_date"] == "April 9, 2026"
+
+
+def test_order_date_header_fallback_preserves_positive_offset_business_calendar_day(tmp_path, isolated_learning_store):
+    result = parse_eml(
+        _make_eml_with_header_date(
+            tmp_path / "order-date-header-positive-offset.eml",
+            "Order #8311\nPrice: $35.00\n",
+            "Fri, 10 Apr 2026 06:30:00 +0900",
+        ),
+        update_confidence=True,
+        business_timezone="Asia/Tokyo",
+    )
+
+    order_date = next(d for d in result["decisions"] if d.field == "order_date")
+    assert order_date.value == "April 10, 2026"
+    assert order_date.provenance["business_timezone_used"] == "Asia/Tokyo"
+    assert order_date.provenance["final_calendar_date"] == "April 10, 2026"
+    assert "calendar_date_preserved" in order_date.provenance["timezone_adjustment_reason"]
+
+
+def test_explicit_body_order_date_beats_timezone_adjusted_metadata_fallback(tmp_path, isolated_learning_store):
+    result = parse_eml(
+        _make_eml_with_header_date(
+            tmp_path / "order-date-body-beats-timezone-header.eml",
+            "Order #8312\nOrder date: Apr 17, 2026\nPrice: $35.00\n",
+            "Fri, 10 Apr 2026 02:15:00 +0000",
+        ),
+        update_confidence=True,
+        business_timezone="America/Chicago",
+    )
+
+    order_date = next(d for d in result["decisions"] if d.field == "order_date")
+    assert order_date.value == "Apr 17, 2026"
+    assert order_date.provenance["metadata_fallback_used"] is False
+    header_candidate = next(c for c in result["candidates"] if c.extractor == "date_header")
+    assert not is_safe_order_date_candidate(header_candidate, result["segments"], result["segment_map"], result["candidates"])
+
+
+def test_invalid_business_timezone_falls_back_without_crashing():
+    value, provenance = format_header_date_for_business_timezone(
+        "Fri, 10 Apr 2026 02:15:00 +0000",
+        "Not/A_Timezone",
+    )
+
+    assert value
+    assert provenance["raw_header_date"] == "Fri, 10 Apr 2026 02:15:00 +0000"
+    assert "invalid_configured_timezone_fell_back_to_system_local" in provenance["timezone_adjustment_reason"]
 
 
 @pytest.mark.parametrize(

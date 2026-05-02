@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 import re
 import shutil
 import sys
@@ -36,27 +38,87 @@ initial_inbox_files: set[str] = set()
 
 _WORKSPACE_DIRS = ensure_workspace_layout(print)
 BASE_PATH = _WORKSPACE_DIRS["root"]
-INBOX_PATH_STR = str(_WORKSPACE_DIRS["Inbox"])
+INBOX_PATH_STR = str(_WORKSPACE_DIRS["InboxModule"])
 ORDERS_PATH_STR = str(_WORKSPACE_DIRS["Orders"])
 ARCHIVE_PATH_STR = str(_WORKSPACE_DIRS["Archive"])
 BACKUP_PATH_STR = str(_WORKSPACE_DIRS["Backup"])
+INTERNAL_PATH_STR = str(_WORKSPACE_DIRS["Internal"])
+EMAIL_ARCHIVE_PATH_STR = str(Path(INTERNAL_PATH_STR) / "email_archive")
+INACTIVE_INBOX_PATH_STR = str(Path(INTERNAL_PATH_STR) / "inbox_inactive")
+RETENTION_INDEX_PATH_STR = str(Path(INTERNAL_PATH_STR) / "email_retention_index.json")
+DUPLICATES_PATH_STR = str(_WORKSPACE_DIRS.get("Duplicates") or Path(BASE_PATH) / "Duplicates")
+UNMATCHED_PATH_STR = str(_WORKSPACE_DIRS.get("Unmatched") or Path(BASE_PATH) / "Unmatched")
+RECOVERY_RETENTION_DAYS = 30
+RECOVERY_MAX_FILES = 500
 
 ORDERS_API_URL = "http://localhost:8055/orders"
+DEFAULT_HELPER_SETTINGS = {
+    "duplicateHandling": "quarantine",
+    "unmatchedHandling": "leave",
+    "unmatchedStoragePath": "",
+}
 
 
 def init_folders():
     """Create canonical workspace folders under the shared Spaila root."""
     global INBOX_PATH_STR, ORDERS_PATH_STR, ARCHIVE_PATH_STR, BACKUP_PATH_STR
+    global INTERNAL_PATH_STR, EMAIL_ARCHIVE_PATH_STR, INACTIVE_INBOX_PATH_STR, RETENTION_INDEX_PATH_STR
+    global DUPLICATES_PATH_STR, UNMATCHED_PATH_STR
 
     dirs = ensure_workspace_layout(print)
-    INBOX_PATH_STR = str(dirs["Inbox"])
+    INBOX_PATH_STR = str(dirs["InboxModule"])
     ORDERS_PATH_STR = str(dirs["Orders"])
     ARCHIVE_PATH_STR = str(dirs["Archive"])
     BACKUP_PATH_STR = str(dirs["Backup"])
+    INTERNAL_PATH_STR = str(dirs["Internal"])
+    EMAIL_ARCHIVE_PATH_STR = str(Path(INTERNAL_PATH_STR) / "email_archive")
+    INACTIVE_INBOX_PATH_STR = str(Path(INTERNAL_PATH_STR) / "inbox_inactive")
+    RETENTION_INDEX_PATH_STR = str(Path(INTERNAL_PATH_STR) / "email_retention_index.json")
+    DUPLICATES_PATH_STR = str(dirs.get("Duplicates") or Path(dirs["root"]) / "Duplicates")
+    UNMATCHED_PATH_STR = str(dirs.get("Unmatched") or Path(dirs["root"]) / "Unmatched")
 
     print(f"[INIT] Base path: {dirs['root']}")
     print(f"[INIT] Inbox: {INBOX_PATH_STR}")
     print(f"[INIT] Orders: {ORDERS_PATH_STR}")
+    ensure_folder(DUPLICATES_PATH_STR)
+    ensure_folder(UNMATCHED_PATH_STR)
+    cleanup_recovery_storage(DUPLICATES_PATH_STR, dedupe=True)
+    cleanup_recovery_storage(UNMATCHED_PATH_STR)
+
+
+def _helper_settings_path():
+    configured = os.environ.get("SPALIA_HELPER_SETTINGS_PATH") or os.environ.get("SPAILA_HELPER_SETTINGS_PATH")
+    if configured:
+        return configured
+    return str(Path(BASE_PATH) / "helper_settings.json")
+
+
+def load_helper_settings():
+    settings = dict(DEFAULT_HELPER_SETTINGS)
+    try:
+        with open(_helper_settings_path(), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            settings.update(raw)
+    except Exception:
+        pass
+
+    duplicate_env = os.environ.get("SPALIA_DUPLICATE_HANDLING") or os.environ.get("SPAILA_DUPLICATE_HANDLING")
+    unmatched_env = os.environ.get("SPALIA_UNMATCHED_HANDLING") or os.environ.get("SPAILA_UNMATCHED_HANDLING")
+    if duplicate_env:
+        settings["duplicateHandling"] = duplicate_env
+    if unmatched_env:
+        settings["unmatchedHandling"] = unmatched_env
+
+    if settings.get("duplicateHandling") not in {"quarantine", "ignore", "delete"}:
+        settings["duplicateHandling"] = "quarantine"
+    if settings.get("unmatchedHandling") in {"move", "prompt", "review"}:
+        settings["unmatchedHandling"] = "leave"
+    if settings.get("unmatchedHandling") not in {"leave", "ignore"}:
+        settings["unmatchedHandling"] = "leave"
+    if not isinstance(settings.get("unmatchedStoragePath"), str):
+        settings["unmatchedStoragePath"] = ""
+    return settings
 
 
 def ensure_folder(path):
@@ -71,6 +133,50 @@ def ensure_folder(path):
             print(f"[EXISTS] {path}")
     except Exception:
         pass
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def cleanup_recovery_storage(path, *, max_age_days=RECOVERY_RETENTION_DAYS, max_files=RECOVERY_MAX_FILES, dedupe=False):
+    """Bound internal recovery/debug storage growth without touching visible Inbox."""
+    try:
+        folder = Path(path)
+        if not folder.exists():
+            return
+        now = time.time()
+        files = [item for item in folder.iterdir() if item.is_file()]
+        removed = 0
+        if dedupe:
+            seen_hashes = set()
+            for item in sorted(files, key=lambda candidate: candidate.stat().st_mtime, reverse=True):
+                file_hash = _file_sha256(item)
+                if file_hash in seen_hashes:
+                    item.unlink(missing_ok=True)
+                    removed += 1
+                    continue
+                seen_hashes.add(file_hash)
+        for item in files:
+            if not item.exists():
+                continue
+            age_days = (now - item.stat().st_mtime) / 86400
+            if age_days > max_age_days:
+                item.unlink(missing_ok=True)
+                removed += 1
+        files = [item for item in folder.iterdir() if item.is_file()]
+        files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        for item in files[max_files:]:
+            item.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            print(f"[RECOVERY CLEANUP] removed {removed} stale file(s) from {folder}")
+    except Exception as e:
+        print(f"[RECOVERY CLEANUP] skipped {path}: {e}")
 
 
 def extract_order_number_from_filename(filename):
@@ -247,7 +353,7 @@ def create_order_folder(row):
     year = dt.strftime("%Y")
     month = dt.strftime("%B").lower()
 
-    base = _base_orders_folder_from_settings()
+    base = ORDERS_PATH_STR
     path = os.path.normpath(os.path.join(base, year, month, folder_name))
 
     try:
@@ -289,6 +395,55 @@ def _source_original_path_from_dict(row) -> str | None:
         if v is not None and str(v).strip():
             return str(v).strip()
     return None
+
+
+def _load_retention_records() -> list[dict]:
+    try:
+        with open(RETENTION_INDEX_PATH_STR, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except Exception:
+        return []
+    records = data.get("records") if isinstance(data, dict) else {}
+    if not isinstance(records, dict):
+        return []
+    return [record for record in records.values() if isinstance(record, dict)]
+
+
+def _norm_path_key(value: str | None) -> str:
+    return str(value or "").strip().lower().replace("\\", "/")
+
+
+def _resolve_source_eml_recovery_path(src: str) -> tuple[str, bool, str]:
+    """Return a readable source path plus whether helper should copy instead of move.
+
+    Active inbox/staged sources are moved into the order folder. Hidden archive
+    or inactive inbox sources are recovery copies and must be copied so the
+    lifecycle archive remains intact.
+    """
+    if src and os.path.isfile(src):
+        norm_src = os.path.normcase(os.path.abspath(src))
+        archive_root = os.path.normcase(os.path.abspath(EMAIL_ARCHIVE_PATH_STR))
+        inactive_root = os.path.normcase(os.path.abspath(INACTIVE_INBOX_PATH_STR))
+        if norm_src.startswith(archive_root + os.sep) or norm_src.startswith(inactive_root + os.sep):
+            return src, True, "source_in_lifecycle_storage"
+        return src, False, "source_active"
+
+    wanted = _norm_path_key(src)
+    if not wanted:
+        return "", False, "missing_source"
+    for record in _load_retention_records():
+        candidates = [
+            record.get("original_inbox_path"),
+            record.get("inactive_path"),
+            record.get("archive_path"),
+        ]
+        if wanted not in {_norm_path_key(candidate) for candidate in candidates if candidate}:
+            continue
+        for key in ("archive_path", "inactive_path"):
+            candidate = str(record.get(key) or "").strip()
+            if candidate and os.path.isfile(candidate):
+                return candidate, True, f"retention_{key}"
+    return "", False, "source_missing_no_retention_copy"
 
 
 def _original_filename_for_import(src: str) -> str:
@@ -334,15 +489,18 @@ def _eml_path_from_dict(row) -> str | None:
 def try_move_order_source_eml(row) -> bool:
     """
     If the order has source_eml_path + order_folder_path, mkdir the folder if needed,
-    move that file to folder/original.* and PATCH eml_path + clear source_eml_path.
-    Does not use inbox matching.
+    move that active file to folder/original.* and PATCH eml_path + clear source_eml_path.
+    If lifecycle already archived/deactivated the source, copy from verified recovery
+    storage instead so hidden archive state stays intact.
     """
     src = _source_eml_path_from_dict(row)
     folder = _order_folder_path_from_dict(row)
     oid = _order_id_from_dict(row)
     if not src or not folder or not oid:
         return False
-    if not os.path.isfile(src):
+    resolved_src, copy_only, resolve_reason = _resolve_source_eml_recovery_path(src)
+    if not resolved_src or not os.path.isfile(resolved_src):
+        print(f"[SOURCE_EML] source unavailable order {oid}: {src!r} reason={resolve_reason}")
         return False
     try:
         os.makedirs(folder, exist_ok=True)
@@ -350,9 +508,9 @@ def try_move_order_source_eml(row) -> bool:
         print(f"[SOURCE_EML] mkdir failed {folder!r}: {e}")
         return False
 
-    dest_name = _original_filename_for_import(src)
+    dest_name = _original_filename_for_import(resolved_src)
     dest = os.path.join(folder, dest_name)
-    if os.path.isfile(dest) and not os.path.isfile(src):
+    if os.path.isfile(dest) and not os.path.isfile(resolved_src):
         try:
             requests.patch(
                 f"{ORDERS_API_URL}/{oid}",
@@ -372,8 +530,12 @@ def try_move_order_source_eml(row) -> bool:
             pass
 
     try:
-        shutil.move(src, dest)
-        print(f"[SOURCE_EML] Moved {src} -> {dest} (order {oid})")
+        if copy_only:
+            shutil.copy2(resolved_src, dest)
+            print(f"[SOURCE_EML] Copied recovery source {resolved_src} -> {dest} (order {oid}, reason={resolve_reason})")
+        else:
+            shutil.move(resolved_src, dest)
+            print(f"[SOURCE_EML] Moved {resolved_src} -> {dest} (order {oid})")
     except OSError as e:
         print(f"[SOURCE_EML] Move failed order {oid}: {e}")
         return False
@@ -705,17 +867,54 @@ def move_matching_eml(folder_path, order_number):
             return  # stop after match
 
 
+def _unique_path(folder, filename):
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(folder, filename)
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(folder, f"{base}_{suffix}{ext}")
+        suffix += 1
+    return candidate
+
+
 def move_to_duplicates(filepath):
-    """Discard duplicate-inbox .eml files; duplicates are tracked internally."""
-    if os.path.exists(filepath):
+    """Handle duplicate inbox .eml files according to helper settings. Default is quarantine."""
+    if not os.path.exists(filepath):
+        return
+    policy = load_helper_settings().get("duplicateHandling", "quarantine")
+    if policy == "ignore":
+        print(f"[DUPLICATE] ignored in inbox {os.path.basename(filepath)}")
+        return
+    if policy == "delete":
         os.remove(filepath)
-        print(f"[DUPLICATE] discarded {os.path.basename(filepath)}")
+        print(f"[DUPLICATE] deleted {os.path.basename(filepath)}")
+        return
+    ensure_folder(DUPLICATES_PATH_STR)
+    cleanup_recovery_storage(DUPLICATES_PATH_STR, dedupe=True)
+    dest = _unique_path(DUPLICATES_PATH_STR, os.path.basename(filepath))
+    shutil.move(filepath, dest)
+    print(f"[DUPLICATE] quarantined {os.path.basename(filepath)} -> {dest}")
 
 
 def move_to_unmatched(filepath):
-    """Deprecated: leave unmatched files in Inbox so Spaila reflects Helper state."""
-    if os.path.exists(filepath):
-        print(f"[UNMATCHED] leaving file in Inbox: {os.path.basename(filepath)}")
+    """Keep unmatched inbox files visible by default.
+
+    Unmatched/review is an item state, not a reason to move valid mail out of
+    the user-visible inbox.
+    """
+    if not os.path.exists(filepath):
+        return
+    settings = load_helper_settings()
+    policy = settings.get("unmatchedHandling", "leave")
+    if policy in {"leave", "ignore", "review"}:
+        print(f"[UNMATCHED] leaving file in Inbox for review: {os.path.basename(filepath)}")
+        return
+    target_folder = settings.get("unmatchedStoragePath") or UNMATCHED_PATH_STR
+    ensure_folder(target_folder)
+    cleanup_recovery_storage(target_folder)
+    dest = _unique_path(target_folder, os.path.basename(filepath))
+    shutil.move(filepath, dest)
+    print(f"[UNMATCHED] moved {os.path.basename(filepath)} -> {dest}")
 
 
 def move_unmatched_emails():
@@ -733,6 +932,14 @@ def process_single_file(filepath):
     if not os.path.isfile(filepath):
         return False
     if not filepath.lower().endswith(".eml"):
+        return False
+    try:
+        inbox_root = os.path.normcase(os.path.abspath(INBOX_PATH_STR))
+        current_path = os.path.normcase(os.path.abspath(filepath))
+        if not (current_path == inbox_root or current_path.startswith(inbox_root + os.sep)):
+            print(f"[HELPER_SKIP] outside active inbox: {filepath}")
+            return False
+    except OSError:
         return False
 
     basename = os.path.basename(filepath)
@@ -756,7 +963,7 @@ def process_single_file(filepath):
             filepath,
             linked_order=True,
             original_order=original_order,
-            action="discard_duplicate" if original_order else "keep_inbox",
+            action="handle_duplicate" if original_order else "keep_inbox",
         )
         if not original_order:
             return False
@@ -869,19 +1076,16 @@ def process_pending_loop():
                 pending_since[norm] = time.time()
                 continue
 
-            # --- UNMATCHED DISABLED (manual-only system) ---
-            # Keeping for future use, but not active
-            #
-            # if time.time() - start_time > UNMATCHED_TIMEOUT:
-            #     print(f"[UNMATCHED] Timeout reached: {filepath}")
-            #     try:
-            #         move_to_unmatched(filepath)
-            #     except OSError as e:
-            #         print(f"[UNMATCHED] move failed: {e}")
-            #     pending_files.discard(filepath)
-            #     pending_since.pop(norm, None)
-            #     pending_since.pop(filepath, None)
-            #     last_match_state.pop(norm, None)
+            if time.time() - start_time > UNMATCHED_TIMEOUT:
+                print(f"[UNMATCHED] Timeout reached: {filepath}")
+                try:
+                    move_to_unmatched(filepath)
+                except OSError as e:
+                    print(f"[UNMATCHED] move failed: {e}")
+                pending_files.discard(filepath)
+                pending_since.pop(norm, None)
+                pending_since.pop(filepath, None)
+                last_match_state.pop(norm, None)
 
         time.sleep(2)
 

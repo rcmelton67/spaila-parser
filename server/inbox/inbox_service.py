@@ -20,6 +20,7 @@ from workspace_paths import ensure_workspace_layout
 from .eml_writer import build_eml_path
 from .imap_client import fetch_recent_messages, list_message_uids
 from .attachments import extract_and_store_attachments
+from .email_archive import archive_raw_email, sync_active_inbox_lifecycle, update_retention_record
 
 
 _WORKSPACE_DIRS = ensure_workspace_layout()
@@ -493,6 +494,7 @@ def _score_order_match(
     reasons: list[str] = []
     order_token = _normalize_order_token(order.get("order_number") or "")
     candidate_tokens = {_normalize_order_token(value) for value in order_candidates if _normalize_order_token(value)}
+    has_explicit_different_order_candidate = bool(candidate_tokens and order_token and order_token not in candidate_tokens)
     if order_token and order_token in candidate_tokens:
         score += 100
         reasons.append("order_number")
@@ -515,12 +517,15 @@ def _score_order_match(
             best_subject_ratio = 1.0
             break
         best_subject_ratio = max(best_subject_ratio, SequenceMatcher(None, incoming_subject, normalized_known).ratio())
-    if best_subject_ratio >= 0.98:
-        score += 55
-        reasons.append("subject_continuity")
+    if not has_explicit_different_order_candidate:
+        if best_subject_ratio >= 0.98:
+            score += 55
+            reasons.append("subject_continuity")
+        elif best_subject_ratio >= 0.82:
+            score += 40
+            reasons.append("subject_similarity")
     elif best_subject_ratio >= 0.82:
-        score += 40
-        reasons.append("subject_similarity")
+        reasons.append("subject_similarity_blocked_by_different_order_number")
 
     incoming_tokens = _name_tokens(sender_name)
     buyer_tokens = _name_tokens(order.get("buyer_name") or "")
@@ -534,7 +539,7 @@ def _score_order_match(
         or _parse_iso_datetime(order.get("created_at") or "")
         or _parse_iso_datetime(order.get("order_date") or "")
     )
-    if incoming_dt and candidate_dt:
+    if incoming_dt and candidate_dt and not has_explicit_different_order_candidate:
         age_days = abs((incoming_dt - candidate_dt).total_seconds()) / 86400
         if age_days <= 30:
             score += 15
@@ -542,6 +547,8 @@ def _score_order_match(
         elif age_days <= 90:
             score += 8
             reasons.append("recent_order")
+    elif incoming_dt and candidate_dt and has_explicit_different_order_candidate:
+        reasons.append("recent_order_blocked_by_different_order_number")
 
     return {
         "order": order,
@@ -643,6 +650,25 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
     header_refs.update(_split_header_refs(str(parsed.get("References") or "")))
     timestamp = _parse_message_timestamp(parsed)
     source_eml_path = _saved_eml_path_for_email_id(email_id)
+    archive_record = None
+    try:
+        archive_record = archive_raw_email(
+            raw_mime,
+            email_id=email_id,
+            uid=email_id,
+            message_id=message_id,
+            original_inbox_path=source_eml_path,
+            status="active",
+            received_at=timestamp,
+        )
+        if archive_record.get("verified") and archive_record.get("archive_path"):
+            source_eml_path = str(archive_record.get("archive_path") or source_eml_path)
+    except Exception as error:
+        print("[EMAIL_ARCHIVE_WRITE_FAIL]", {
+            "email_id": email_id,
+            "message_id": message_id,
+            "error": str(error),
+        })
     attachments = extract_and_store_attachments(
         parsed,
         raw_mime=raw_mime,
@@ -658,6 +684,7 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
         "order_candidates": candidates,
     })
     if not normalized_body and not attachments and not candidates:
+        update_retention_record(email_id=email_id, message_id=message_id, status="unresolved")
         return {
             "matched": False,
             "appended": False,
@@ -674,6 +701,7 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
 
     db_path = Path("spaila.db")
     if not db_path.is_file():
+        update_retention_record(email_id=email_id, message_id=message_id, status="unresolved")
         return {
             "matched": False,
             "appended": False,
@@ -710,6 +738,7 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
                 "candidates": candidates,
                 "confidence": match_confidence,
             })
+            update_retention_record(email_id=email_id, message_id=message_id, status="unresolved")
             conn.close()
             return {
                 "matched": False,
@@ -718,8 +747,8 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
                 "order_number": "",
                 "message_id": "",
                 "reason": match_reason,
-                "confidence": match_confidence,
-            }
+                    "confidence": match_confidence,
+                }
         cur.execute("SELECT messages, buyer_name FROM orders WHERE id = ?", (order_id,))
         row = cur.fetchone()
         if not row:
@@ -753,6 +782,12 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
                     "order_number": order_number,
                     "reason": "same_subject_timestamp_hash",
                 })
+                update_retention_record(
+                    email_id=email_id,
+                    message_id=message_id,
+                    linked_order_id=order_id,
+                    status="processed_archived",
+                )
                 conn.close()
                 return {
                     "matched": True,
@@ -777,6 +812,12 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
                     "order_number": order_number,
                     "reason": dedupe_reason,
                 })
+                update_retention_record(
+                    email_id=email_id,
+                    message_id=message_id,
+                    linked_order_id=order_id,
+                    status="processed_archived",
+                )
                 conn.close()
                 return {
                     "matched": True,
@@ -814,6 +855,13 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
             "subject_timestamp_hash": incoming_hash,
         }
         messages.append(next_message)
+        update_retention_record(
+            email_id=email_id,
+            message_id=message_id,
+            linked_order_id=order_id,
+            linked_conversation_id=stable_id,
+            status="processed_archived",
+        )
         cur.execute("UPDATE orders SET messages = ? WHERE id = ?", (json.dumps(messages), order_id))
         # Create inbox event for this reply so it surfaces in the activity feed
         event_id = str(uuid.uuid4())
@@ -1002,6 +1050,18 @@ def fetch_and_store_emails(
 
     _save_dedup_store(dedup_store)
     reconcile_result = _reconcile_source_deleted(server_uids)
+    try:
+        source_state = _load_source_state()
+        lifecycle_result = sync_active_inbox_lifecycle(
+            _INBOX_DIR,
+            hidden_ids=hidden_email_ids,
+            processed_refs=processed_refs,
+            source_deleted_uids={uid for uid, deleted in source_state.items() if deleted},
+        )
+        if lifecycle_result.get("moved"):
+            print("[INBOX_LIFECYCLE_SYNC]", lifecycle_result)
+    except Exception as error:
+        print("[INBOX_LIFECYCLE_SYNC_FAIL]", {"error": str(error)})
     if not resync:
         _save_fetch_state(last_seen_uid=max_seen_uid)
     print("[INBOX FETCH] success count=", saved)

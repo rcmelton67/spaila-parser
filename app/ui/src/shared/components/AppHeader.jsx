@@ -40,6 +40,7 @@ export default function AppHeader({
   const saveFeedbackTimerRef = React.useRef(null);
   const hasDoc = !!documentsConfig.thankYouPath;
   const canShowCompletedTab = showCompletedTab ?? (headerViewConfig.showCompleted !== false);
+  const canShowInventoryTab = headerViewConfig.showInventoryTab === true;
   const titleText = hasDoc
     ? "Open thank you letter (ready to print)"
     : "No thank you letter configured - go to Settings -> Documents";
@@ -158,7 +159,7 @@ export default function AppHeader({
         >{saveFeedback ? "✓" : "💾"}</button>
 
         <button
-          onClick={onSettings}
+          onClick={() => onSettings?.("account")}
           title="Settings"
           style={settingsButtonStyle}
           onMouseEnter={(e) => {
@@ -178,6 +179,10 @@ export default function AppHeader({
         {documentsConfig.showThankYouHeaderBtn !== false && (
           <button
             onClick={hasDoc ? async () => {
+              window.parserApp?.syncThankYouTemplate?.({
+                filePath: documentsConfig.thankYouPath,
+                name: documentsConfig.thankYouName || "Thank-you letter",
+              }).catch(() => {});
               const result = await window.parserApp?.openFile?.({ filePath: documentsConfig.thankYouPath });
               if (result && !result.ok) alert(`Could not open file: ${result.error}`);
             } : undefined}
@@ -233,6 +238,11 @@ export default function AppHeader({
                 fontSize: 11, fontWeight: 700, lineHeight: "16px",
               }}>{tabCounts.completed}</span>
             )}
+          </button>
+        )}
+        {canShowInventoryTab && (
+          <button style={navButtonStyle("inventory")} onClick={() => onSelectTab?.("inventory")}>
+            Inventory Needed
           </button>
         )}
       </div>

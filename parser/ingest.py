@@ -4,10 +4,70 @@ from email.header import decode_header
 from email.utils import parsedate_to_datetime
 import json
 import sys
+from datetime import datetime
 from typing import Dict, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-def load_eml(path: str) -> Dict[str, Optional[str]]:
+def _system_local_timezone():
+    return datetime.now().astimezone().tzinfo
+
+
+def _resolve_business_timezone(business_timezone: Optional[str]):
+    requested = (business_timezone or "").strip()
+    if requested:
+        try:
+            return ZoneInfo(requested), requested, "configured_business_timezone"
+        except (ZoneInfoNotFoundError, ValueError):
+            local_tz = _system_local_timezone()
+            return local_tz, str(local_tz), "invalid_configured_timezone_fell_back_to_system_local"
+    local_tz = _system_local_timezone()
+    return local_tz, str(local_tz), "system_local_timezone"
+
+
+def format_header_date_for_business_timezone(raw_date: str, business_timezone: Optional[str] = None) -> tuple[str, Dict[str, str]]:
+    provenance: Dict[str, str] = {
+        "raw_header_date": raw_date or "",
+        "parsed_header_datetime": "",
+        "source_timezone": "",
+        "business_timezone_used": "",
+        "final_calendar_date": "",
+        "timezone_adjustment_reason": "",
+    }
+    if not raw_date:
+        return "", provenance
+
+    parsed_date = parsedate_to_datetime(raw_date)
+    if parsed_date.tzinfo is None:
+        parsed_date = parsed_date.replace(tzinfo=_system_local_timezone())
+        source_timezone = str(parsed_date.tzinfo)
+        naive_reason = "naive_header_assumed_system_local"
+    else:
+        source_timezone = str(parsed_date.tzinfo)
+        naive_reason = ""
+
+    target_tz, target_tz_name, reason = _resolve_business_timezone(business_timezone)
+    business_datetime = parsed_date.astimezone(target_tz)
+    email_date = f"{business_datetime.strftime('%B')} {business_datetime.day}, {business_datetime.year}"
+    adjustment_reason = reason
+    if naive_reason:
+        adjustment_reason = f"{adjustment_reason};{naive_reason}"
+    if business_datetime.date() != parsed_date.date():
+        adjustment_reason = f"{adjustment_reason};calendar_date_shifted_from_header_timezone"
+    else:
+        adjustment_reason = f"{adjustment_reason};calendar_date_preserved"
+
+    provenance.update({
+        "parsed_header_datetime": parsed_date.isoformat(),
+        "source_timezone": source_timezone,
+        "business_timezone_used": target_tz_name,
+        "final_calendar_date": email_date,
+        "timezone_adjustment_reason": adjustment_reason,
+    })
+    return email_date, provenance
+
+
+def load_eml(path: str, business_timezone: Optional[str] = None) -> Dict[str, Optional[str]]:
     with open(path, "rb") as raw_file:
         raw_bytes = raw_file.read()
 
@@ -25,12 +85,20 @@ def load_eml(path: str) -> Dict[str, Optional[str]]:
 
     raw_date = msg.get("Date", "")
     email_date = ""
+    header_date_provenance: Dict[str, str] = {}
     if raw_date:
         try:
-            parsed_date = parsedate_to_datetime(raw_date)
-            email_date = f"{parsed_date.strftime('%B')} {parsed_date.day}, {parsed_date.year}"
+            email_date, header_date_provenance = format_header_date_for_business_timezone(raw_date, business_timezone)
         except (TypeError, ValueError, IndexError):
             email_date = ""
+            header_date_provenance = {
+                "raw_header_date": raw_date,
+                "parsed_header_datetime": "",
+                "source_timezone": "",
+                "business_timezone_used": "",
+                "final_calendar_date": "",
+                "timezone_adjustment_reason": "header_date_parse_failed",
+            }
 
     plain: Optional[str] = None
     html: Optional[str] = None
@@ -82,6 +150,8 @@ def load_eml(path: str) -> Dict[str, Optional[str]]:
     return {
         "subject": subject,
         "email_date": email_date,
+        "raw_header_date": raw_date,
+        "header_date_provenance": header_date_provenance,
         "plain": plain,
         "html": html,
         "_diag": diag,

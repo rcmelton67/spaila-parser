@@ -1936,6 +1936,21 @@ def _build_field_trust_report(
     decision_source = decision.decision_source if decision else ""
     is_replay = "replay" in decision_source
     structural_trust_updated = bool(decision and "maturity_promotion" in decision_source)
+    timezone_provenance = {}
+    if parser_field == "order_date" and decision:
+        timezone_keys = (
+            "raw_header_date",
+            "parsed_header_datetime",
+            "source_timezone",
+            "business_timezone_used",
+            "final_calendar_date",
+            "timezone_adjustment_reason",
+        )
+        timezone_provenance = {
+            key: decision.provenance.get(key, "")
+            for key in timezone_keys
+            if decision.provenance.get(key, "") != ""
+        }
     return {
         "field": report_field,
         "parser_field": parser_field,
@@ -1982,6 +1997,7 @@ def _build_field_trust_report(
             "structural_trust_updated": structural_trust_updated,
             "store_scope": "template_family",
         },
+        "timezone_provenance": timezone_provenance,
     }
 
 
@@ -2823,6 +2839,18 @@ def _promote_order_date_structural_maturity(
             "line_relation": _order_date_line_relation(candidate, segments),
             "metadata_fallback_class": _order_date_metadata_fallback_class(candidate, candidates, segments, segment_map),
             "source_priority_used": _order_date_source_priority(candidate, segments),
+            **{
+                key: (getattr(candidate, "provenance_extra", {}) or {}).get(key, "")
+                for key in (
+                    "raw_header_date",
+                    "parsed_header_datetime",
+                    "source_timezone",
+                    "business_timezone_used",
+                    "final_calendar_date",
+                    "timezone_adjustment_reason",
+                )
+                if (getattr(candidate, "provenance_extra", {}) or {}).get(key, "")
+            },
         },
         "positive",
     )
@@ -6843,8 +6871,9 @@ def parse_eml(
     path: str,
     update_confidence: bool = True,
     assignment_lock: Dict[str, Dict[str, Any]] | None = None,
+    business_timezone: str | None = None,
 ) -> Dict[str, Any]:
-    ingested = load_eml(path)
+    ingested = load_eml(path, business_timezone=business_timezone)
     clean_text = sanitize(ingested)
     learning_source = _detect_learning_source(ingested, clean_text)
 
@@ -7017,7 +7046,7 @@ def parse_eml(
     # Metadata support is intentionally limited to the Date header. Received headers are excluded for now.
     date_candidates = extract_order_date_from_subject(ingested.get("subject", ""))
     date_candidates += validate_candidates(extract_dates(segments), clean_text)
-    date_candidates += extract_header_date(ingested.get("email_date", ""))
+    date_candidates += extract_header_date(ingested.get("email_date", ""), ingested.get("header_date_provenance", {}))
     date_candidates = score_order_date(date_candidates, segments)
     date_candidates = _apply_order_date_safety(date_candidates, segments, segment_map)
     date_candidates, assignment_locked["order_date"] = _apply_assignment_policy(

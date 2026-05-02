@@ -1478,8 +1478,8 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
     "source": "",
-    "last_value": "April 30, 2026",
-    "streak_count": 8
+    "last_value": "May 1, 2026",
+    "streak_count": 15
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body": {
     "field": "buyer_email",
@@ -1566,7 +1566,23 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body",
     "source": "",
-    "last_value": "thegaffkes@gmail.com",
+    "last_value": "aletapia.designer@gmail.com",
+    "streak_count": 2
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:shipping_address_block_street_forward|shipping|shipping_address_block|street-city_state_zip-country|selected:street-city_state_zip|excluded:country|shipping_address_label|company_excluded|country_excluded|early_body": {
+    "field": "shipping_address",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "shipping_address_block_street_forward|shipping|shipping_address_block|street-city_state_zip-country|selected:street-city_state_zip|excluded:country|shipping_address_label|company_excluded|country_excluded|early_body",
+    "source": "",
+    "last_value": "36 Elderwood Lane\nMELVILLE , NY 11747\nUnited States",
     "streak_count": 1
+  },
+  "2b115480abb30abd0616551ff19bd3d13e0ad32ff9330ae3d183b8b9d7570378:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none": {
+    "field": "order_date",
+    "template_id": "2b115480abb30abd0616551ff19bd3d13e0ad32ff9330ae3d183b8b9d7570378",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
+    "source": "",
+    "last_value": "March 31, 2026",
+    "streak_count": 2
   }
 }

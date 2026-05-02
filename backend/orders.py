@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from datetime import datetime, date, timezone
 import json
 import uuid
@@ -6,6 +7,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+import mimetypes
 from .db import get_conn
 from workspace_paths import ensure_workspace_layout
 
@@ -208,6 +210,97 @@ def _normalize_message_attachments(value: object) -> list:
             continue
         out.append(normalized)
     return out
+
+
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+def _safe_web_attachment_name(value: object) -> str:
+    raw = str(value or "").strip().replace("\\", "/").split("/")[-1]
+    raw = re.sub(r"[\x00-\x1f<>:\"/\\|?*]+", "_", raw).strip(" ._")
+    return raw or "attachment"
+
+
+def _resolve_web_attachment_path(attachment: object) -> Path | None:
+    if not isinstance(attachment, dict):
+        return None
+    raw = str(attachment.get("path") or attachment.get("original_path") or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute() or not candidate.is_file():
+        return None
+    try:
+        resolved = candidate.resolve()
+        workspace_root = Path(BASE_PATH).resolve()
+        resolved.relative_to(workspace_root)
+        return resolved
+    except Exception:
+        return None
+
+
+def _web_attachment_kind(name: str, mime_type: str) -> str:
+    suffix = Path(name).suffix.lower()
+    mime = str(mime_type or "").lower()
+    if mime.startswith("image/") or suffix in _IMAGE_EXTENSIONS:
+        return "image"
+    if mime == "application/pdf" or suffix == ".pdf":
+        return "pdf"
+    return "file"
+
+
+def _attachment_metadata(order_id: str, message_index: int, attachment_index: int, attachment: object) -> dict:
+    item = attachment if isinstance(attachment, dict) else {"name": str(attachment or "Attachment")}
+    name = _safe_web_attachment_name(item.get("name") or item.get("filename") or item.get("file") or item.get("path"))
+    path = _resolve_web_attachment_path(item)
+    mime_type = str(item.get("mime_type") or item.get("type") or mimetypes.guess_type(name)[0] or "application/octet-stream")
+    size = 0
+    if path:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+    kind = _web_attachment_kind(name, mime_type)
+    base_url = f"/orders/{order_id}/attachments/{message_index}/{attachment_index}"
+    return {
+        "id": f"{message_index}:{attachment_index}",
+        "name": name,
+        "mime_type": mime_type,
+        "size": size,
+        "kind": kind,
+        "downloadable": bool(path),
+        "previewable": bool(path and kind == "image"),
+        "download_url": f"{base_url}/download" if path else "",
+        "preview_url": f"{base_url}/preview" if path and kind == "image" else "",
+    }
+
+
+def _load_order_messages(order_id: str) -> list[dict]:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT messages FROM orders WHERE id = ? AND status NOT IN ('deleted')", (order_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    return _parse_order_messages(row[0])
+
+
+def _get_order_attachment(order_id: str, message_index: int, attachment_index: int) -> tuple[dict, Path]:
+    messages = _load_order_messages(order_id)
+    try:
+        message = messages[int(message_index)]
+        attachment = _normalize_message_attachments(message.get("attachments"))[int(attachment_index)]
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Attachment not found.") from exc
+    if not isinstance(attachment, dict):
+        attachment = {"name": str(attachment or "Attachment")}
+    path = _resolve_web_attachment_path(attachment)
+    if not path:
+        raise HTTPException(status_code=404, detail="Attachment is not available for web download.")
+    return attachment, path
 
 
 def _normalize_messages_for_archive(messages: list) -> list:
@@ -450,6 +543,201 @@ def _write_manifest(
         return False
 
 
+def _archive_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _extract_archive_text_from_messages(messages: list) -> tuple[str, str]:
+    conversation_parts: list[str] = []
+    notes_parts: list[str] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        for key in ("subject", "sender", "sender_name", "sender_email", "from", "to", "body", "preview_text", "preview"):
+            text = _archive_text(msg.get(key)).strip()
+            if text:
+                conversation_parts.append(text)
+        for key in ("notes", "note", "order_notes", "gift_message"):
+            text = _archive_text(msg.get(key)).strip()
+            if text:
+                notes_parts.append(text)
+    return "\n".join(conversation_parts), "\n".join(notes_parts)
+
+
+def _extract_archive_text_from_items(cur, order_id: str) -> tuple[str, str]:
+    product_parts: list[str] = []
+    notes_parts: list[str] = []
+    try:
+        cur.execute(
+            """
+            SELECT quantity, price, custom_1, custom_2, custom_3, custom_4, custom_5, custom_6,
+                   order_notes, gift_message, item_status
+            FROM items
+            WHERE order_id = ?
+            ORDER BY item_index ASC
+            """,
+            (order_id,),
+        )
+        for row in cur.fetchall():
+            quantity, price, *rest = row
+            custom_values = rest[:6]
+            order_notes, gift_message, item_status = rest[6:]
+            product_parts.extend(_archive_text(v).strip() for v in (quantity, price, *custom_values, item_status) if _archive_text(v).strip())
+            notes_parts.extend(_archive_text(v).strip() for v in (order_notes, gift_message) if _archive_text(v).strip())
+    except Exception as exc:
+        print(f"[ARCHIVE_INDEX_ITEMS_WARN] order_id={order_id} error={exc}")
+    return "\n".join(product_parts), "\n".join(notes_parts)
+
+
+def _build_archive_index_row(
+    *,
+    manifest: dict,
+    folder_path: Path,
+    conversation: dict | None = None,
+    product_text: str = "",
+    notes_text: str = "",
+) -> dict:
+    conversation = conversation if isinstance(conversation, dict) else {}
+    messages = conversation.get("messages")
+    if not isinstance(messages, list):
+        messages = []
+    conversation_text, conversation_notes = _extract_archive_text_from_messages(messages)
+    merged_notes = "\n".join(part for part in (notes_text, conversation_notes) if part)
+    archived_at = str(manifest.get("archived_at") or conversation.get("archived_at") or _now_iso_utc())
+    original_order_id = str(manifest.get("order_id") or conversation.get("order_id") or "").strip()
+    archive_id = str(manifest.get("archive_id") or original_order_id or str(uuid.uuid4())).strip()
+    row = {
+        "archive_id": archive_id,
+        "original_order_id": original_order_id,
+        "order_number": str(manifest.get("order_number") or conversation.get("order_number") or "").strip(),
+        "buyer_name": str(manifest.get("buyer_name") or "").strip(),
+        "buyer_email": str(manifest.get("buyer_email") or "").strip(),
+        "shipping_address": str(manifest.get("shipping_address") or "").strip(),
+        "pet_name": str(manifest.get("pet_name") or "").strip(),
+        "order_date": str(manifest.get("order_date") or "").strip(),
+        "archived_at": archived_at,
+        "archive_status": "archived",
+        "folder_name": str(manifest.get("folder_name") or folder_path.name).strip(),
+        "folder_path": str(folder_path.resolve()),
+        "manifest_path": str((folder_path / "manifest.json").resolve()),
+        "conversation_path": str((folder_path / "conversation.json").resolve()),
+        "product_text": product_text,
+        "notes_text": merged_notes,
+        "conversation_text": conversation_text,
+        "updated_at": _now_iso_utc(),
+    }
+    row["search_blob"] = " ".join(
+        _archive_text(row.get(key)) for key in (
+            "order_number", "buyer_name", "buyer_email", "shipping_address", "pet_name",
+            "order_date", "archived_at", "folder_name", "folder_path", "product_text",
+            "notes_text", "conversation_text",
+        )
+    ).lower()
+    return row
+
+
+def _upsert_archive_index(cur, row: dict) -> None:
+    cur.execute(
+        """
+        INSERT INTO archive_orders (
+            archive_id, original_order_id, order_number, buyer_name, buyer_email,
+            shipping_address, pet_name, order_date, archived_at, archive_status,
+            folder_name, folder_path, manifest_path, conversation_path,
+            product_text, notes_text, conversation_text, search_blob, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(archive_id) DO UPDATE SET
+            original_order_id=excluded.original_order_id,
+            order_number=excluded.order_number,
+            buyer_name=excluded.buyer_name,
+            buyer_email=excluded.buyer_email,
+            shipping_address=excluded.shipping_address,
+            pet_name=excluded.pet_name,
+            order_date=excluded.order_date,
+            archived_at=excluded.archived_at,
+            archive_status=excluded.archive_status,
+            folder_name=excluded.folder_name,
+            folder_path=excluded.folder_path,
+            manifest_path=excluded.manifest_path,
+            conversation_path=excluded.conversation_path,
+            product_text=excluded.product_text,
+            notes_text=excluded.notes_text,
+            conversation_text=excluded.conversation_text,
+            search_blob=excluded.search_blob,
+            updated_at=excluded.updated_at
+        """,
+        (
+            row.get("archive_id"), row.get("original_order_id"), row.get("order_number"),
+            row.get("buyer_name"), row.get("buyer_email"), row.get("shipping_address"),
+            row.get("pet_name"), row.get("order_date"), row.get("archived_at"),
+            row.get("archive_status"), row.get("folder_name"), row.get("folder_path"),
+            row.get("manifest_path"), row.get("conversation_path"), row.get("product_text"),
+            row.get("notes_text"), row.get("conversation_text"), row.get("search_blob"),
+            row.get("updated_at"),
+        ),
+    )
+    cur.execute("DELETE FROM archive_orders_fts WHERE archive_id = ?", (row.get("archive_id"),))
+    cur.execute(
+        """
+        INSERT INTO archive_orders_fts (
+            archive_id, order_number, buyer_name, buyer_email, shipping_address,
+            pet_name, order_date, product_text, notes_text, conversation_text, search_blob
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row.get("archive_id"), row.get("order_number"), row.get("buyer_name"),
+            row.get("buyer_email"), row.get("shipping_address"), row.get("pet_name"),
+            row.get("order_date"), row.get("product_text"), row.get("notes_text"),
+            row.get("conversation_text"), row.get("search_blob"),
+        ),
+    )
+
+
+def _index_archive_folder(cur, folder: Path, *, product_text: str = "", notes_text: str = "") -> bool:
+    manifest_path = folder / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    conversation = {}
+    conv_path = folder / "conversation.json"
+    if conv_path.is_file():
+        try:
+            parsed = json.loads(conv_path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                conversation = parsed
+        except (OSError, json.JSONDecodeError):
+            conversation = {}
+    row = _build_archive_index_row(
+        manifest=manifest,
+        folder_path=folder,
+        conversation=conversation,
+        product_text=product_text,
+        notes_text=notes_text,
+    )
+    _upsert_archive_index(cur, row)
+    return True
+
+
+def _delete_archive_index_for_folder(cur, folder_path: Path) -> None:
+    resolved = str(folder_path.resolve())
+    cur.execute("SELECT archive_id FROM archive_orders WHERE folder_path = ?", (resolved,))
+    rows = cur.fetchall()
+    for row in rows:
+        cur.execute("DELETE FROM archive_orders_fts WHERE archive_id = ?", (row[0],))
+    cur.execute("DELETE FROM archive_orders WHERE folder_path = ?", (resolved,))
+
+
 def _offload_order_to_filesystem(
     order_id: str,
     folder_path: str | None,
@@ -518,6 +806,8 @@ def _offload_order_to_filesystem(
                 )
                 return False
             messages_list = parsed
+
+        product_text, item_notes_text = _extract_archive_text_from_items(cur, order_id)
 
         # ── Step 3: persist email refs for inbox filter ──────────────────
         refs: list[str] = []
@@ -641,6 +931,17 @@ def _offload_order_to_filesystem(
                 )
                 return False
             dest_path = moved
+
+        if dest_path:
+            archive_folder = Path(dest_path).expanduser().resolve()
+            try:
+                if _index_archive_folder(cur, archive_folder, product_text=product_text, notes_text=item_notes_text):
+                    print(f"[ARCHIVE_INDEX_UPSERT] order_id={order_id} path={archive_folder}")
+                else:
+                    print(f"[ARCHIVE_INDEX_SKIP] order_id={order_id} reason=missing_manifest path={archive_folder}")
+            except Exception as exc:
+                print(f"[ARCHIVE_INDEX_FAIL] order_id={order_id} error={exc}")
+                return False
 
         # ── Step 8: hard-delete — always runs after move or idempotency skip
         cur.execute("DELETE FROM items WHERE order_id = ?", (order_id,))
@@ -827,6 +1128,18 @@ async def create_order(payload: dict):
     conn.commit()
     conn.close()
 
+    if source_eml_path:
+        try:
+            from server.inbox.email_archive import archive_existing_eml
+
+            archive_existing_eml(
+                source_eml_path,
+                linked_order_id=order_id,
+                status="processed_archived",
+            )
+        except Exception as exc:
+            print(f"[EMAIL_ARCHIVE_ORDER_CREATE_FAIL] order_id={order_id} source={source_eml_path!r} error={exc}")
+
     print(f"SAVED TO DB: {order_id} {order_number} -> {order_folder_path}")
 
     return {
@@ -955,11 +1268,64 @@ def get_orders():
 
 
 @router.get("/orders/list")
-def list_orders():
+def list_orders(status: str = "", search: str = "", sort: str = "newest"):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("""
+    filters = ["orders.status NOT IN ('deleted', 'archiving')"]
+    values: list[object] = []
+    status_filter = str(status or "").strip().lower()
+    completed_predicate = """
+        (
+            LOWER(COALESCE(items.item_status, '')) IN ('completed', 'complete', 'done')
+            OR (
+                (items.item_status IS NULL OR TRIM(items.item_status) = '')
+                AND LOWER(COALESCE(orders.status, '')) IN ('completed', 'complete', 'done')
+            )
+        )
+    """
+    if status_filter == "active":
+        filters.append(f"NOT {completed_predicate}")
+        filters.append("LOWER(COALESCE(orders.status, 'active')) NOT IN ('archived')")
+    elif status_filter in ("completed", "complete", "done"):
+        filters.append(completed_predicate)
+    elif status_filter == "archived":
+        filters.append("LOWER(orders.status) = 'archived'")
+
+    search_value = str(search or "").strip().lower()
+    if search_value:
+        like = f"%{search_value}%"
+        filters.append(
+            """
+            (
+                LOWER(COALESCE(orders.order_number, '')) LIKE ?
+                OR LOWER(COALESCE(orders.buyer_name, '')) LIKE ?
+                OR LOWER(COALESCE(orders.buyer_email, '')) LIKE ?
+                OR LOWER(COALESCE(orders.shipping_address, '')) LIKE ?
+                OR LOWER(COALESCE(orders.pet_name, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_1, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_2, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_3, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_4, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_5, '')) LIKE ?
+                OR LOWER(COALESCE(items.custom_6, '')) LIKE ?
+            )
+            """
+        )
+        values.extend([like] * 11)
+
+    sort_value = str(sort or "newest").strip().lower()
+    order_by = {
+        "newest": "orders.created_at DESC, items.item_index ASC",
+        "oldest": "orders.created_at ASC, items.item_index ASC",
+        "ship_by": "orders.ship_by ASC, orders.created_at DESC, items.item_index ASC",
+        "order_date": "orders.order_date DESC, orders.created_at DESC, items.item_index ASC",
+        "buyer": "orders.buyer_name COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
+        "status": "orders.status COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
+    }.get(sort_value, "orders.created_at DESC, items.item_index ASC")
+
+    where_clause = " AND ".join(filters)
+    cur.execute(f"""
         SELECT
             items.id,
             orders.id,
@@ -992,9 +1358,9 @@ def list_orders():
             orders.pet_name
         FROM items
         JOIN orders ON items.order_id = orders.id
-        WHERE orders.status NOT IN ('deleted', 'archiving')
-        ORDER BY orders.created_at DESC, items.item_index ASC
-    """)
+        WHERE {where_clause}
+        ORDER BY {order_by}
+    """, values)
 
     rows = cur.fetchall()
     conn.close()
@@ -1052,16 +1418,48 @@ def get_order(order_id: str):
             ship_by,
             status,
             order_folder_path,
-            messages
+            messages,
+            source_eml_path,
+            eml_path,
+            platform,
+            is_gift,
+            gift_wrap,
+            last_activity_at,
+            updated_at,
+            pet_name
         FROM orders
         WHERE id = ? AND status NOT IN ('deleted')
         """,
         (order_id,),
     )
     row = cur.fetchone()
-    conn.close()
     if not row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Order not found.")
+    cur.execute(
+        """
+        SELECT
+            id,
+            item_index,
+            quantity,
+            price,
+            custom_1,
+            custom_2,
+            custom_3,
+            custom_4,
+            custom_5,
+            custom_6,
+            order_notes,
+            gift_message,
+            item_status
+        FROM items
+        WHERE order_id = ?
+        ORDER BY item_index ASC
+        """,
+        (order_id,),
+    )
+    item_rows = cur.fetchall()
+    conn.close()
     return {
         "order_id": row[0],
         "id": row[0],
@@ -1074,7 +1472,65 @@ def get_order(order_id: str):
         "status": row[7],
         "order_folder_path": row[8],
         "messages": _parse_order_messages(row[9]),
+        "source_eml_path": row[10],
+        "eml_path": row[11],
+        "platform": row[12] or "unknown",
+        "is_gift": bool(row[13]),
+        "gift_wrap": bool(row[14]),
+        "last_activity_at": row[15],
+        "updated_at": row[16],
+        "pet_name": row[17],
+        "items": [
+            {
+                "id": item[0],
+                "item_index": item[1],
+                "quantity": item[2],
+                "price": item[3],
+                "custom_1": item[4],
+                "custom_2": item[5],
+                "custom_3": item[6],
+                "custom_4": item[7],
+                "custom_5": item[8],
+                "custom_6": item[9],
+                "order_notes": item[10],
+                "gift_message": item[11],
+                "item_status": item[12],
+            }
+            for item in item_rows
+        ],
     }
+
+
+@router.get("/orders/{order_id}/attachments")
+def list_order_attachments(order_id: str):
+    messages = _load_order_messages(order_id)
+    attachments: list[dict] = []
+    for message_index, message in enumerate(messages):
+        for attachment_index, attachment in enumerate(_normalize_message_attachments(message.get("attachments"))):
+            attachments.append(_attachment_metadata(order_id, message_index, attachment_index, attachment))
+    return {"order_id": order_id, "attachments": attachments}
+
+
+@router.get("/orders/{order_id}/attachments/{message_index}/{attachment_index}/download")
+def download_order_attachment(order_id: str, message_index: int, attachment_index: int):
+    attachment, path = _get_order_attachment(order_id, message_index, attachment_index)
+    name = _safe_web_attachment_name(
+        attachment.get("name") or attachment.get("filename") or attachment.get("file") or path.name
+    )
+    media_type = str(attachment.get("mime_type") or attachment.get("type") or mimetypes.guess_type(name)[0] or "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=name)
+
+
+@router.get("/orders/{order_id}/attachments/{message_index}/{attachment_index}/preview")
+def preview_order_attachment(order_id: str, message_index: int, attachment_index: int):
+    attachment, path = _get_order_attachment(order_id, message_index, attachment_index)
+    name = _safe_web_attachment_name(
+        attachment.get("name") or attachment.get("filename") or attachment.get("file") or path.name
+    )
+    media_type = str(attachment.get("mime_type") or attachment.get("type") or mimetypes.guess_type(name)[0] or "application/octet-stream")
+    if _web_attachment_kind(name, media_type) != "image":
+        raise HTTPException(status_code=404, detail="Attachment preview is not available.")
+    return FileResponse(path, media_type=media_type)
 
 
 @router.post("/orders/update-full")
@@ -1435,46 +1891,108 @@ def get_processed_refs():
 
 
 @router.get("/orders/archive/search")
-def search_archive(q: str = ""):
+def search_archive(q: str = "", status: str = "archived", include_paths: bool = True):
     """
-    Full-text search over archived orders by scanning manifest.json files
-    under the archive root.  Returns a list of matching order summaries,
-    newest-first.
+    Indexed archive search.  Falls back to an empty list when no index rows exist;
+    use /orders/archive/reindex to backfill older archive folders.
     """
     query = (q or "").strip().lower()
-    if not query:
-        return []
-    archive_root = _resolve_archive_root({})
+    status_value = str(status or "archived").strip().lower()
+    conn = get_conn()
+    cur = conn.cursor()
+    params: list[str] = []
+    if query:
+        fts_query = " ".join(part.replace('"', '""') + "*" for part in query.split() if part.strip())
+        params.append(fts_query)
+        where = "ao.archive_id IN (SELECT archive_id FROM archive_orders_fts WHERE archive_orders_fts MATCH ?)"
+    else:
+        where = "1 = 1"
+    if status_value not in ("all", ""):
+        where += " AND COALESCE(ao.archive_status, 'archived') = ?"
+        params.append(status_value)
+    cur.execute(
+        f"""
+        SELECT ao.archive_id, ao.original_order_id, ao.order_number, ao.buyer_name, ao.buyer_email,
+               ao.shipping_address, ao.pet_name, ao.order_date, ao.archived_at, ao.archive_status,
+               ao.folder_name, ao.folder_path, ao.manifest_path, ao.conversation_path,
+               ao.product_text, ao.notes_text, ao.conversation_text
+        FROM archive_orders ao
+        WHERE {where}
+        ORDER BY ao.archived_at DESC
+        LIMIT 200
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
     results: list[dict] = []
-    try:
-        folders = list(archive_root.rglob("*"))
-    except OSError:
-        return []
-    for folder in folders:
-        if not folder.is_dir():
-            continue
-        manifest_path = folder / "manifest.json"
-        if not manifest_path.is_file():
-            continue
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(manifest, dict):
-            continue
-        blob = str(manifest.get("search_blob") or "").lower()
-        if query not in blob:
-            continue
+    for row in rows:
+        searchable_fields = {
+            "order_number": row[2],
+            "buyer_name": row[3],
+            "buyer_email": row[4],
+            "shipping_address": row[5],
+            "pet_name": row[6],
+            "order_date": row[7],
+            "product": row[14],
+            "notes": row[15],
+            "conversation": row[16],
+        }
+        match_fields = [
+            key for key, value in searchable_fields.items()
+            if query and query in str(value or "").lower()
+        ]
+        snippet_source = next((str(searchable_fields[key] or "") for key in match_fields if str(searchable_fields[key] or "").strip()), "")
         results.append({
-            "order_id":     manifest.get("order_id"),
-            "order_number": manifest.get("order_number"),
-            "buyer_name":   manifest.get("buyer_name"),
-            "buyer_email":  manifest.get("buyer_email"),
-            "archived_at":  manifest.get("archived_at"),
-            "folder_path":  str(folder.resolve()),
+            "source": "archived",
+            "archive_id": row[0],
+            "order_id": row[1],
+            "original_order_id": row[1],
+            "order_number": row[2],
+            "buyer_name": row[3],
+            "buyer_email": row[4],
+            "shipping_address": row[5],
+            "pet_name": row[6],
+            "order_date": row[7],
+            "archived_at": row[8],
+            "status": row[9],
+            "folder_name": row[10],
+            **({
+                "folder_path": row[11],
+                "manifest_path": row[12],
+                "conversation_path": row[13],
+            } if include_paths else {}),
+            "product_text": row[14],
+            "notes_text": row[15],
+            "conversation_text": row[16],
+            "match_fields": match_fields,
+            "snippet": snippet_source[:240],
         })
-    results.sort(key=lambda x: str(x.get("archived_at") or ""), reverse=True)
     return results
+
+
+@router.post("/orders/archive/reindex")
+def reindex_archive():
+    archive_root = _resolve_archive_root({})
+    conn = get_conn()
+    cur = conn.cursor()
+    scanned = 0
+    indexed = 0
+    try:
+        cur.execute("DELETE FROM archive_orders")
+        cur.execute("DELETE FROM archive_orders_fts")
+        for manifest_path in archive_root.rglob("manifest.json"):
+            scanned += 1
+            folder = manifest_path.parent
+            if _index_archive_folder(cur, folder):
+                indexed += 1
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Archive reindex failed: {exc}")
+    finally:
+        conn.close()
+    return {"success": True, "scanned": scanned, "indexed": indexed}
 
 
 @router.post("/orders/{order_id}/offload-to-filesystem")
@@ -1677,6 +2195,7 @@ async def restore_order_from_archive(request: Request):
         refs = _collect_processed_refs_for_restore(conv_messages, source_eml_path, eml_path)
         if refs:
             _persist_processed_refs(refs)
+        _delete_archive_index_for_folder(cur, source_folder)
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -1780,6 +2299,14 @@ def patch_order(order_id: str, payload: dict):
         "eml_path",
         "source_original_path",
         "status",
+        "buyer_name",
+        "buyer_email",
+        "shipping_address",
+        "ship_by",
+        "order_date",
+        "pet_name",
+        "is_gift",
+        "gift_wrap",
     }
 
     fields = {k: v for k, v in payload.items() if k in PATCHABLE}
