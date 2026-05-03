@@ -1,5 +1,4 @@
 import React from "react";
-import OrderStatusBadge from "./OrderStatusBadge.jsx";
 import { DATE_FIELD_KEYS, formatDate } from "../../shared/dateConfig.js";
 
 const WEB_WIDTH_PROFILE_KEY = "spaila_web_column_width_profile";
@@ -79,8 +78,70 @@ function OrderInfoCell({ row }) {
   );
 }
 
-function fieldValue(row, key, dateConfig, priceRule = null) {
-  if (key === "status") return <OrderStatusBadge status={row.status} itemStatus={row.item_status} />;
+function StatusPicker({ row, statusConfig, onStatusChange, saving = false }) {
+  const states = Array.isArray(statusConfig?.states) ? statusConfig.states : [];
+  const rawKey = String(row.item_status || "").trim();
+  const currentState = states.find((state) => String(state.key) === rawKey)
+    || states.find((state) => String(state.key).toLowerCase() === rawKey.toLowerCase());
+  const currentKey = currentState ? String(currentState.key) : "";
+  const pillBg = currentState?.color || null;
+  const pillTc = pillBg ? contrastColor(pillBg) : "#6b7280";
+  const pillBorder = pillBg
+    ? (pillTc === "#ffffff" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.12)")
+    : "#d1d5db";
+
+  return (
+    <select
+      value={currentKey}
+      disabled={saving}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onChange={(event) => {
+        event.stopPropagation();
+        onStatusChange?.(row, event.target.value || null);
+      }}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "3px 10px",
+        border: `1px solid ${pillBorder}`,
+        borderRadius: "999px",
+        fontSize: "max(10px, calc(var(--orders-sheet-font-size, 12px) - 1px))",
+        fontWeight: 600,
+        background: pillBg || "transparent",
+        color: pillBg ? pillTc : "#9ca3af",
+        cursor: saving ? "default" : "pointer",
+        outline: "none",
+        appearance: "none",
+        whiteSpace: "nowrap",
+        transition: "all 0.15s ease",
+        maxWidth: "100%",
+        opacity: saving ? 0.65 : 1,
+      }}
+    >
+      <option value="">Status</option>
+      {states.map((state) => (
+        <option key={state.key} value={state.key}>{state.label}</option>
+      ))}
+    </select>
+  );
+}
+
+function fieldValue(row, column, dateConfig, priceRule = null, statusConfig = null, onStatusChange = null, savingStatusIds = null) {
+  const key = column.key;
+  if (key === "status") {
+    return (
+      <StatusPicker
+        row={row}
+        statusConfig={statusConfig}
+        onStatusChange={onStatusChange}
+        saving={savingStatusIds?.has?.(String(row.id))}
+      />
+    );
+  }
   if (key === "order_info") return <OrderInfoCell row={row} />;
   if (DATE_FIELD_KEYS.has(key)) return formatDate(row[key], dateConfig);
   let value = row[key];
@@ -91,7 +152,18 @@ function fieldValue(row, key, dateConfig, priceRule = null) {
 }
 
 function cellStyle(row, column, priceRule) {
-  if (column.key === "status" || column.key === "order_info") return undefined;
+  if (column.key === "status") {
+    return {
+      padding: "4px 6px",
+      border: "1px solid #e8e8e8",
+      background: "transparent",
+      overflow: "hidden",
+      boxSizing: "border-box",
+      verticalAlign: "middle",
+      textAlign: "left",
+    };
+  }
+  if (column.key === "order_info") return undefined;
   const highlight = column.highlight || {};
   const rawValue = row[column.key];
   const highlightBg = highlight.enabled && highlight.color && rawValue ? highlight.color : null;
@@ -196,7 +268,22 @@ function buildAdaptiveColumns(fields, localProfile, sheetScale = 1) {
   });
 }
 
-export default function OrdersTable({ orders = [], loading = false, onSelectOrder, layout, sheetSize = 12, dateConfig, pricingRules = [] }) {
+export default function OrdersTable({
+  orders = [],
+  loading = false,
+  onSelectOrder,
+  onStatusChange,
+  savingStatusIds = null,
+  layout,
+  statusConfig = null,
+  sheetSize = 12,
+  dateConfig,
+  pricingRules = [],
+  searchActive = false,
+  searchableColumnKeys = [],
+  excludedSearchColumns = new Set(),
+  onExcludeSearchColumn,
+}) {
   const [localProfile, setLocalProfile] = React.useState(readLocalWidthProfile);
   const tableRef = React.useRef(null);
   const normalizedSheetSize = Math.min(20, Math.max(9, Number(sheetSize) || 12));
@@ -280,7 +367,7 @@ export default function OrdersTable({ orders = [], loading = false, onSelectOrde
   }
 
   return (
-    <div className="orders-table-wrap" style={tableStyleVars}>
+    <div className={`orders-table-wrap${searchActive ? " search-active" : ""}`} style={tableStyleVars}>
       <table ref={tableRef} className="orders-table" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
         <colgroup>
           {columns.map((column) => (
@@ -301,6 +388,31 @@ export default function OrdersTable({ orders = [], loading = false, onSelectOrde
               </th>
             ))}
           </tr>
+          {searchActive ? (
+            <tr className="orders-search-column-row">
+              {columns.map((column) => {
+                const searchable = searchableColumnKeys.includes(column.key);
+                const excluded = excludedSearchColumns.has(column.key);
+                return (
+                  <th key={`search-filter-${column.key}`}>
+                    {searchable && !excluded ? (
+                      <button
+                        type="button"
+                        title={`Remove ${column.label} from search results`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onExcludeSearchColumn?.(column.key);
+                        }}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </th>
+                );
+              })}
+            </tr>
+          ) : null}
         </thead>
         <tbody>
           {orders.map((row) => {
@@ -308,8 +420,15 @@ export default function OrdersTable({ orders = [], loading = false, onSelectOrde
             return (
               <tr key={`${row.order_id}-${row.id}`} onClick={() => onSelectOrder?.(row.order_id)}>
                 {columns.map((column) => (
-                  <td key={column.key} style={cellStyle(row, column, priceRule)}>
-                    {fieldValue(row, column.key, dateConfig, priceRule)}
+                  <td
+                    key={column.key}
+                    style={cellStyle(row, column, priceRule)}
+                    onClick={column.key === "status" ? (event) => event.stopPropagation() : undefined}
+                    onDoubleClick={column.key === "status" ? (event) => event.stopPropagation() : undefined}
+                    onPointerDown={column.key === "status" ? (event) => event.stopPropagation() : undefined}
+                    onMouseDown={column.key === "status" ? (event) => event.stopPropagation() : undefined}
+                  >
+                    {fieldValue(row, column, dateConfig, priceRule, statusConfig, onStatusChange, savingStatusIds)}
                   </td>
                 ))}
               </tr>

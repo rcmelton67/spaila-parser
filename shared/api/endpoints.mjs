@@ -7,6 +7,7 @@ export const API_ENDPOINTS = Object.freeze({
   orderFieldLayout: "/account/order-field-layout",
   dateConfig: "/account/date-config",
   pricingRules: "/account/pricing-rules",
+  printConfig: "/account/print-config",
   webSettings: "/account/web-settings",
   ordersList: "/orders/list",
   orderDetail: (orderId) => `/orders/${encodeURIComponent(orderId)}`,

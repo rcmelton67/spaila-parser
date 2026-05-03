@@ -33,10 +33,12 @@ export function normalizeOrderStatus(value) {
 }
 
 export function normalizeItemStatus(value) {
-  const status = String(value || "").trim().toLowerCase();
+  const raw = String(value || "").trim();
+  const status = raw.toLowerCase();
+  if (!status) return "";
   if (["completed", "complete", "done"].includes(status)) return ORDER_STATUSES.completed;
-  if (["active", "in_progress", "not_started"].includes(status)) return status;
-  return "";
+  // Item status is also used by the configurable workflow picker, so preserve custom keys.
+  return raw;
 }
 
 export function isActiveOrder(order) {

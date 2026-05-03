@@ -1,5 +1,7 @@
 import React from "react";
-import { attachmentsApi, ordersApi } from "../../api.js";
+import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
+import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig.mjs";
+import { api, attachmentsApi, ordersApi } from "../../api.js";
 import AttachmentCard from "../attachments/AttachmentCard.jsx";
 import OrderStatusBadge from "../orders/OrderStatusBadge.jsx";
 
@@ -30,6 +32,15 @@ export default function OrderDetail({ orderId, onBack }) {
   const [attachments, setAttachments] = React.useState([]);
   const [state, setState] = React.useState({ loading: true, error: "" });
   const [savingItemId, setSavingItemId] = React.useState("");
+  const [statusConfig, setStatusConfig] = React.useState(() => normalizeStatusConfig(null));
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api.get(API_ENDPOINTS.orderFieldLayout).then((layout) => {
+      if (!cancelled) setStatusConfig(normalizeStatusConfig(layout?.status));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const loadOrder = React.useCallback(async () => {
     if (!orderId) return;
@@ -101,7 +112,12 @@ export default function OrderDetail({ orderId, onBack }) {
           <h2>Order #{order.order_number || "Unnumbered"}</h2>
           <p>{order.buyer_name || "Unknown buyer"} · {order.platform || "unknown"}</p>
         </div>
-        <OrderStatusBadge status={order.status} />
+        <OrderStatusBadge
+          itemStatus={(order.items && order.items[0]?.item_status) || ""}
+          fallbackOrderStatus={order.status}
+          statusConfig={statusConfig}
+          unsetLabel="Status"
+        />
       </div>
 
       <div className="detail-grid">

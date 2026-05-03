@@ -1,5 +1,6 @@
 import React from "react";
 import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
+import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig.mjs";
 import { api } from "../../api.js";
 
 const STORAGE_KEY = "spaila_web_order_field_layout";
@@ -104,7 +105,8 @@ function layoutToFields(layout) {
     .filter(Boolean);
 }
 
-function fieldsToLayout(fields) {
+function fieldsToLayout(fields, preservedStatus) {
+  const statusBase = normalizeStatusConfig(preservedStatus || {});
   return {
     fields: fields
       .filter((field) => field.key !== "status" && field.key !== "order_info")
@@ -122,6 +124,7 @@ function fieldsToLayout(fields) {
     status: {
       enabled: fields.find((field) => field.key === "status")?.visible !== false,
       columnLabel: fields.find((field) => field.key === "status")?.label || "Status",
+      states: statusBase.states,
     },
   };
 }
@@ -178,11 +181,13 @@ function HighlightControl({ field, onToggle, onColor }) {
 export default function OrdersSettingsPage({ onSettingsSaved }) {
   const [fields, setFields] = React.useState(loadFields);
   const [state, setState] = React.useState({ loading: true, saving: false, error: "", message: "" });
+  const layoutStatusRef = React.useRef(normalizeStatusConfig());
 
   React.useEffect(() => {
     let cancelled = false;
     api.get(API_ENDPOINTS.orderFieldLayout).then((layout) => {
       if (cancelled) return;
+      layoutStatusRef.current = normalizeStatusConfig(layout?.status);
       const next = layoutToFields(layout);
       setFields(next);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -219,8 +224,9 @@ export default function OrdersSettingsPage({ onSettingsSaved }) {
   async function saveLayout() {
     setState((current) => ({ ...current, saving: true, error: "", message: "" }));
     try {
-      const layout = fieldsToLayout(fields);
+      const layout = fieldsToLayout(fields, layoutStatusRef.current);
       const saved = await api.patch(API_ENDPOINTS.orderFieldLayout, layout);
+      layoutStatusRef.current = normalizeStatusConfig(saved?.status);
       const next = layoutToFields(saved);
       setFields(next);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -251,6 +257,7 @@ export default function OrdersSettingsPage({ onSettingsSaved }) {
         },
         layout_version: 1,
       });
+      layoutStatusRef.current = normalizeStatusConfig(saved?.status);
       const next = layoutToFields(saved);
       setFields(next);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));

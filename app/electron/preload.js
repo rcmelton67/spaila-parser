@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld("parserApp", {
   updateOrderFieldLayout: (layout) => ipcRenderer.invoke("account:update-order-field-layout", layout || {}),
   getPricingRules:     ()        => ipcRenderer.invoke("account:get-pricing-rules"),
   updatePricingRules:  (rules)   => ipcRenderer.invoke("account:update-pricing-rules", rules || {}),
+  getPrintConfig:      ()        => ipcRenderer.invoke("account:get-print-config"),
+  updatePrintConfig:   (config)  => ipcRenderer.invoke("account:update-print-config", config || {}),
 });
 
 contextBridge.exposeInMainWorld("electronAPI", {

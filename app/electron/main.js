@@ -4624,6 +4624,32 @@ ipcMain.handle("account:update-pricing-rules", async (_event, pricing) => {
   }
 });
 
+ipcMain.handle("account:get-print-config", async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/print-config");
+    if (!response.ok) return { ok: false };
+    const config = await response.json();
+    return { ok: true, config };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("account:update-print-config", async (_event, config) => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/print-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config || {}),
+    });
+    if (!response.ok) return { ok: false };
+    const saved = await response.json();
+    return { ok: true, config: saved };
+  } catch {
+    return { ok: false };
+  }
+});
+
 app.whenReady().then(() => {
   getWorkspaceDirs();
   try { app.setName(getBrandName()); } catch (_) {}

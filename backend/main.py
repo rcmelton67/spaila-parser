@@ -8,7 +8,7 @@ except Exception:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from .orders import router as orders_router
 from .db import init_db
 from .api.routes.account import router as account_router
@@ -115,6 +115,12 @@ def shutdown():
 @app.get("/", include_in_schema=False)
 async def root():
     return RedirectResponse(url="/docs")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    icon_path = _os.path.join(_PROJECT_ROOT, "spaila-logo.blue.ico")
+    return FileResponse(icon_path, media_type="image/x-icon")
 
 
 @app.get("/health")

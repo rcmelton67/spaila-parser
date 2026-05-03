@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 import mimetypes
 from .db import get_conn
+from .date_search import build_date_search_aliases, expand_search_value_aliases, normalized_search_matches
 from workspace_paths import ensure_workspace_layout
 
 _WORKSPACE_DIRS = ensure_workspace_layout(print)
@@ -634,7 +635,7 @@ def _build_archive_index_row(
         "updated_at": _now_iso_utc(),
     }
     row["search_blob"] = " ".join(
-        _archive_text(row.get(key)) for key in (
+        " ".join(expand_search_value_aliases(row.get(key))) for key in (
             "order_number", "buyer_name", "buyer_email", "shipping_address", "pet_name",
             "order_date", "archived_at", "folder_name", "folder_path", "product_text",
             "notes_text", "conversation_text",
@@ -1293,7 +1294,8 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
         filters.append("LOWER(orders.status) = 'archived'")
 
     search_value = str(search or "").strip().lower()
-    if search_value:
+    search_is_date_like = bool(build_date_search_aliases(search_value))
+    if search_value and not search_is_date_like:
         like = f"%{search_value}%"
         filters.append(
             """
@@ -1309,10 +1311,12 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
                 OR LOWER(COALESCE(items.custom_4, '')) LIKE ?
                 OR LOWER(COALESCE(items.custom_5, '')) LIKE ?
                 OR LOWER(COALESCE(items.custom_6, '')) LIKE ?
+                OR LOWER(COALESCE(orders.order_date, '')) LIKE ?
+                OR LOWER(COALESCE(orders.ship_by, '')) LIKE ?
             )
             """
         )
-        values.extend([like] * 11)
+        values.extend([like] * 13)
 
     sort_value = str(sort or "newest").strip().lower()
     order_by = {
@@ -1365,7 +1369,7 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
     rows = cur.fetchall()
     conn.close()
 
-    return [
+    results = [
         {
             "id": r[0],
             "order_id": r[1],
@@ -1399,6 +1403,21 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
         }
         for r in rows
     ]
+    if search_value and search_is_date_like:
+        results = [
+            row for row in results
+            if normalized_search_matches(
+                search_value,
+                (
+                    row.get("order_number"), row.get("buyer_name"), row.get("buyer_email"),
+                    row.get("shipping_address"), row.get("pet_name"), row.get("custom_1"),
+                    row.get("custom_2"), row.get("custom_3"), row.get("custom_4"),
+                    row.get("custom_5"), row.get("custom_6"), row.get("order_date"),
+                    row.get("ship_by"),
+                ),
+            )
+        ]
+    return results
 
 
 @router.get("/orders/{order_id}")
@@ -1898,10 +1917,11 @@ def search_archive(q: str = "", status: str = "archived", include_paths: bool = 
     """
     query = (q or "").strip().lower()
     status_value = str(status or "archived").strip().lower()
+    query_is_date_like = bool(build_date_search_aliases(query))
     conn = get_conn()
     cur = conn.cursor()
     params: list[str] = []
-    if query:
+    if query and not query_is_date_like:
         fts_query = " ".join(part.replace('"', '""') + "*" for part in query.split() if part.strip())
         params.append(fts_query)
         where = "ao.archive_id IN (SELECT archive_id FROM archive_orders_fts WHERE archive_orders_fts MATCH ?)"
@@ -1938,9 +1958,11 @@ def search_archive(q: str = "", status: str = "archived", include_paths: bool = 
             "notes": row[15],
             "conversation": row[16],
         }
+        if query_is_date_like and not normalized_search_matches(query, searchable_fields.values()):
+            continue
         match_fields = [
             key for key, value in searchable_fields.items()
-            if query and query in str(value or "").lower()
+            if query and normalized_search_matches(query, [value])
         ]
         snippet_source = next((str(searchable_fields[key] or "") for key in match_fields if str(searchable_fields[key] or "").strip()), "")
         results.append({

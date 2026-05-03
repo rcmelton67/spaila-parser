@@ -61,8 +61,55 @@ class PricingRulesUpdate(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class PrintConfigUpdate(BaseModel):
+    mode: str | None = Field(default=None, max_length=20)
+    orientation: str | None = Field(default=None, max_length=20)
+    columns: dict[str, bool] | None = None
+    wrap: dict[str, bool] | None = None
+    cardOrder: list[str] | None = None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _default_order_status_layout() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "columnLabel": "Status",
+        "states": [
+            {"key": "pending", "label": "Pending", "color": "#fef3c7"},
+            {"key": "sent", "label": "Sent", "color": "#dbeafe"},
+            {"key": "approved", "label": "Approved", "color": "#d1fae5"},
+        ],
+    }
+
+
+def _normalize_hex_color(value: str) -> str:
+    c = str(value or "").strip()
+    if not c.startswith("#"):
+        return "#e5e7eb"
+    body = c[1:]
+    hexchars = set("0123456789abcdefABCDEF")
+    if len(body) == 3 and all(ch in hexchars for ch in body):
+        body = "".join(ch * 2 for ch in body)
+    if len(body) == 6 and all(ch in hexchars for ch in body):
+        return "#" + body.lower()
+    return "#e5e7eb"
+
+
+def _sanitize_status_states(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(raw[:60]):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key", "")).strip()[:64] or f"state-{i + 1}"
+        label = str(item.get("label", "")).strip()[:120] or "State"
+        color = _normalize_hex_color(str(item.get("color", "")).strip())
+        out.append({"key": key, "label": label, "color": color})
+    return out
 
 
 def _default_profile() -> dict[str, Any]:
@@ -485,6 +532,22 @@ def _normalize_pricing_rules(value: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _normalize_print_config(value: dict[str, Any] | None) -> dict[str, Any]:
+    data = value if isinstance(value, dict) else {}
+    columns = data.get("columns") if isinstance(data.get("columns"), dict) else {}
+    wrap = data.get("wrap") if isinstance(data.get("wrap"), dict) else {}
+    card_order = data.get("cardOrder") if isinstance(data.get("cardOrder"), list) else []
+    return {
+        "mode": "card" if data.get("mode") == "card" else "sheet",
+        "orientation": "landscape" if data.get("orientation") == "landscape" else "portrait",
+        "columns": {str(key): value is not False for key, value in columns.items()},
+        "wrap": {str(key): bool(value) for key, value in wrap.items()},
+        "cardOrder": [str(key).strip() for key in card_order if str(key).strip()],
+        "layout_version": int(data.get("layout_version") or 1),
+        "updated_at": data.get("updated_at", ""),
+    }
+
+
 @router.get("/profile")
 def get_account_profile():
     return _load_profile()
@@ -574,9 +637,23 @@ def update_order_field_layout(patch: OrderFieldLayoutUpdate):
 
     if "status" in payload:
         status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        prev = sanitized.get("status") if isinstance(sanitized.get("status"), dict) else {}
+        default_block = _default_order_status_layout()
+        if "states" in status:
+            next_states = _sanitize_status_states(status.get("states"))
+        elif isinstance(prev, dict) and "states" in prev:
+            next_states = _sanitize_status_states(prev.get("states"))
+        else:
+            next_states = list(default_block["states"])
+        enabled = status.get("enabled") is not False if "enabled" in status else (prev.get("enabled") is not False)
+        if "columnLabel" in status:
+            column_label = str(status.get("columnLabel", "")).strip() or "Status"
+        else:
+            column_label = str(prev.get("columnLabel", "")).strip() or "Status"
         sanitized["status"] = {
-            "enabled": status.get("enabled") is not False,
-            "columnLabel": str(status.get("columnLabel", "")).strip() or "Status",
+            "enabled": enabled,
+            "columnLabel": column_label,
+            "states": next_states,
         }
 
     for key in ("sort_defaults", "search_defaults", "platform_overrides"):
@@ -618,6 +695,20 @@ def get_pricing_rules():
 @router.patch("/pricing-rules")
 def update_pricing_rules(patch: PricingRulesUpdate):
     return _normalize_pricing_rules(_save_json_asset("pricing_rules", "Pricing rules", _normalize_pricing_rules(patch.model_dump())))
+
+
+@router.get("/print-config")
+def get_print_config():
+    return _normalize_print_config(_load_json_asset("print_config"))
+
+
+@router.patch("/print-config")
+def update_print_config(patch: PrintConfigUpdate):
+    current = _normalize_print_config(_load_json_asset("print_config"))
+    payload = patch.model_dump(exclude_unset=True)
+    current.update(payload)
+    current["layout_version"] = int(current.get("layout_version") or 1)
+    return _normalize_print_config(_save_json_asset("print_config", "Print settings", _normalize_print_config(current)))
 
 
 @router.get("/web-settings")

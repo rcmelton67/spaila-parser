@@ -8,8 +8,10 @@ import AccountPage from "./features/account/AccountPage.jsx";
 import SettingsPage from "./features/settings/SettingsPage.jsx";
 import OrdersSettingsPage from "./features/settings/OrdersSettingsPage.jsx";
 import SearchSortSettingsPage from "./features/settings/SearchSortSettingsPage.jsx";
+import StatusSettingsPage from "./features/settings/StatusSettingsPage.jsx";
 import DatesSettingsPage from "./features/settings/DatesSettingsPage.jsx";
 import PricingSettingsPage from "./features/settings/PricingSettingsPage.jsx";
+import PrintingSettingsPage from "./features/settings/PrintingSettingsPage.jsx";
 import EmailsPage from "./features/settings/EmailsPage.jsx";
 import SupportPage from "./features/support/SupportPage.jsx";
 
@@ -17,7 +19,7 @@ const WEB_ORDER_SHEET_SIZE_KEY = "spaila_web_order_sheet_size";
 const DEFAULT_ORDER_SHEET_SIZE = 12;
 
 // Settings sidebar tabs — mirrors desktop settings sidebar exactly.
-// desktop: true items are grayed out (managed by desktop app only).
+// desktopOnly: true grays out the row (managed in the desktop app only).
 const SETTINGS_TABS = [
   { id: "account",    label: "Account" },
   { id: "general",   label: "General" },
@@ -26,11 +28,11 @@ const SETTINGS_TABS = [
   { kind: "divider" },
   { id: "view",      label: "Search / Sort" },
   { id: "dates",     label: "Dates" },
-  { id: "status",    label: "Status",            desktop: true },
+  { id: "status",    label: "Status" },
   { id: "pricing",   label: "Pricing" },
   { kind: "divider" },
-  { id: "printing",  label: "Printing",          desktop: true },
-  { id: "documents", label: "Docs",              desktop: true },
+  { id: "printing",  label: "Printing" },
+  { id: "documents", label: "Docs",              desktopOnly: true },
   { kind: "divider" },
   { id: "support",   label: "Support" },
 ];
@@ -242,13 +244,14 @@ function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, l
               return <hr key={`sdiv-${index}`} className="web-sidebar-divider" />;
             }
             const isActive = settingsTab === tab.id;
+            const isDesktopOnly = tab.desktopOnly === true;
             return (
               <button
                 key={tab.id}
                 type="button"
-                className={isActive ? "active" : tab.desktop ? "desktop-only" : ""}
-                disabled={tab.desktop}
-                onClick={() => !tab.desktop && setSettingsTab(tab.id)}
+                className={isActive ? "active" : isDesktopOnly ? "desktop-only" : ""}
+                disabled={isDesktopOnly}
+                onClick={() => !isDesktopOnly && setSettingsTab(tab.id)}
               >
                 {tab.id === "account" ? (
                   <ShopAvatar logoUrl={logoUrl} initial={shopInitial} size="sidebar" name="" />
@@ -272,8 +275,12 @@ function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, l
           <SearchSortSettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "dates" ? (
           <DatesSettingsPage onSettingsSaved={onSettingsSaved} />
+        ) : settingsTab === "status" ? (
+          <StatusSettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "pricing" ? (
           <PricingSettingsPage onSettingsSaved={onSettingsSaved} />
+        ) : settingsTab === "printing" ? (
+          <PrintingSettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "emails" ? (
           <EmailsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "support" ? (
@@ -319,6 +326,7 @@ export default function App() {
   const [orderFilter, setOrderFilter] = React.useState("all");
   const [orderSortField, setOrderSortField] = React.useState("order_date");
   const [orderSortDirection, setOrderSortDirection] = React.useState("asc");
+  const [orderSearchCounts, setOrderSearchCounts] = React.useState({});
   const [orderSheetSize, setOrderSheetSize] = React.useState(() => {
     try {
       return parseInt(localStorage.getItem(WEB_ORDER_SHEET_SIZE_KEY), 10) || DEFAULT_ORDER_SHEET_SIZE;
@@ -366,16 +374,22 @@ export default function App() {
   const shopInitial = String(shopName).trim().slice(0, 1).toUpperCase() || "S";
   const logoUrl = "http://127.0.0.1:8055/account/logo";
 
+  React.useEffect(() => {
+    const titleName = String(shopName || "").trim() || "Spaila";
+    document.title = titleName;
+  }, [shopName]);
+
   // normalizeWebSettings guarantees these are always proper booleans; fall back to true if settings haven't loaded yet.
   const showCompletedTab = webSettings != null ? webSettings.show_completed_tab : true;
   const showInventoryTab = webSettings != null ? webSettings.show_inventory_tab : false;
   const showThankYouShortcut = webSettings != null ? webSettings.show_thank_you_shortcut : true;
 
   const showDetail = Boolean(selectedOrderId);
+  const hasActiveOrderSearch = orderSearch.trim().length > 0;
   const topNavItems = [
-    { id: "orders", label: "Active", route: "orders", ordersTab: "active" },
-    ...(showCompletedTab ? [{ id: "completed", label: "Completed", route: "orders", ordersTab: "completed" }] : []),
-    ...(showInventoryTab ? [{ id: "inventory", label: "Inventory Needed", route: "orders", ordersTab: "inventory" }] : []),
+    { id: "orders", label: "Active", route: "orders", ordersTab: "active", searchCount: orderSearchCounts.active },
+    ...(showCompletedTab ? [{ id: "completed", label: "Completed", route: "orders", ordersTab: "completed", searchCount: orderSearchCounts.completed }] : []),
+    ...(showInventoryTab ? [{ id: "inventory", label: "Inventory Needed", route: "orders", ordersTab: "inventory", searchCount: 0 }] : []),
   ];
 
   function changeOrderSheetSize(delta) {
@@ -422,114 +436,147 @@ export default function App() {
     <div className="web-app-v2">
       {/* ── Top navigation bar ─────────────────────────────────────────── */}
       <header className="web-topnav">
-        <div className="web-topnav-brand">
-          <ShopAvatar logoUrl={logoUrl} initial={shopInitial} size="nav" name={shopName} />
-        </div>
-
-        <button
-          type="button"
-          className={`web-header-icon-btn${route === "settings" ? " active" : ""}`}
-          title="Settings"
-          aria-label="Settings"
-          onClick={() => navigateFromSettings("settings")}
-        >
-          <IconSettings />
-        </button>
-        {showThankYouShortcut ? (
-          <button
-            type="button"
-            className={`web-header-icon-btn${route === "thankyou" ? " active" : ""}`}
-            title="Thank-you letter"
-            aria-label="Thank-you letter"
-            onClick={() => navigate("thankyou")}
-          >
-            <IconThankYou />
-          </button>
-        ) : null}
-
-        <nav className="web-topnav-tabs" aria-label="Main navigation">
-          {topNavItems.map((item) => {
-            const isOrdersTab = item.route === "orders";
-            const isActive = !showDetail && (
-              isOrdersTab
-                ? route === "orders" && ordersTab === item.ordersTab
-                : route === item.route
-            );
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={isActive ? "active" : ""}
-                onClick={() => {
-                  if (isOrdersTab) {
-                    navigateOrderScope(item.ordersTab);
-                  } else {
-                    navigateFromSettings(item.route);
-                  }
-                }}
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-
-        {!showDetail && route === "orders" ? (
-          <div className="web-header-order-controls">
-            <div className="web-header-size-controls" role="group" aria-label="Order sheet text size">
-              <button type="button" onClick={() => changeOrderSheetSize(-1)} title="Decrease sheet text size">A-</button>
-              <button type="button" onClick={() => changeOrderSheetSize(1)} title="Increase sheet text size">A+</button>
+        <div className="web-topnav-identity-row">
+          <div className="web-topnav-brand">
+            <ShopAvatar logoUrl={logoUrl} initial={shopInitial} size="nav" name={shopName} />
+            <div className="web-topnav-shop">
+              <span className="web-topnav-name">{shopName}</span>
+              <span className="web-topnav-app-label">Spaila workspace</span>
             </div>
-            <input
-              className="web-header-search"
-              value={orderSearch}
-              onChange={(event) => setOrderSearch(event.target.value)}
-              placeholder="Search orders..."
-              aria-label="Search orders"
-            />
-            <select
-              className="web-header-select"
-              value={orderSortField}
-              onChange={(event) => setOrderSortField(event.target.value)}
-              aria-label="Sort field"
-            >
-              <option value="order_date">Order Date</option>
-              <option value="ship_by">Ship By</option>
-              <option value="buyer_name">Buyer</option>
-              <option value="order_number">Order #</option>
-              <option value="price">Price</option>
-              <option value="status">Status</option>
-            </select>
-            <select
-              className="web-header-select direction"
-              value={orderSortDirection}
-              onChange={(event) => setOrderSortDirection(event.target.value)}
-              aria-label="Sort direction"
-            >
-              <option value="asc">Ascending ↑</option>
-              <option value="desc">Descending ↓</option>
-            </select>
-            <select
-              className="web-header-select filter"
-              value={orderFilter}
-              onChange={(event) => setOrderFilter(event.target.value)}
-              aria-label="Filter orders"
-            >
-              <option value="all">All</option>
-              <option value="gift">Gift orders</option>
-              <option value="has_notes">Has notes</option>
-              <option value="needs_status">Needs status</option>
-            </select>
+          </div>
+
+          <div className="web-topnav-account-actions" aria-label="Account actions">
+            {showThankYouShortcut ? (
+              <button
+                type="button"
+                className={`web-header-icon-btn${route === "thankyou" ? " active" : ""}`}
+                title="Thank-you letter"
+                aria-label="Thank-you letter"
+                onClick={() => navigate("thankyou")}
+              >
+                <IconThankYou />
+              </button>
+            ) : null}
             <button
               type="button"
-              className="web-header-print"
-              onClick={() => orderPrintHandler?.()}
-              title="Print current sheet"
+              className={`web-header-icon-btn${route === "settings" ? " active" : ""}`}
+              title="Settings"
+              aria-label="Settings"
+              onClick={() => navigateFromSettings("settings")}
             >
-              Print
+              <IconSettings />
             </button>
           </div>
-        ) : null}
+        </div>
+
+        <div className="web-topnav-ops-row">
+          <nav className="web-topnav-tabs" aria-label="Main navigation">
+            {topNavItems.map((item) => {
+              const isOrdersTab = item.route === "orders";
+              const isActive = !showDetail && (
+                isOrdersTab
+                  ? route === "orders" && ordersTab === item.ordersTab
+                  : route === item.route
+              );
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={isActive ? "active" : ""}
+                  onClick={() => {
+                    if (isOrdersTab) {
+                      navigateOrderScope(item.ordersTab);
+                    } else {
+                      navigateFromSettings(item.route);
+                    }
+                  }}
+                >
+                  <span>{item.label}</span>
+                  {hasActiveOrderSearch && Number(item.searchCount || 0) > 0 ? (
+                    <span className="web-tab-search-badge" title={`${item.searchCount} search matches`}>
+                      {item.searchCount}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+
+          {!showDetail && route === "orders" ? (
+            <div className="web-header-order-controls">
+              <div className="web-header-size-controls" role="group" aria-label="Order sheet text size">
+                <button type="button" onClick={() => changeOrderSheetSize(-1)} title="Decrease sheet text size">A-</button>
+                <button type="button" onClick={() => changeOrderSheetSize(1)} title="Increase sheet text size">A+</button>
+              </div>
+              <div className={`web-header-search-wrap${hasActiveOrderSearch ? " active" : ""}`}>
+                <input
+                  className="web-header-search"
+                  value={orderSearch}
+                  onChange={(event) => setOrderSearch(event.target.value)}
+                  placeholder="Search orders..."
+                  aria-label="Search orders"
+                />
+                {hasActiveOrderSearch ? (
+                  <button
+                    type="button"
+                    className="web-header-search-clear"
+                    onClick={() => setOrderSearch("")}
+                    title="Clear search"
+                    aria-label="Clear search"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              {hasActiveOrderSearch ? (
+                <span className="web-header-search-flag" title={`Filtering by "${orderSearch.trim()}"`}>
+                  Search active
+                </span>
+              ) : null}
+              <select
+                className="web-header-select"
+                value={orderSortField}
+                onChange={(event) => setOrderSortField(event.target.value)}
+                aria-label="Sort field"
+              >
+                <option value="order_date">Order Date</option>
+                <option value="ship_by">Ship By</option>
+                <option value="buyer_name">Buyer</option>
+                <option value="order_number">Order #</option>
+                <option value="price">Price</option>
+                <option value="status">Status</option>
+              </select>
+              <select
+                className="web-header-select direction"
+                value={orderSortDirection}
+                onChange={(event) => setOrderSortDirection(event.target.value)}
+                aria-label="Sort direction"
+              >
+                <option value="asc">Ascending ↑</option>
+                <option value="desc">Descending ↓</option>
+              </select>
+              <select
+                className="web-header-select filter"
+                value={orderFilter}
+                onChange={(event) => setOrderFilter(event.target.value)}
+                aria-label="Filter orders"
+              >
+                <option value="all">All</option>
+                <option value="gift">Gift orders</option>
+                <option value="has_notes">Has notes</option>
+                <option value="needs_status">Needs status</option>
+              </select>
+              <button
+                type="button"
+                className="web-header-print"
+                onClick={() => orderPrintHandler?.()}
+                title="Print current sheet"
+              >
+                Print
+              </button>
+            </div>
+          ) : null}
+        </div>
 
       </header>
 
@@ -551,6 +598,8 @@ export default function App() {
               sortDirection={orderSortDirection}
               sheetSize={orderSheetSize}
               onRegisterPrint={setOrderPrintHandler}
+              onSearchCountsChange={setOrderSearchCounts}
+              onClearSearch={() => setOrderSearch("")}
             />
           </div>
         ) : null}

@@ -1,8 +1,10 @@
 import React from "react";
 import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
+import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig.mjs";
 import { api, ordersApi, settingsApi } from "../../api.js";
 import OrdersTable from "./OrdersTable.jsx";
 import { DATE_FIELD_KEYS, formatDate } from "../../shared/dateConfig.js";
+import { normalizedSearchMatches } from "../../../../../shared/search/dateSearch.mjs";
 
 const DEFAULT_ORDER_SHEET_SIZE = 12;
 const ORDER_ROWS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
@@ -50,7 +52,7 @@ const DEFAULT_ORDER_LAYOUT = Object.freeze({
     "gift_message",
     "order_notes",
   ],
-  status: { enabled: true, columnLabel: "Status" },
+  status: normalizeStatusConfig({ enabled: true, columnLabel: "Status" }),
 });
 
 const DEFAULT_SEARCHABLE_FIELDS = {
@@ -106,11 +108,25 @@ function normalizeSearchText(value) {
 function getOrderInfoSearchValues(row) {
   const values = [];
   const platform = String(row.platform || row.source || row.marketplace || "").trim();
-  if (platform) values.push(platform);
+  if (platform && !platform.toLowerCase().includes("etsy")) values.push(platform);
   if (Number(row._item_count || 1) > 1) values.push(`${row._item_count} items`);
   if (row.gift || row.is_gift) values.push("gift");
   if (row.gift_message) values.push("message", row.gift_message);
   if (row.gift_wrapped || row.gift_wrap) values.push("wrapped");
+  return values;
+}
+
+function getOrderInfoDisplayValues(row) {
+  const values = [];
+  const platform = String(row.platform || row.source || row.marketplace || "").trim().toLowerCase();
+  if (platform && !platform.includes("etsy")) {
+    if (platform.includes("shopify")) values.push("Shopify");
+    else if (platform.includes("woo") || platform.includes("web") || platform.includes("website")) values.push("Website");
+  }
+  if (Number(row._item_count || 1) > 1) values.push(`${row._item_count} items`);
+  if (row.gift || row.is_gift) values.push("Gift");
+  if (row.gift_message) values.push("Message");
+  if (row.gift_wrapped || row.gift_wrap) values.push("Wrapped");
   return values;
 }
 
@@ -131,20 +147,19 @@ function getSearchValues(row, key, dateConfig, pricingRules) {
   return values;
 }
 
-function matchesSearch(row, query, config, dateConfig, pricingRules) {
-  const needle = normalizeSearchText(query);
-  if (!needle) return true;
+function matchesSearch(row, query, config, dateConfig, pricingRules, excludedColumns = new Set()) {
+  if (!normalizeSearchText(query)) return true;
   const keys = Object.entries(config.searchableFields || {})
     .filter(([, enabled]) => enabled)
     .map(([key]) => key);
   if (config.includeOrderInfo !== false) keys.push("order_info");
-  const values = keys.flatMap((key) => getSearchValues(row, key, dateConfig, pricingRules))
+  const searchableKeys = keys
+    .filter((key) => !excludedColumns.has(key))
+    .filter((key, index, array) => array.indexOf(key) === index);
+  const values = searchableKeys.flatMap((key) => getSearchValues(row, key, dateConfig, pricingRules))
     .filter((value) => value !== null && value !== undefined && value !== "")
     .map(normalizeSearchText);
-  if (config.searchMode === "exact") return values.some((value) => value === needle);
-  const terms = needle.split(/\s+/).filter(Boolean);
-  const haystack = values.join(" ");
-  return terms.every((term) => haystack.includes(term));
+  return normalizedSearchMatches(query, values, config.searchMode);
 }
 
 function getSortValue(row, field, dateConfig, pricingRules) {
@@ -188,10 +203,11 @@ function normalizeOrderLayout(layout) {
   const widthProfile = normalizeWidthProfile(source);
   const fieldMap = new Map((source.fields || []).map((field) => [field.key, field]));
   const defaultMap = new Map(DEFAULT_ORDER_LAYOUT.fields.map((field) => [field.key, field]));
+  const statusConfig = normalizeStatusConfig(source.status);
   const statusField = {
     key: "status",
-    label: source.status?.columnLabel || "Status",
-    visibleInOrders: source.status?.enabled !== false,
+    label: statusConfig.columnLabel || "Status",
+    visibleInOrders: statusConfig.enabled !== false,
   };
   const order = Array.isArray(source.order) && source.order.length ? source.order : DEFAULT_ORDER_LAYOUT.order;
   const fields = [
@@ -219,6 +235,7 @@ function normalizeOrderLayout(layout) {
     })),
     sortDefaults: source.sort_defaults || {},
     searchDefaults: source.search_defaults || {},
+    status: statusConfig,
   };
 }
 
@@ -257,6 +274,25 @@ function getOrdersCacheKey({ tab }) {
   });
 }
 
+async function loadRowsForTab(tab) {
+  const cacheKey = getOrdersCacheKey({ tab });
+  const cached = orderRowsCache.get(cacheKey);
+  if (cached?.rows && Date.now() - cached.updatedAt < ORDER_ROWS_CACHE_MAX_AGE_MS) {
+    return cached.rows;
+  }
+  const apiStatus = tab === "inventory" ? "active" : tab;
+  const fetchPromise = orderRowsInflight.get(cacheKey) || ordersApi.list({ status: apiStatus });
+  orderRowsInflight.set(cacheKey, fetchPromise);
+  try {
+    const result = attachOrderItemCounts(await fetchPromise);
+    const nextRows = tab === "inventory" ? result.filter(isInventoryNeededRow) : result;
+    orderRowsCache.set(cacheKey, { rows: nextRows, updatedAt: Date.now() });
+    return nextRows;
+  } finally {
+    orderRowsInflight.delete(cacheKey);
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -266,6 +302,9 @@ function escapeHtml(value) {
 }
 
 function getCellText(row, key, dateConfig, pricingRules) {
+  if (key === "order_info") {
+    return getOrderInfoDisplayValues(row).join(", ");
+  }
   const values = getSearchValues(row, key, dateConfig, pricingRules);
   return values[0] ?? "";
 }
@@ -284,6 +323,8 @@ export default function OrdersPage({
   sortDirection = "asc",
   sheetSize = DEFAULT_ORDER_SHEET_SIZE,
   onRegisterPrint,
+  onSearchCountsChange,
+  onClearSearch,
 }) {
   // Support both controlled (activeTab/onTabChange from parent) and uncontrolled (scope prop alone)
   const [localTab, setLocalTab] = React.useState(scope || "active");
@@ -304,7 +345,10 @@ export default function OrdersPage({
   const [layout, setLayout] = React.useState(() => normalizeOrderLayout(null));
   const [pricingRules, setPricingRules] = React.useState([]);
   const [dateConfig, setDateConfig] = React.useState(null);
+  const [printConfig, setPrintConfig] = React.useState(null);
   const [state, setState] = React.useState({ loading: true, error: "" });
+  const [savingStatusIds, setSavingStatusIds] = React.useState(() => new Set());
+  const [searchExcludedColumns, setSearchExcludedColumns] = React.useState(() => new Set());
   const loadSeqRef = React.useRef(0);
 
   React.useEffect(() => {
@@ -332,14 +376,8 @@ export default function OrdersPage({
     }
 
     try {
-      const apiStatus = currentTab === "inventory" ? "active" : currentTab;
-      const fetchPromise = orderRowsInflight.get(cacheKey) || ordersApi.list({ status: apiStatus });
-      orderRowsInflight.set(cacheKey, fetchPromise);
-      const result = attachOrderItemCounts(await fetchPromise);
-      orderRowsInflight.delete(cacheKey);
+      const nextRows = await loadRowsForTab(currentTab);
       if (loadSeqRef.current !== seq) return;
-      const nextRows = currentTab === "inventory" ? result.filter(isInventoryNeededRow) : result;
-      orderRowsCache.set(cacheKey, { rows: nextRows, updatedAt: Date.now() });
       setRows(nextRows);
       setState({ loading: false, error: "" });
     } catch (error) {
@@ -369,6 +407,31 @@ export default function OrdersPage({
 
   React.useEffect(() => {
     let cancelled = false;
+    async function refreshSharedLayout() {
+      try {
+        const sharedLayout = await api.get(API_ENDPOINTS.orderFieldLayout);
+        if (!cancelled) setLayout(normalizeOrderLayout(sharedLayout));
+      } catch (_) {}
+    }
+    function refreshFromOtherSurface() {
+      orderRowsCache.clear();
+      refreshSharedLayout();
+      loadOrders();
+    }
+    function handleVisibilityChange() {
+      if (!document.hidden) refreshFromOtherSurface();
+    }
+    window.addEventListener("focus", refreshFromOtherSurface);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshFromOtherSurface);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [loadOrders]);
+
+  React.useEffect(() => {
+    let cancelled = false;
     api.get(API_ENDPOINTS.pricingRules).then((pricing) => {
       if (!cancelled) setPricingRules(Array.isArray(pricing?.rules) ? pricing.rules : []);
     }).catch(() => {
@@ -377,7 +440,39 @@ export default function OrdersPage({
     return () => { cancelled = true; };
   }, [layoutRefreshKey]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    api.get(API_ENDPOINTS.printConfig).then((config) => {
+      if (!cancelled) setPrintConfig(config || null);
+    }).catch(() => {
+      if (!cancelled) setPrintConfig(null);
+    });
+    return () => { cancelled = true; };
+  }, [layoutRefreshKey]);
+
   const searchSortConfig = React.useMemo(() => normalizeSearchSortConfig(layout), [layout]);
+  React.useEffect(() => {
+    if (!search.trim() && searchExcludedColumns.size) {
+      setSearchExcludedColumns(new Set());
+    }
+  }, [search, searchExcludedColumns.size]);
+
+  const searchableColumnKeys = React.useMemo(() => {
+    const keys = Object.entries(searchSortConfig.searchableFields || {})
+      .filter(([, enabled]) => enabled)
+      .map(([key]) => key);
+    if (searchSortConfig.includeOrderInfo !== false) keys.push("order_info");
+    return keys.filter((key, index, array) => array.indexOf(key) === index);
+  }, [searchSortConfig.includeOrderInfo, searchSortConfig.searchableFields]);
+
+  function excludeSearchColumn(columnKey) {
+    setSearchExcludedColumns((current) => {
+      const next = new Set(current);
+      next.add(columnKey);
+      return next;
+    });
+  }
+
   const activeSort = React.useMemo(() => {
     const field = sortField || searchSortConfig.defaultSort?.field || "order_date";
     const direction = sortDirection === "desc" ? "desc" : "asc";
@@ -385,39 +480,135 @@ export default function OrdersPage({
   }, [searchSortConfig.defaultSort?.field, sortDirection, sortField]);
   const visibleRows = React.useMemo(() => (
     filterRows(rows, filter)
-      .filter((row) => matchesSearch(row, search, searchSortConfig, dateConfig, pricingRules))
+      .filter((row) => matchesSearch(row, search, searchSortConfig, dateConfig, pricingRules, searchExcludedColumns))
       .slice()
       .sort((a, b) => compareRows(a, b, activeSort, dateConfig, pricingRules))
-  ), [activeSort, dateConfig, filter, pricingRules, rows, search, searchSortConfig]);
+  ), [activeSort, dateConfig, filter, pricingRules, rows, search, searchExcludedColumns, searchSortConfig]);
+
+  React.useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      onSearchCountsChange?.({});
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const [activeRows, completedRows, inventoryRows] = await Promise.all([
+          loadRowsForTab("active"),
+          loadRowsForTab("completed"),
+          loadRowsForTab("inventory"),
+        ]);
+        if (cancelled) return;
+        const countMatches = (items) => items.filter((row) => matchesSearch(row, query, searchSortConfig, dateConfig, pricingRules, searchExcludedColumns)).length;
+        onSearchCountsChange?.({
+          active: countMatches(activeRows),
+          completed: countMatches(completedRows),
+          inventory: countMatches(inventoryRows),
+        });
+      } catch {
+        if (!cancelled) onSearchCountsChange?.({});
+      }
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [dateConfig, onSearchCountsChange, pricingRules, search, searchExcludedColumns, searchSortConfig]);
+
+  async function updateItemWorkflowStatus(row, nextStatus) {
+    const itemId = String(row?.id || "").trim();
+    if (!itemId) return;
+    const previousStatus = row.item_status || "";
+    const normalizedNext = nextStatus || "";
+    setSavingStatusIds((current) => new Set(current).add(itemId));
+    setState((current) => ({ ...current, error: "" }));
+    setRows((current) => current.map((item) => (
+      String(item.id) === itemId ? { ...item, item_status: normalizedNext } : item
+    )));
+    try {
+      await ordersApi.updateItemStatus(itemId, normalizedNext || null);
+      for (const [cacheKey, cached] of orderRowsCache.entries()) {
+        if (!cached?.rows) continue;
+        orderRowsCache.set(cacheKey, {
+          ...cached,
+          rows: cached.rows.map((item) => (
+            String(item.id) === itemId ? { ...item, item_status: normalizedNext } : item
+          )),
+        });
+      }
+    } catch (error) {
+      setRows((current) => current.map((item) => (
+        String(item.id) === itemId ? { ...item, item_status: previousStatus } : item
+      )));
+      setState((current) => ({
+        ...current,
+        error: error?.message || "Could not update item status.",
+      }));
+    } finally {
+      setSavingStatusIds((current) => {
+        const next = new Set(current);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  }
 
   const printCurrentSheet = React.useCallback(() => {
-    const visibleColumns = (layout.fields || []).filter((field) => field.visibleInOrders !== false);
-    const headerHtml = visibleColumns.map((column) => `<th>${escapeHtml(column.label || column.key)}</th>`).join("");
+    const config = printConfig || {};
+    const printableColumns = (layout.fields || []).filter((field) => (
+      field.visibleInOrders !== false && config.columns?.[field.key] !== false
+    ));
+    const cardOrder = Array.isArray(config.cardOrder) ? config.cardOrder : [];
+    const cardIndex = new Map(cardOrder.map((key, index) => [key, index]));
+    const orderedCardColumns = [...printableColumns].sort((a, b) => (
+      (cardIndex.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (cardIndex.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    ));
+    const mode = config.mode === "card" ? "card" : "sheet";
+    const orientation = config.orientation === "landscape" ? "landscape" : "portrait";
+    const headerHtml = printableColumns.map((column) => `<th class="col-${column.key}">${escapeHtml(column.label || column.key)}</th>`).join("");
+    const columnCss = printableColumns.map((column) => (
+      `.col-${column.key} { ${config.wrap?.[column.key] ? "white-space: normal; overflow-wrap: anywhere;" : "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"} }`
+    )).join("\n");
     const rowsHtml = visibleRows.length
       ? visibleRows.map((row) => {
-          const cells = visibleColumns.map((column) => `<td>${escapeHtml(getCellText(row, column.key, dateConfig, pricingRules) || "—")}</td>`).join("");
+          const cells = printableColumns.map((column) => `<td class="col-${column.key}">${escapeHtml(getCellText(row, column.key, dateConfig, pricingRules) || "—")}</td>`).join("");
           return `<tr>${cells}</tr>`;
         }).join("")
-      : `<tr><td colspan="${Math.max(1, visibleColumns.length)}">No orders to print</td></tr>`;
+      : `<tr><td colspan="${Math.max(1, printableColumns.length)}">No orders to print</td></tr>`;
+    const cardsHtml = visibleRows.length && orderedCardColumns.length
+      ? visibleRows.map((row) => (
+          `<section class="order-card">${orderedCardColumns.map((column) => (
+            `<div class="card-field"><strong>${escapeHtml(column.label || column.key)}</strong><span>${escapeHtml(getCellText(row, column.key, dateConfig, pricingRules) || "—")}</span></div>`
+          )).join("")}</section>`
+        )).join("")
+      : `<div class="empty-print">${visibleRows.length ? "No print fields are enabled" : "No orders to print"}</div>`;
     const html = `<!doctype html>
 <html>
   <head>
     <title>Spaila Orders Print</title>
     <style>
+      @page { size: ${orientation}; margin: 0.35in; }
       body { margin: 24px; font-family: "Segoe UI", sans-serif; color: #111827; }
       h1 { font-size: 18px; margin: 0 0 14px; }
       table { width: 100%; border-collapse: collapse; table-layout: fixed; }
       th { background: #e5e5e5; color: #475569; font-size: 11px; text-align: left; text-transform: uppercase; }
       th, td { border: 1px solid #d1d5db; padding: 6px 7px; vertical-align: top; overflow-wrap: anywhere; }
       td { font-size: 12px; }
+      ${columnCss}
+      .cards { display: grid; grid-template-columns: ${orientation === "landscape" ? "1fr 1fr" : "1fr"}; gap: 12px; }
+      .order-card { break-inside: avoid; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+      .card-field { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; font-size: 12px; }
+      .card-field strong { color: #475569; }
+      .empty-print { color: #64748b; font-size: 13px; }
     </style>
   </head>
   <body>
-    <h1>Spaila Orders</h1>
-    <table>
+    <h1>${mode === "card" ? "Spaila Order Cards" : "Spaila Orders"}</h1>
+    ${mode === "card" ? `<div class="cards">${cardsHtml}</div>` : `<table>
       <thead><tr>${headerHtml}</tr></thead>
       <tbody>${rowsHtml}</tbody>
-    </table>
+    </table>`}
     <script>window.onload = () => { window.print(); setTimeout(() => window.close(), 500); };</script>
   </body>
 </html>`;
@@ -426,7 +617,7 @@ export default function OrdersPage({
     printWindow.document.open();
     printWindow.document.write(html);
     printWindow.document.close();
-  }, [dateConfig, layout.fields, pricingRules, visibleRows]);
+  }, [dateConfig, layout.fields, pricingRules, printConfig, visibleRows]);
 
   React.useEffect(() => {
     if (!onRegisterPrint) return undefined;
@@ -442,8 +633,34 @@ export default function OrdersPage({
         </div>
       ) : null}
 
+      {search.trim() ? (
+        <div className="orders-search-banner">
+          <span>
+            Showing filtered <strong>{currentTab}</strong> results for <strong>{search.trim()}</strong>.
+          </span>
+          <button type="button" onClick={onClearSearch}>
+            Clear search
+          </button>
+        </div>
+      ) : null}
+
       {state.error ? <div className="error-banner">{state.error}</div> : null}
-      <OrdersTable orders={visibleRows} loading={state.loading && rows.length === 0} onSelectOrder={onSelectOrder} layout={layout} sheetSize={sheetSize} dateConfig={dateConfig} pricingRules={pricingRules} />
+      <OrdersTable
+        orders={visibleRows}
+        loading={state.loading && rows.length === 0}
+        onSelectOrder={onSelectOrder}
+        onStatusChange={updateItemWorkflowStatus}
+        savingStatusIds={savingStatusIds}
+        layout={layout}
+        statusConfig={layout.status}
+        sheetSize={sheetSize}
+        dateConfig={dateConfig}
+        pricingRules={pricingRules}
+        searchActive={!!search.trim()}
+        searchableColumnKeys={searchableColumnKeys}
+        excludedSearchColumns={searchExcludedColumns}
+        onExcludeSearchColumn={excludeSearchColumn}
+      />
     </section>
   );
 }

@@ -13,6 +13,7 @@ import {
   saveFieldConfig,
   saveShopConfig,
   savePriceList,
+  savePrintConfig,
   saveStatusConfig,
 } from "./shared/utils/fieldConfig.js";
 import "./features/parser/styles.css";
@@ -87,6 +88,12 @@ function applySharedOrderFieldLayout(layout) {
 function applySharedPricingRules(pricing) {
   if (Array.isArray(pricing?.rules) && (pricing.updated_at || pricing.rules.length > 0)) {
     savePriceList(pricing.rules);
+  }
+}
+
+function applySharedPrintConfig(config) {
+  if (config?.updated_at) {
+    savePrintConfig(config);
   }
 }
 
@@ -294,6 +301,7 @@ function Shell() {
   const [orderCounts, setOrderCounts] = React.useState({ active: 0, completed: 0 });
   const [settingsTab, setSettingsTab] = React.useState("account");
   const [supportReportRequest, setSupportReportRequest] = React.useState(null);
+  const [workspaceOpenKey, setWorkspaceOpenKey] = React.useState(0);
 
   React.useEffect(() => {
     function handleHashChange() {
@@ -335,6 +343,12 @@ function Shell() {
     window.parserApp?.getPricingRules?.().then((result) => {
       if (result?.ok && result.pricing) {
         applySharedPricingRules(result.pricing);
+      }
+    }).catch(() => {});
+
+    window.parserApp?.getPrintConfig?.().then((result) => {
+      if (result?.ok && result.config) {
+        applySharedPrintConfig(result.config);
       }
     }).catch(() => {});
 
@@ -417,6 +431,7 @@ function Shell() {
   }
 
   function goToWorkspace() {
+    setWorkspaceOpenKey((key) => key + 1);
     navigate("/workspace");
   }
 
@@ -479,6 +494,7 @@ function Shell() {
           onOrders={goToOrders}
           activeCount={orderCounts.active}
           completedCount={orderCounts.completed}
+          openKey={workspaceOpenKey}
         />
       )}
 

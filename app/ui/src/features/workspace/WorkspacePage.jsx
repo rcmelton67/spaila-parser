@@ -1839,6 +1839,7 @@ export default function WorkspacePage({
   onOrders,
   activeCount = 0,
   completedCount = 0,
+  openKey = 0,
 }) {
   const [workspaceState, setWorkspaceState] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -1889,6 +1890,12 @@ export default function WorkspacePage({
   const lastConversationKeyRef = React.useRef("");
   const lastMessageCountRef = React.useRef(0);
   const hasRestoredSelectionRef = React.useRef(false);
+
+  React.useEffect(() => {
+    setMode("inbox");
+    setSelectedSentId("");
+    setSearchSelectedSource("inbox");
+  }, [openKey]);
 
   const loadWorkspace = React.useCallback(async () => {
     setLoading(true);
@@ -2479,7 +2486,6 @@ export default function WorkspacePage({
     hasRestoredSelectionRef.current = true;
     const savedThreadId = getLocalStorageValue(WORKSPACE_SELECTED_THREAD_ID_KEY);
     const savedEmailId = getLocalStorageValue(WORKSPACE_SELECTED_EMAIL_ID_KEY);
-    const savedSentId = getLocalStorageValue(WORKSPACE_SELECTED_SENT_ID_KEY);
 
     if (savedThreadId && threadItems.some((thread) => thread.thread_id === savedThreadId)) {
       setSelectedThreadId(savedThreadId);
@@ -2491,11 +2497,6 @@ export default function WorkspacePage({
       setSelectedThreadId("");
       setSelectedSentId("");
       setMode("inbox");
-    } else if (savedSentId && sentItems.some((item) => getMessageId(item) === savedSentId)) {
-      setSelectedSentId(savedSentId);
-      setSelectedEmailId("");
-      setSelectedThreadId("");
-      setMode("sent");
     } else {
       return;
     }

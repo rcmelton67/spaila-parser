@@ -3918,11 +3918,24 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
         onColumnOrderChange?.(layout.order);
       }
       if (layout.status && typeof layout.status === "object") {
-        setLocalStatusConfig((current) => ({
-          ...current,
-          enabled: layout.status.enabled !== false,
-          columnLabel: layout.status.columnLabel || current.columnLabel || "Status",
-        }));
+        setLocalStatusConfig((current) => {
+          const incomingStates = Array.isArray(layout.status.states) ? layout.status.states : null;
+          const next = {
+            ...current,
+            enabled: layout.status.enabled !== false,
+            columnLabel: layout.status.columnLabel || current.columnLabel || "Status",
+            states:
+              incomingStates && incomingStates.length
+                ? incomingStates.map((s, i) => ({
+                    key: String(s?.key || "").trim() || `state-${i + 1}`,
+                    label: String(s?.label ?? "").trim() || "State",
+                    color: typeof s?.color === "string" && s.color.startsWith("#") ? s.color : "#f3f4f6",
+                  }))
+                : current.states,
+          };
+          saveStatusConfig(next);
+          return next;
+        });
       }
       const nextViewPatch = {};
       if (layout.search_defaults && typeof layout.search_defaults === "object") {
@@ -3961,6 +3974,12 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
       if (!result?.ok || !Array.isArray(rules) || (!pricing?.updated_at && rules.length === 0)) return;
       setLocalPriceList(rules);
       savePriceList(rules);
+    }).catch(() => {});
+    window.parserApp?.getPrintConfig?.().then((result) => {
+      const config = result?.config;
+      if (!result?.ok || !config?.updated_at) return;
+      setLocalPrintConfig(config);
+      savePrintConfig(config);
     }).catch(() => {});
   }, []); // Import shared layout once when Settings opens; do not overwrite active edits.
 
@@ -4003,6 +4022,10 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
       }).catch(() => {});
     }
     savePrintConfig(localPrintConfig);
+    window.parserApp?.updatePrintConfig?.({
+      ...localPrintConfig,
+      layout_version: 1,
+    }).catch(() => {});
     saveFieldConfig(fields);
     saveColumnOrder(localOrder);
     const widthDefaults = Object.fromEntries(fields.map((field) => [field.key, Number(field.defaultWidth || 120)]));
@@ -4050,6 +4073,11 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
       status: {
         enabled: localStatusConfig?.enabled !== false,
         columnLabel: localStatusConfig?.columnLabel || "Status",
+        states: (localStatusConfig?.states || []).map((s) => ({
+          key: String(s.key || "").trim() || Math.random().toString(36).slice(2),
+          label: String(s.label ?? "").trim() || "State",
+          color: typeof s.color === "string" && s.color.startsWith("#") ? s.color : "#f3f4f6",
+        })),
       },
       sort_defaults: {
         field: localViewConfig?.defaultSort?.field || "order_date",

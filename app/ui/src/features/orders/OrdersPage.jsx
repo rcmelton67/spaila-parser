@@ -17,6 +17,7 @@ import { CSS } from "@dnd-kit/utilities";
 import EditOrderModal from "./EditOrderModal.jsx";
 import AppHeader from "../../shared/components/AppHeader.jsx";
 import AttachmentPreviewCard from "../../shared/components/AttachmentPreviewCard.jsx";
+import { normalizedSearchMatches } from "../../../../../shared/search/dateSearch.mjs";
 import {
   loadFieldConfig,
   loadPriceList,
@@ -24,6 +25,7 @@ import {
   PRICE_TYPE_FIELD_KEY,
   contrastColor,
   loadStatusConfig,
+  saveStatusConfig,
   loadOrderStatuses,
   setOrderStatus,
   loadDateConfig,
@@ -45,6 +47,7 @@ const API = "http://127.0.0.1:8055";
 const EMPTY_TRAILING_ROW_COUNT = 6;
 const MAX_TWO_UP_CARD_FIELDS = 12;
 const WIDTH_PROFILE_TOLERANCE = 0.02;
+const SHARED_ORDER_REFRESH_INTERVAL_MS = 20 * 1000;
 
 function buildColumnWidthProfile(columns = [], widths = {}) {
   const visibleColumns = columns
@@ -748,7 +751,7 @@ function getRowSortValue(row, field, { statusConfig, orderStatuses }) {
 
   switch (field) {
     case "status": {
-      const statusKey = orderStatuses[String(row.id)] ?? "";
+      const statusKey = getWorkflowStatusKey(row, orderStatuses);
       const statusLabel = statusConfig.states.find((state) => state.key === statusKey)?.label || "";
       return statusLabel ? statusLabel.toLowerCase() : null;
     }
@@ -770,6 +773,10 @@ function getRowSortValue(row, field, { statusConfig, orderStatuses }) {
       return String(value).toLowerCase();
     }
   }
+}
+
+function getWorkflowStatusKey(row, orderStatuses = {}) {
+  return String(row?.item_status || orderStatuses[String(row?.id)] || "").trim();
 }
 
 function escapeHtml(value) {
@@ -909,6 +916,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const [sessionDirty, setSessionDirty] = React.useState(false);
   const mountedRef = React.useRef(false);
   const directOpenActiveRef = React.useRef(false);
+  const ordersRefreshInFlightRef = React.useRef(null);
   React.useEffect(() => {
     if (!mountedRef.current) { mountedRef.current = true; return; }
     // refreshKey increments when a new order is imported
@@ -1294,20 +1302,39 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
             direction: layout.sort_defaults.direction === "asc" ? "asc" : "desc",
           };
         }
-        if (!Object.keys(patch).length) return;
-        const current = loadViewConfig();
-        saveViewConfig({
-          ...current,
-          ...patch,
-          searchableFields: {
-            ...(current.searchableFields || {}),
-            ...(patch.searchableFields || {}),
-          },
-          defaultSort: {
-            ...(current.defaultSort || {}),
-            ...(patch.defaultSort || {}),
-          },
-        });
+        if (Object.keys(patch).length) {
+          const current = loadViewConfig();
+          saveViewConfig({
+            ...current,
+            ...patch,
+            searchableFields: {
+              ...(current.searchableFields || {}),
+              ...(patch.searchableFields || {}),
+            },
+            defaultSort: {
+              ...(current.defaultSort || {}),
+              ...(patch.defaultSort || {}),
+            },
+          });
+        }
+        if (layout.status && typeof layout.status === "object") {
+          const currentSc = loadStatusConfig();
+          const incomingStates = Array.isArray(layout.status.states) ? layout.status.states : null;
+          const nextStatus = {
+            ...currentSc,
+            enabled: layout.status.enabled !== false,
+            columnLabel: layout.status.columnLabel || currentSc.columnLabel || "Status",
+            states:
+              incomingStates && incomingStates.length
+                ? incomingStates.map((s, i) => ({
+                    key: String(s?.key || "").trim() || `state-${i + 1}`,
+                    label: String(s?.label ?? "").trim() || "State",
+                    color: typeof s?.color === "string" && s.color.startsWith("#") ? s.color : "#f3f4f6",
+                  }))
+                : currentSc.states,
+          };
+          saveStatusConfig(nextStatus);
+        }
       } catch (_) {}
     }
     syncSharedViewConfig();
@@ -1326,10 +1353,23 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     setActiveSort(normalizeSortConfig(viewConfig.defaultSort));
   }, [viewConfig.defaultSort?.field, viewConfig.defaultSort?.direction]);
 
-  function handleSetStatus(orderId, statusKey) {
-    setOrderStatus(orderId, statusKey);
+  async function handleSetStatus(itemId, statusKey) {
+    const nextStatus = statusKey || null;
+    setRows((current) => current.map((row) => (
+      String(row.id) === String(itemId) ? { ...row, item_status: nextStatus || "" } : row
+    )));
+    setOrderStatus(itemId, nextStatus);
     setOrderStatuses(loadOrderStatuses());
     setSessionDirty(true);
+    try {
+      await fetch(`${API}/items/${itemId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_status: nextStatus }),
+      });
+    } catch (_) {
+      // Keep the local optimistic value; the next refresh will reconcile from the shared backend.
+    }
   }
 
   function updateColumnOrder(next) {
@@ -1439,7 +1479,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   const getDisplayedCellValue = React.useCallback((row, columnKey) => {
     if (columnKey === "status") {
-      const currentKey = orderStatuses[String(row.id)] ?? "";
+      const currentKey = getWorkflowStatusKey(row, orderStatuses);
       return statusConfig.states.find((s) => s.key === currentKey)?.label || "";
     }
 
@@ -1508,7 +1548,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     const text = getDisplayedCellValue(row, columnKey) || "—";
 
     if (columnKey === "status") {
-      const currentKey = orderStatuses[String(row.id)] ?? "";
+      const currentKey = getWorkflowStatusKey(row, orderStatuses);
       const currentState = statusConfig.states.find((s) => s.key === currentKey);
       const bg = currentState?.color || null;
       return {
@@ -1931,41 +1971,91 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     window.addEventListener("mouseup", onUp);
   }
 
-  async function loadOrders({ retries = 5, delayMs = 600 } = {}) {
-    setLoading(true);
-    setError("");
+  async function loadOrders({ retries = 5, delayMs = 600, background = false, preserveSelection = false } = {}) {
+    if (ordersRefreshInFlightRef.current) {
+      return ordersRefreshInFlightRef.current;
+    }
 
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        const res  = await fetch(`${API}/orders/list`);
-        const data = await res.json();
+    const refreshPromise = (async () => {
+      if (!background) {
+        setLoading(true);
+        setError("");
+      }
 
-        // Compute item count per order so OrderInfoCell can show "N items".
-        const countByOrder = {};
-        for (const r of data) {
-          countByOrder[r.order_id] = (countByOrder[r.order_id] || 0) + 1;
-        }
-        // Attach _item_count to every row so order_info can access it.
-        const enriched = data.map((r) => ({
-          ...r,
-          _item_count: countByOrder[r.order_id] || 1,
-        }));
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const res  = await fetch(`${API}/orders/list`);
+          const data = await res.json();
 
-        setRows(enriched);
-        setSelectedIds(new Set());
-        setLoading(false);
-        return; // success — stop retrying
-      } catch (err) {
-        if (attempt < retries) {
-          // Backend not ready yet — wait and retry silently.
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        } else {
-          // All attempts exhausted — surface the error with a Retry button.
-          setError(`Could not reach backend after ${retries} attempts. (${err.message})`);
+          // Compute item count per order so OrderInfoCell can show "N items".
+          const countByOrder = {};
+          for (const r of data) {
+            countByOrder[r.order_id] = (countByOrder[r.order_id] || 0) + 1;
+          }
+          const legacyStatuses = loadOrderStatuses();
+          const legacyMigrations = [];
+          // Attach _item_count to every row so order_info can access it.
+          const enriched = data.map((r) => ({
+            ...r,
+            item_status: r.item_status || legacyStatuses[String(r.id)] || "",
+            _item_count: countByOrder[r.order_id] || 1,
+          })).map((r) => {
+            const legacyStatus = legacyStatuses[String(r.id)];
+            if (!data.find((source) => source.id === r.id)?.item_status && legacyStatus) {
+              legacyMigrations.push({ id: r.id, status: legacyStatus });
+            }
+            return r;
+          });
+          if (legacyMigrations.length) {
+            Promise.allSettled(legacyMigrations.map((item) => (
+              fetch(`${API}/items/${item.id}/status`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ item_status: item.status }),
+              })
+            ))).catch(() => {});
+          }
+
+          setRows(enriched);
+          if (preserveSelection) {
+            const refreshedIds = new Set(enriched.map((row) => row.id));
+            setSelectedIds((current) => new Set([...current].filter((id) => refreshedIds.has(id))));
+          } else {
+            setSelectedIds(new Set());
+          }
           setLoading(false);
+          if (!background) setError("");
+          return; // success — stop retrying
+        } catch (err) {
+          if (attempt < retries) {
+            // Backend not ready yet — wait and retry silently.
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          } else if (!background) {
+            // All attempts exhausted — surface the error with a Retry button.
+            setError(`Could not reach backend after ${retries} attempts. (${err.message})`);
+            setLoading(false);
+          }
         }
       }
+    })();
+
+    ordersRefreshInFlightRef.current = refreshPromise;
+    try {
+      return await refreshPromise;
+    } finally {
+      if (ordersRefreshInFlightRef.current === refreshPromise) {
+        ordersRefreshInFlightRef.current = null;
+      }
     }
+  }
+
+  function refreshOrdersFromSharedState() {
+    return loadOrders({
+      retries: 1,
+      delayMs: 300,
+      background: true,
+      preserveSelection: true,
+    });
   }
 
   const tryAutoArchive = React.useCallback(async () => {
@@ -2000,6 +2090,34 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     })();
     return () => { cancelled = true; };
   }, [refreshKey, tryAutoArchive]);
+
+  React.useEffect(() => {
+    if (isActive === false) return undefined;
+    let lastRefreshAt = 0;
+    function refreshIfReady() {
+      const now = Date.now();
+      if (now - lastRefreshAt < 1000) return;
+      lastRefreshAt = now;
+      refreshOrdersFromSharedState();
+    }
+    function onVisibilityChange() {
+      if (!document.hidden) refreshIfReady();
+    }
+    window.addEventListener("focus", refreshIfReady);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshIfReady);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [isActive]);
+
+  React.useEffect(() => {
+    if (isActive === false) return undefined;
+    const id = window.setInterval(() => {
+      refreshOrdersFromSharedState();
+    }, SHARED_ORDER_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [isActive]);
 
   React.useEffect(() => {
     const id = window.setInterval(async () => {
@@ -2053,8 +2171,8 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       return base;
     }
 
-    return base.filter((row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery)));
-  }, [activeTab, getRowSearchValues, safeOrders, searchQuery, searchScope]);
+    return base.filter((row) => normalizedSearchMatches(normalizedQuery, getRowSearchValues(row), viewConfig.searchMode));
+  }, [activeTab, getRowSearchValues, safeOrders, searchQuery, searchScope, viewConfig.searchMode]);
 
   const displayOrders = React.useMemo(() => {
     const indexedRows = filteredOrders.map((row, index) => ({ row, index }));
@@ -2997,7 +3115,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
                         // ── Status cell ──────────────────────────────────────
                         if (c.key === "status") {
-                          const currentKey   = orderStatuses[String(r.id)] ?? "";
+                          const currentKey   = getWorkflowStatusKey(r, orderStatuses);
                           const currentState = statusConfig.states.find((s) => s.key === currentKey);
                           const pillBg  = currentState?.color || null;
                           const pillTc  = pillBg ? contrastColor(pillBg) : "#6b7280";
