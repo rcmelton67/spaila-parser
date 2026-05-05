@@ -558,6 +558,24 @@ def _score_order_match(
     }
 
 
+def _looks_like_new_order_or_payment_notice(subject: str, body_text: str = "") -> bool:
+    if re.match(r"^\s*(re|fw|fwd)\s*:", str(subject or ""), flags=re.IGNORECASE):
+        return False
+    text = f"{subject}\n{body_text[:2000]}".lower()
+    patterns = (
+        "new order",
+        "you've got a new order",
+        "you have a new order",
+        "you made a sale",
+        "new sale",
+        "order received",
+        "merchant email receipt",
+        "payment receipt",
+        "transaction receipt",
+    )
+    return any(pattern in text for pattern in patterns)
+
+
 def _find_best_order_match(
     conn: sqlite3.Connection,
     *,
@@ -567,6 +585,7 @@ def _find_best_order_match(
     subject: str,
     header_refs: set[str],
     timestamp: str,
+    is_new_order_or_payment_notice: bool = False,
 ) -> tuple[str, str, str, int]:
     scored = [
         _score_order_match(
@@ -590,6 +609,12 @@ def _find_best_order_match(
         return "", "", f"low_confidence:{best['reason']}", int(best["confidence"])
     if second and best["score"] - second["score"] < 8 and "order_number" not in best["reason"] and "thread_header" not in best["reason"]:
         return "", "", f"ambiguous_order_match:{best['reason']}", int(best["confidence"])
+    if (
+        is_new_order_or_payment_notice
+        and "order_number" in best["reason"]
+        and "thread_header" not in best["reason"]
+    ):
+        return "", "", f"new_order_notice_blocked_existing_order:{best['reason']}", int(best["confidence"])
     order = best["order"]
     return str(order.get("id") or ""), str(order.get("order_number") or ""), str(best["reason"]), int(best["confidence"])
 
@@ -721,6 +746,7 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
             subject=subject,
             header_refs=header_refs,
             timestamp=timestamp,
+            is_new_order_or_payment_notice=_looks_like_new_order_or_payment_notice(subject, body_text),
         )
         print("[ORDER MATCH]", {
             "source": "email",

@@ -17,6 +17,8 @@ import {
   loadDocumentsConfig, saveDocumentsConfig,
   loadPrintConfig, savePrintConfig,
 } from "../shared/utils/fieldConfig.js";
+import { desktopDocumentsToShared, sharedDocumentsToDesktop } from "../../../../shared/models/documentsConfig.mjs";
+import { API_ENDPOINTS } from "../../../../shared/api/endpoints.mjs";
 import AppHeader from "../shared/components/AppHeader.jsx";
 import SupportPage, { openSupportReport } from "./support/SupportPage.jsx";
 
@@ -60,6 +62,51 @@ function localFileSrc(filePath) {
 }
 
 const SHARED_DATE_CONFIG_URL = "http://127.0.0.1:8055/account/date-config";
+const ACCOUNT_API_BASE = "http://127.0.0.1:8055";
+
+function humanizeAccountApiDetail(detail, fallback = "Account request failed.") {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        const field = Array.isArray(item?.loc) ? item.loc[item.loc.length - 1] : "";
+        const message = String(item?.msg || "").trim();
+        if (field === "password" && /at least 8|minimum|short/i.test(message)) {
+          return "Enter a password with at least 8 characters.";
+        }
+        if (field === "email") return "Enter a valid email address.";
+        return message;
+      })
+      .filter(Boolean);
+    if (messages.length) return [...new Set(messages)].join(" ");
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || detail.error || detail.detail || fallback;
+  }
+  return fallback;
+}
+
+async function accountRequest(endpoint, options = {}) {
+  const response = await fetch(`${ACCOUNT_API_BASE}${endpoint}`, {
+    credentials: "include",
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const detail = payload?.detail || payload?.message || payload?.error;
+    throw new Error(humanizeAccountApiDetail(detail, `Account request failed (${response.status})`));
+  }
+  return payload;
+}
 
 async function loadSharedDateConfig() {
   const response = await fetch(SHARED_DATE_CONFIG_URL);
@@ -576,7 +623,7 @@ function ParserFieldTable({ fields, localParserOrder, setLabel, toggleVisible, s
                 <div style={{ textAlign: "center" }}>
                   <button
                     onClick={() => toggleVisible(key, "visibleInParser")}
-                    title={isVisible ? "Hide in parser" : "Show in parser"}
+                    title={isVisible ? "Hide in order processor" : "Show in order processor"}
                     style={{
                       background: "none", border: "none", cursor: "pointer",
                       color: isVisible ? "#2563eb" : "#9ca3af",
@@ -2459,21 +2506,65 @@ function BackgroundAutomationSection() {
   );
 }
 
-function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentation }) {
+function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentation, onSaveProfile, saveFeedback, onPickLogo }) {
+  const [session, setSession] = React.useState(null);
+  const [authForm, setAuthForm] = React.useState({
+    email: shopConfig?.accountEmail ?? shopConfig?.smtpEmailAddress ?? shopConfig?.imapUsername ?? "",
+    password: "",
+    name: shopConfig?.accountUserName ?? shopConfig?.sender_name ?? "",
+    shop_name: shopConfig?.shopName ?? "",
+  });
+  const [authState, setAuthState] = React.useState({ loading: false, error: "", message: "" });
+
   // On mount, sync shop_name from the shared account profile (written by webapp).
   // Calls saveShopConfig so the spaila:shopconfig event fires, updating titlebar,
   // workspace identity panel, and any other UI that reads from localStorage.
   React.useEffect(() => {
     window.parserApp?.getAccountProfile?.().then((result) => {
-      if (!result?.ok || !result.profile?.shop_name) return;
-      const incoming = result.profile.shop_name;
+      if (!result?.ok || !result.profile) return;
       const current = loadShopConfig();
-      if ((current.shopName || "") === incoming) return;
-      const merged = { ...current, shopName: incoming };
+      const incomingShopName = result.profile.shop_name || "";
+      const incomingLogoPath = result.profile.shop_logo_path || "";
+      const merged = {
+        ...current,
+        shopName: incomingShopName || current.shopName || "",
+        shopLogoPath: incomingLogoPath || current.shopLogoPath || "",
+        shopLogoName: incomingLogoPath === "business_asset:shop_logo" ? "Shared shop logo" : current.shopLogoName || "",
+        accountUserName: result.profile.owner_name || current.accountUserName || "",
+        accountEmail: result.profile.account_email || current.accountEmail || "",
+        subscriptionPlan: result.profile.plan_code || current.subscriptionPlan || "",
+        subscriptionStatus: result.profile.subscription_state || current.subscriptionStatus || "",
+        trialStatus: result.profile.subscription_state || current.trialStatus || "",
+        trialEndsAt: result.profile.trial_ends_at || current.trialEndsAt || "",
+        billingStatus: result.profile.billing_status || current.billingStatus || "",
+        subscriptionRenewalDate: result.profile.subscription_current_period_end || current.subscriptionRenewalDate || "",
+        accountCreatedDate: result.profile.created_at || current.accountCreatedDate || "",
+      };
       saveShopConfig(merged);            // persists + fires spaila:shopconfig event
-      setShopConfig?.((prev) => ({ ...prev, shopName: incoming }));
+      setShopConfig?.((prev) => ({ ...prev, ...merged }));
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  React.useEffect(() => {
+    let cancelled = false;
+    accountRequest(API_ENDPOINTS.accountSession)
+      .then((payload) => {
+        if (!cancelled) setSession(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setSession(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  React.useEffect(() => {
+    setAuthForm((current) => ({
+      ...current,
+      email: current.email || shopConfig?.accountEmail || shopConfig?.smtpEmailAddress || shopConfig?.imapUsername || "",
+      name: current.name || shopConfig?.accountUserName || shopConfig?.sender_name || "",
+      shop_name: current.shop_name || shopConfig?.shopName || "",
+    }));
+  }, [shopConfig]);
 
   const cardStyle = {
     border: "1px solid #e5e7eb",
@@ -2490,81 +2581,300 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
   const mutedValueStyle = { fontSize: 12, color: "#64748b", lineHeight: 1.5 };
   const primaryButtonStyle = { padding: "8px 13px", border: "none", borderRadius: 999, background: "#2563eb", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 800 };
   const secondaryButtonStyle = { padding: "8px 13px", border: "1px solid #cbd5e1", borderRadius: 999, background: "#fff", color: "#334155", cursor: "pointer", fontSize: 12, fontWeight: 800 };
-  const disabledButtonStyle = { ...secondaryButtonStyle, color: "#94a3b8", cursor: "default", opacity: 0.72 };
   const dangerLinkStyle = { border: "none", background: "transparent", color: "#b91c1c", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 800, textDecoration: "underline" };
 
   const accountName = shopConfig?.accountUserName ?? shopConfig?.sender_name ?? "";
   const accountEmail = shopConfig?.accountEmail ?? shopConfig?.smtpEmailAddress ?? shopConfig?.imapUsername ?? "";
-  const currentPlan = shopConfig?.subscriptionPlan || "Free Trial";
-  const trialStatus = shopConfig?.trialStatus || "Not connected";
   const subscriptionStatus = shopConfig?.subscriptionStatus || "Setup pending";
-  const renewalDate = shopConfig?.subscriptionRenewalDate || "Set after subscription activation";
+  const renewalDate = shopConfig?.subscriptionRenewalDate || "";
   const billingStatus = shopConfig?.billingStatus || "Billing portal pending";
-  const accountCreated = shopConfig?.accountCreatedDate || "Available after account sign-in";
-  const accountLogoSrc = localFileSrc(shopConfig?.shopLogoPath);
+  const accountCreatedDate = shopConfig?.accountCreatedDate ? new Date(shopConfig.accountCreatedDate) : null;
+  const accountCreated = accountCreatedDate && !Number.isNaN(accountCreatedDate.getTime())
+    ? accountCreatedDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+    : "Available after account sign-in";
+  const accountLogoSrc = shopConfig?.shopLogoPath === "business_asset:shop_logo"
+    ? `${ACCOUNT_API_BASE}${API_ENDPOINTS.accountLogo}?v=${encodeURIComponent(shopConfig?.shopLogoPath || "")}`
+    : localFileSrc(shopConfig?.shopLogoPath);
 
   function setShopField(key, value) {
     setShopConfig?.((prev) => ({ ...prev, [key]: value }));
   }
 
-  const statusPill = (label, tone = "blue") => {
-    const tones = {
-      blue: { bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
-      green: { bg: "#ecfdf5", border: "#bbf7d0", color: "#047857" },
-      amber: { bg: "#fffbeb", border: "#fde68a", color: "#92400e" },
-      slate: { bg: "#f8fafc", border: "#e2e8f0", color: "#475569" },
-    };
-    const next = tones[tone] || tones.blue;
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", padding: "4px 9px", borderRadius: 999, border: `1px solid ${next.border}`, background: next.bg, color: next.color, fontSize: 11, fontWeight: 900 }}>
-        {label}
-      </span>
-    );
-  };
+  function mergeAccountProfile(profile) {
+    if (!profile || typeof profile !== "object") return;
+    setShopConfig?.((prev) => ({
+      ...prev,
+      shopName: profile.shop_name || prev?.shopName || "",
+      accountUserName: profile.owner_name || prev?.accountUserName || "",
+      accountEmail: profile.account_email || prev?.accountEmail || "",
+      subscriptionPlan: profile.plan_code || prev?.subscriptionPlan || "",
+      subscriptionStatus: profile.subscription_state || prev?.subscriptionStatus || "",
+      trialStatus: profile.subscription_state || prev?.trialStatus || "",
+      billingStatus: profile.billing_status || prev?.billingStatus || "",
+      trialEndsAt: profile.trial_ends_at || prev?.trialEndsAt || "",
+      subscriptionRenewalDate: profile.subscription_current_period_end || prev?.subscriptionRenewalDate || "",
+      accountCreatedDate: profile.created_at || prev?.accountCreatedDate || "",
+      shopLogoPath: profile.shop_logo_path || prev?.shopLogoPath || "",
+      shopLogoName: profile.shop_logo_path === "business_asset:shop_logo" ? "Shared shop logo" : prev?.shopLogoName || "",
+    }));
+  }
 
-  const plannedPill = () => statusPill("Planned", "slate");
+  function validateAuthForm(mode) {
+    const email = String(authForm?.email || "").trim();
+    const password = String(authForm?.password || "");
+    if (!email || !email.includes("@")) {
+      return "Enter a valid email address.";
+    }
+    if (!password) {
+      return mode === "signup"
+        ? "Enter a password with at least 8 characters to start your 7-day trial."
+        : "Enter your password to log in.";
+    }
+    if (mode === "signup" && password.length < 8) {
+      return "Enter a password with at least 8 characters to start your 7-day trial.";
+    }
+    return "";
+  }
+
+  async function submitAuth(event, mode = "login") {
+    event.preventDefault();
+    const validationError = validateAuthForm(mode);
+    if (validationError) {
+      setAuthState({ loading: false, error: validationError, message: "" });
+      return;
+    }
+    setAuthState({ loading: true, error: "", message: "" });
+    try {
+      const endpoint = mode === "signup" ? API_ENDPOINTS.authSignup : API_ENDPOINTS.authLogin;
+      const payload = mode === "signup"
+        ? {
+            ...authForm,
+            email: authForm.email.trim(),
+            name: accountName || authForm.name,
+            shop_name: shopConfig?.shopName || authForm.shop_name,
+          }
+        : { email: authForm.email.trim(), password: authForm.password };
+      const result = await accountRequest(endpoint, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setSession(result);
+      mergeAccountProfile(result?.profile);
+      setAuthState({ loading: false, error: "", message: mode === "signup" ? "Trial started." : "Signed in." });
+    } catch (error) {
+      setAuthState({ loading: false, error: error?.message || "Could not authenticate.", message: "" });
+    }
+  }
+
+  async function logout() {
+    setAuthState({ loading: true, error: "", message: "" });
+    try {
+      await accountRequest(API_ENDPOINTS.authLogout, { method: "POST", body: JSON.stringify({}) });
+      const result = await accountRequest(API_ENDPOINTS.accountSession);
+      setSession(result);
+      setAuthState({ loading: false, error: "", message: "Signed out." });
+    } catch (error) {
+      setAuthState({ loading: false, error: error?.message || "Could not sign out.", message: "" });
+    }
+  }
+
+  async function openAccountUrl(url) {
+    const targetUrl = String(url || "").trim();
+    if (!targetUrl) {
+      throw new Error("No URL was returned.");
+    }
+    if (window.electronAPI?.openExternal) {
+      const result = await window.electronAPI.openExternal(targetUrl);
+      if (result?.ok === false) {
+        throw new Error(result.error || "Could not open external browser.");
+      }
+      return "external";
+    }
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+    return "embedded";
+  }
+
+  async function startCheckout() {
+    setAuthState({ loading: true, error: "", message: "Opening Stripe Checkout..." });
+    try {
+      const result = await accountRequest(API_ENDPOINTS.billingCheckout, {
+        method: "POST",
+        body: JSON.stringify({
+          success_url: "http://127.0.0.1:5173/#/settings",
+          cancel_url: "http://127.0.0.1:5173/#/settings",
+        }),
+      });
+      if (result.url) {
+        const launchTarget = await openAccountUrl(result.url);
+        setAuthState({
+          loading: false,
+          error: "",
+          message: launchTarget === "external" ? "Stripe Checkout opened in your browser." : "Stripe Checkout opened in a secure payment window.",
+        });
+        return;
+      }
+      setAuthState({ loading: false, error: "", message: result.message || "Billing setup is pending Stripe configuration." });
+    } catch (error) {
+      setAuthState({ loading: false, error: error?.message || "Could not start checkout.", message: "" });
+    }
+  }
+
+  async function openBillingPortal() {
+    setAuthState({ loading: true, error: "", message: "Opening Stripe Billing Portal..." });
+    try {
+      const result = await accountRequest(API_ENDPOINTS.billingPortal, {
+        method: "POST",
+        body: JSON.stringify({ return_url: "http://127.0.0.1:5173/#/settings" }),
+      });
+      if (result.url) {
+        const launchTarget = await openAccountUrl(result.url);
+        setAuthState({
+          loading: false,
+          error: "",
+          message: launchTarget === "external" ? "Stripe Billing Portal opened in your browser." : "Stripe Billing Portal opened in a secure payment window.",
+        });
+        return;
+      }
+      setAuthState({ loading: false, error: "", message: result.message || "Billing portal is pending Stripe configuration." });
+    } catch (error) {
+      setAuthState({ loading: false, error: error?.message || "Could not open billing.", message: "" });
+    }
+  }
+
+  async function openPasswordReset() {
+    const query = authForm.email ? `?email=${encodeURIComponent(authForm.email)}` : "";
+    try {
+      await openAccountUrl(`http://127.0.0.1:5173/#/reset-password${query}`);
+    } catch (error) {
+      setAuthState({ loading: false, error: error?.message || "Could not open password reset.", message: "" });
+    }
+  }
+
+  function formatAccountCode(value, fallback = "") {
+    const raw = String(value || "").trim();
+    const normalized = raw.toLowerCase();
+    if (!raw) return fallback;
+    if (normalized === "trial" || normalized === "trialing") return "Free Trial";
+    if (normalized === "trial_expired") return "Trial Expired";
+    if (normalized === "active" || normalized === "spaila_one") return "Active Subscription";
+    if (normalized === "local_only" || normalized === "local_first") return "Local Mode";
+    if (normalized === "payment_failed" || normalized === "billing_issue" || normalized === "past_due" || normalized === "unpaid") return "Billing Issue";
+    if (normalized === "saas") return "Setup Pending";
+    if (normalized === "canceled") return "Trial Expired";
+    if (normalized === "not_configured" || normalized === "not connected") return "Setup Pending";
+    return raw.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function formatCountdown(value) {
+    const target = value ? new Date(value) : null;
+    if (!target || Number.isNaN(target.getTime())) return "";
+    const diffMs = target.getTime() - Date.now();
+    if (diffMs <= 0) return "Expired";
+    const days = Math.ceil(diffMs / 86400000);
+    return `${days} day${days === 1 ? "" : "s"} remaining`;
+  }
+
+  function formatBillingDate(value, fallback = "Not set") {
+    const target = value ? new Date(value) : null;
+    if (!target || Number.isNaN(target.getTime())) return fallback;
+    return target.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  }
+
+  const displaySubscriptionStatus = formatAccountCode(subscriptionStatus, "Local Mode");
+  const heroSubscriptionLabel = session?.authenticated ? displaySubscriptionStatus : "Local Mode";
+  const displayBillingStatus = formatAccountCode(billingStatus, "Setup Pending");
+  const trialCountdown = formatCountdown(shopConfig?.trialEndsAt || shopConfig?.trialEnd || shopConfig?.trial_ends_at || "");
+  const hasBillingIssue = displayBillingStatus === "Billing Issue";
+  const normalizedBillingState = String(heroSubscriptionLabel || "").toLowerCase();
+  const isLocalBilling = normalizedBillingState === "local mode" || !session?.authenticated;
+  const isTrialBilling = normalizedBillingState === "free trial";
+  const isActiveBilling = normalizedBillingState === "active subscription";
+  const isExpiredBilling = normalizedBillingState === "trial expired";
+  const billingPeriodValue = isTrialBilling
+    ? (trialCountdown || formatBillingDate(shopConfig?.trialEndsAt || shopConfig?.trialEnd || shopConfig?.trial_ends_at, "Trial not started"))
+    : isActiveBilling
+      ? formatBillingDate(renewalDate, "Renewal date syncing")
+      : hasBillingIssue
+        ? formatBillingDate(renewalDate || shopConfig?.trialEndsAt || shopConfig?.trialEnd || shopConfig?.trial_ends_at, "Needs attention")
+        : isExpiredBilling
+          ? "Restricted Mode"
+          : "No cloud billing connected";
+  const billingPeriodLabel = isTrialBilling
+    ? "Expires"
+    : isActiveBilling
+      ? "Renews"
+      : "Access";
+  const billingNotice = hasBillingIssue
+    ? "Billing Issue Detected"
+    : isExpiredBilling
+      ? "Restricted Mode"
+      : isTrialBilling && trialCountdown && trialCountdown !== "Expired"
+        ? `Trial ends in ${trialCountdown.toLowerCase()}`
+        : "";
+  const showUpgradeAction = !isLocalBilling && (!isActiveBilling || isTrialBilling || isExpiredBilling || hasBillingIssue);
+  const showBillingActions = !isLocalBilling && (isActiveBilling || isTrialBilling);
 
   return (
     <div style={{ maxWidth: 980 }}>
       <div style={{ border: "1px solid #dbeafe", borderRadius: 18, background: "linear-gradient(135deg, #eff6ff 0%, #ffffff 48%, #f8fafc 100%)", padding: "22px 24px", marginBottom: 18, boxShadow: "0 16px 36px rgba(37, 99, 235, 0.08)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 24, alignItems: "stretch", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 460px", minWidth: 0 }}>
+          <div style={{ flex: "1 1 460px", minWidth: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ fontSize: 18, fontWeight: 950, color: "#0f172a", marginBottom: 6 }}>Account Management</div>
             <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.7, maxWidth: 620 }}>
-              Manage your Spaila profile, subscription, billing, license, security, data ownership, and support options.
+              Manage your Spaila profile, sign-in access, subscription, billing, and support options.
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-              {statusPill(currentPlan, "blue")}
-              {statusPill(subscriptionStatus, "amber")}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: "auto", paddingTop: 18 }}>
+              <button type="button" onClick={() => onOpenSupport?.("billing")} style={primaryButtonStyle}>Contact Support</button>
+              <button type="button" onClick={onOpenDocumentation} style={secondaryButtonStyle}>Tutorials &amp; Documentation</button>
             </div>
           </div>
           <div
             title={shopConfig?.shopLogoName || shopConfig?.shopLogoPath || "Shop logo"}
             style={{
               width: "clamp(160px, 24vw, 260px)",
-              minHeight: 150,
-              borderRadius: 18,
-              border: "1px solid #dbeafe",
-              background: accountLogoSrc ? "#fff" : "linear-gradient(135deg, #dbeafe, #f8fafc)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
               flex: "0 0 auto",
-              boxShadow: "0 14px 30px rgba(15, 23, 42, 0.08)",
+              display: "grid",
+              gap: 10,
             }}
           >
-            {accountLogoSrc ? (
-              <img
-                src={accountLogoSrc}
-                alt=""
-                style={{ width: "100%", height: "100%", objectFit: "contain", padding: 14, boxSizing: "border-box" }}
-              />
-            ) : (
-              <span style={{ fontSize: 64, fontWeight: 950, color: "#2563eb" }}>
-                {String(shopConfig?.shopName || "S").trim().slice(0, 1).toUpperCase() || "S"}
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={onPickLogo}
+              style={{
+                width: "100%",
+                minHeight: 150,
+                borderRadius: 18,
+                border: "1px solid #dbeafe",
+                background: accountLogoSrc ? "#fff" : "linear-gradient(135deg, #dbeafe, #f8fafc)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                boxShadow: "0 14px 30px rgba(15, 23, 42, 0.08)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              {accountLogoSrc ? (
+                <img
+                  src={accountLogoSrc}
+                  alt=""
+                  style={{ width: "100%", height: "100%", objectFit: "contain", padding: 14, boxSizing: "border-box" }}
+                />
+              ) : (
+                <span style={{ display: "grid", justifyItems: "center", gap: 8, color: "#2563eb", fontSize: 12, fontWeight: 900 }}>
+                  <span style={{ fontSize: 64, fontWeight: 950, lineHeight: 1 }}>
+                    {String(shopConfig?.shopName || "S").trim().slice(0, 1).toUpperCase() || "S"}
+                  </span>
+                  <span>Upload logo</span>
+                </span>
+              )}
+            </button>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" onClick={onPickLogo} style={secondaryButtonStyle}>
+                {accountLogoSrc ? "Change logo" : "Upload logo"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2582,144 +2892,124 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
               <span style={labelStyle}>Business / shop name</span>
               <input value={shopConfig?.shopName ?? ""} onChange={(e) => setShopField("shopName", e.target.value)} placeholder="Your shop name" style={inputStyle} />
             </label>
-            <label>
-              <span style={labelStyle}>Business timezone</span>
-              <input
-                value={shopConfig?.businessTimezone ?? ""}
-                onChange={(e) => setShopField("businessTimezone", e.target.value)}
-                placeholder="System local timezone"
-                style={inputStyle}
-              />
-              <div style={{ marginTop: 4, fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>
-                Optional IANA timezone for email header date fallbacks, for example America/Chicago. Leave blank to use this computer's local timezone.
-              </div>
-            </label>
-            <label>
-              <span style={labelStyle}>Account email</span>
-              <input value={accountEmail} onChange={(e) => setShopField("accountEmail", e.target.value)} placeholder="owner@example.com" style={inputStyle} />
-            </label>
+            {session?.authenticated ? (
+              <label>
+                <span style={labelStyle}>Account email</span>
+                <input value={accountEmail} onChange={(e) => setShopField("accountEmail", e.target.value)} placeholder="owner@example.com" style={inputStyle} />
+              </label>
+            ) : null}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-              <div>
-                <span style={labelStyle}>License/account status</span>
-                <div style={valueStyle}>Activation pending</div>
-              </div>
               <div>
                 <span style={labelStyle}>Created date</span>
                 <div style={mutedValueStyle}>{accountCreated}</div>
               </div>
             </div>
-            <div style={{ border: "1px solid #dcfce7", background: "#f0fdf4", borderRadius: 12, padding: 12 }}>
-              <div style={{ fontSize: 12, color: "#166534", fontWeight: 900, marginBottom: 3 }}>Device/license health</div>
-              <div style={{ fontSize: 12, color: "#166534", lineHeight: 1.55 }}>License checks will appear here after account sign-in is connected.</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 2 }}>
+              <button type="button" onClick={onSaveProfile} style={primaryButtonStyle}>
+                {saveFeedback ? "Saved" : "Save profile"}
+              </button>
+              <span style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+                Updates sync to the shared account profile used by desktop and web.
+              </span>
             </div>
           </div>
         </section>
 
         <section style={cardStyle}>
           <div style={sectionTitleStyle}>Subscription / Billing</div>
-          <div style={sectionCopyStyle}>Track plan, trial, renewal, billing, and license status from one place. Payment processing is not connected yet.</div>
+          <div style={sectionCopyStyle}>Plan, renewal, and access status without repeated billing labels.</div>
           <div style={{ display: "grid", gap: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
               <div>
-                <span style={labelStyle}>Current plan</span>
-                <div style={valueStyle}>{currentPlan}</div>
+                <span style={labelStyle}>Plan</span>
+                <div style={valueStyle}>{heroSubscriptionLabel}</div>
               </div>
               <div>
-                <span style={labelStyle}>Trial status</span>
-                <div>{statusPill(trialStatus, "slate")}</div>
-              </div>
-              <div>
-                <span style={labelStyle}>Subscription status</span>
-                <div>{statusPill(subscriptionStatus, "amber")}</div>
-              </div>
-              <div>
-                <span style={labelStyle}>Renewal / expiration</span>
-                <div style={mutedValueStyle}>{renewalDate}</div>
-              </div>
-              <div>
-                <span style={labelStyle}>Billing status</span>
-                <div style={mutedValueStyle}>{billingStatus}</div>
+                <span style={labelStyle}>{billingPeriodLabel}</span>
+                <div style={mutedValueStyle}>{billingPeriodValue}</div>
               </div>
             </div>
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}>
-              <div style={{ fontSize: 12, color: "#334155", fontWeight: 900, marginBottom: 3 }}>License health</div>
-              <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55 }}>License validation and plan entitlements will appear here after subscription services are connected.</div>
-            </div>
+            {!session?.authenticated ? (
+              <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 14, marginTop: 2, display: "grid", gap: 12 }}>
+                <form onSubmit={(event) => submitAuth(event, "login")} style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                    <label>
+                      <span style={labelStyle}>Email</span>
+                      <input value={authForm.email} onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="owner@example.com" style={inputStyle} />
+                    </label>
+                    <label>
+                      <span style={labelStyle}>Password</span>
+                      <input type="password" value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="At least 8 characters" style={inputStyle} />
+                    </label>
+                  </div>
+                  {authState.error ? (
+                    <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
+                      {authState.error}
+                    </div>
+                  ) : null}
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button type="submit" disabled={authState.loading} style={primaryButtonStyle}>
+                      {authState.loading ? "Working..." : "Login"}
+                    </button>
+                    <button type="button" onClick={(event) => submitAuth(event, "signup")} disabled={authState.loading} style={secondaryButtonStyle}>
+                      Start 7-Day Trial
+                    </button>
+                  </div>
+                  <button type="button" onClick={openPasswordReset} style={dangerLinkStyle}>
+                    Forgot password?
+                  </button>
+                </form>
+              </div>
+            ) : null}
+            {billingNotice ? (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}>
+                <div style={{ fontSize: 12, color: "#334155", fontWeight: 900, marginBottom: 3 }}>Status</div>
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55 }}>{billingNotice}</div>
+              </div>
+            ) : null}
+            {hasBillingIssue ? (
+              <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
+                Billing needs attention. Order processor, inbox/helper, and new manual order creation are restricted until billing is resolved.
+              </div>
+            ) : null}
+            {session?.authenticated && !isLocalBilling && authState.error ? (
+              <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
+                {authState.error}
+              </div>
+            ) : null}
+            {session?.authenticated && !isLocalBilling && authState.message ? (
+              <div style={{ border: "1px solid #bbf7d0", borderRadius: 12, background: "#f0fdf4", color: "#166534", padding: 10, fontSize: 12 }}>
+                {authState.message}
+              </div>
+            ) : null}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={() => onOpenSupport?.("billing")} style={primaryButtonStyle}>Upgrade plan</button>
-              <button type="button" disabled style={disabledButtonStyle}>Manage subscription</button>
-              <button type="button" onClick={() => onOpenSupport?.("billing")} style={dangerLinkStyle}>Cancel / unsubscribe help</button>
+              {!isLocalBilling ? (
+                <>
+                  {showUpgradeAction ? (
+                    <button type="button" onClick={startCheckout} disabled={authState.loading} style={primaryButtonStyle}>
+                      {isExpiredBilling || hasBillingIssue ? "Upgrade now" : "Upgrade"}
+                    </button>
+                  ) : null}
+                  {showBillingActions ? (
+                    <>
+                      <button type="button" onClick={openBillingPortal} disabled={authState.loading} style={secondaryButtonStyle}>Manage subscription</button>
+                      <button type="button" onClick={openBillingPortal} disabled={authState.loading} style={secondaryButtonStyle}>Billing history</button>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
             </div>
-          </div>
-        </section>
-
-        <section style={cardStyle}>
-          <div style={sectionTitleStyle}>Security / Access</div>
-          <div style={sectionCopyStyle}>Access controls are organized for desktop and web accounts as sign-in rolls out.</div>
-          <div style={{ display: "grid", gap: 10 }}>
-            {[
-              ["Password reset", "Send a secure reset link after account authentication is live."],
-              ["Device and session management", "Review active desktops, browsers, and trusted devices."],
-              ["License transfer", "Move a license to a replacement workstation when needed."],
-              ["Logout all devices", "End active sessions across desktop and web access."],
-            ].map(([title, body]) => (
-              <div key={title} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: "1px solid #e5e7eb", borderRadius: 12, padding: "10px 12px", background: "#f9fafb" }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "#111827" }}>{title}</div>
-                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.45, marginTop: 2 }}>{body}</div>
+            {session?.authenticated ? (
+              <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 14, marginTop: 2, display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button type="button" onClick={logout} disabled={authState.loading} style={secondaryButtonStyle}>Sign out</button>
+                  <button type="button" onClick={openPasswordReset} style={dangerLinkStyle}>Reset password</button>
                 </div>
-                {plannedPill()}
               </div>
-            ))}
-            <button type="button" onClick={() => onOpenSupport?.("bug")} style={secondaryButtonStyle}>Security help</button>
+            ) : null}
           </div>
         </section>
 
-        <section style={cardStyle}>
-          <div style={sectionTitleStyle}>Data Ownership</div>
-          <div style={sectionCopyStyle}>Spaila should make account data, order records, and conversation history portable and transparent.</div>
-          <div style={{ display: "grid", gap: 10 }}>
-            {[
-              ["Export account data", "Account profile, plan metadata, and license records."],
-              ["Export orders", "Order tables and production workflow data."],
-              ["Export conversations", "Customer email conversation records stored by Spaila."],
-              ["Backup account", "Account-level backup package for support or migration."],
-            ].map(([title, body]) => (
-              <div key={title} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: "1px solid #e5e7eb", borderRadius: 12, padding: "10px 12px" }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "#111827" }}>{title}</div>
-                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.45, marginTop: 2 }}>{body}</div>
-                </div>
-                {plannedPill()}
-              </div>
-            ))}
-            <div style={{ borderTop: "1px solid #fee2e2", paddingTop: 12, marginTop: 2 }}>
-              <button type="button" disabled style={{ ...dangerLinkStyle, cursor: "default", opacity: 0.65 }}>Delete account request</button>
-              <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.5, marginTop: 5 }}>
-                Privacy controls will require account verification before destructive actions are available.
-              </div>
-            </div>
-            <div style={{ border: "1px solid #dbeafe", background: "#eff6ff", borderRadius: 12, padding: 12 }}>
-              <div style={{ fontSize: 12, color: "#1e40af", fontWeight: 900, marginBottom: 3 }}>Privacy statement</div>
-              <div style={{ fontSize: 12, color: "#1e40af", lineHeight: 1.55 }}>
-                Account exports and deletion requests will require verified ownership before any account-level data is released or removed.
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section style={{ ...cardStyle, gridColumn: "1 / -1" }}>
-          <div style={sectionTitleStyle}>Support</div>
-          <div style={sectionCopyStyle}>Get help with billing, account access, subscriptions, license activation, tutorials, and documentation.</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => onOpenSupport?.("billing")} style={primaryButtonStyle}>Billing support</button>
-            <button type="button" onClick={() => onOpenSupport?.("bug")} style={secondaryButtonStyle}>Account support</button>
-            <button type="button" onClick={() => onOpenSupport?.("billing")} style={secondaryButtonStyle}>Subscription questions</button>
-            <button type="button" onClick={() => onOpenSupport?.("bug")} style={secondaryButtonStyle}>License issues</button>
-            <button type="button" onClick={() => onOpenSupport?.("feature")} style={secondaryButtonStyle}>Contact support</button>
-            <button type="button" onClick={onOpenDocumentation} style={secondaryButtonStyle}>Tutorials and documentation</button>
-          </div>
-        </section>
       </div>
     </div>
   );
@@ -3091,7 +3381,7 @@ function DataTab({ shopConfig, setShopConfig }) {
 
       <div style={sectionStyle}>
         <span style={headStyle}>Backup save location</span>
-        <p style={mutedStyle}>Backups are versioned workspace archives that include orders, inbox, conversations, parser stores, settings, and internal recovery storage.</p>
+        <p style={mutedStyle}>Backups are versioned workspace archives that include orders, inbox, conversations, order processor stores, settings, and internal recovery storage.</p>
         <div style={{ maxWidth: "480px" }}>
           <div style={{
             padding: "8px 11px",
@@ -3981,6 +4271,15 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
       setLocalPrintConfig(config);
       savePrintConfig(config);
     }).catch(() => {});
+    window.parserApp?.getDocumentsConfig?.().then((result) => {
+      const config = result?.config;
+      if (!result?.ok || !config?.updated_at) return;
+      setLocalDocumentsConfig((current) => {
+        const next = sharedDocumentsToDesktop(config, current);
+        saveDocumentsConfig(next);
+        return next;
+      });
+    }).catch(() => {});
   }, []); // Import shared layout once when Settings opens; do not overwrite active edits.
 
   React.useEffect(() => {
@@ -4006,21 +4305,48 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     }
     saveShopConfig(localShopConfig);
     // Push shop identity fields to the shared account profile so the webapp stays in sync.
-    if (localShopConfig?.shopName) {
-      window.parserApp?.updateAccountProfile?.({
-        shop_name: localShopConfig.shopName,
-        account_email: localShopConfig.accountEmail || "",
-        business_timezone: localShopConfig.businessTimezone || "",
-        shop_logo_path: localShopConfig.shopLogoPath || "",
-      }).catch(() => {});
-    }
+    window.parserApp?.updateAccountProfile?.({
+      shop_name: localShopConfig.shopName || "",
+      account_email: localShopConfig.accountEmail || "",
+      business_timezone: localShopConfig.businessTimezone || "",
+      shop_logo_path: localShopConfig.shopLogoPath || "",
+    }).catch(() => {});
     saveDocumentsConfig(localDocumentsConfig);
+    const sharedDocumentsConfig = desktopDocumentsToShared(localDocumentsConfig);
+    const syncs = [];
+    if (localDocumentsConfig?.letterheadPath) {
+      syncs.push(window.parserApp?.syncDocumentAsset?.({
+        assetKey: "gift_template",
+        filePath: localDocumentsConfig.letterheadPath,
+        name: localDocumentsConfig.letterheadName || "Gift message template",
+      }));
+    }
     if (localDocumentsConfig?.thankYouPath) {
-      window.parserApp?.syncThankYouTemplate?.({
+      syncs.push(window.parserApp?.syncDocumentAsset?.({
+        assetKey: "thank_you_template",
         filePath: localDocumentsConfig.thankYouPath,
         name: localDocumentsConfig.thankYouName || "Thank-you letter",
-      }).catch(() => {});
+      }));
     }
+    Promise.all(syncs.filter(Boolean)).then((results) => {
+      const failed = results.find((result) => result && !result.ok);
+      if (failed) {
+        console.warn("[DOCS_SYNC_FAILED]", failed.error || failed);
+        return;
+      }
+      const withAssets = {
+        ...sharedDocumentsConfig,
+        gift_template: localDocumentsConfig?.letterheadName
+          ? { ...(sharedDocumentsConfig.gift_template || {}), asset_key: "gift_template", name: localDocumentsConfig.letterheadName }
+          : sharedDocumentsConfig.gift_template,
+        thank_you_template: localDocumentsConfig?.thankYouName
+          ? { ...(sharedDocumentsConfig.thank_you_template || {}), asset_key: "thank_you_template", name: localDocumentsConfig.thankYouName }
+          : sharedDocumentsConfig.thank_you_template,
+      };
+      window.parserApp?.updateDocumentsConfig?.(withAssets).catch(() => {});
+    }).catch((error) => {
+      console.warn("[DOCS_SYNC_FAILED]", error);
+    });
     savePrintConfig(localPrintConfig);
     window.parserApp?.updatePrintConfig?.({
       ...localPrintConfig,
@@ -4238,7 +4564,9 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     background: "#f9fafb",
     padding: "18px 18px 16px",
   };
-  const sidebarLogoSrc = localFileSrc(localShopConfig.shopLogoPath);
+  const sidebarLogoSrc = localShopConfig.shopLogoPath === "business_asset:shop_logo"
+    ? `${ACCOUNT_API_BASE}${API_ENDPOINTS.accountLogo}?v=${encodeURIComponent(localShopConfig.shopLogoPath || "")}`
+    : localFileSrc(localShopConfig.shopLogoPath);
 
   return (
     <div style={{
@@ -4371,104 +4699,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
 
             {activeTab === "general" && (
               <div>
-                <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "18px" }}>
-                  Shop Identity
-                </div>
-
-                <div style={{ marginBottom: "24px" }}>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                    Shop name
-                  </label>
-                  <input
-                    type="text"
-                    value={localShopConfig.shopName ?? ""}
-                    onChange={(e) => setLocalShopConfig((p) => ({ ...p, shopName: e.target.value }))}
-                    placeholder="Your shop name here"
-                    style={{
-                      maxWidth: "500px",
-                      minWidth: "320px",
-                      padding: "9px 12px",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "6px",
-                      fontSize: "14px",
-                      color: "#111",
-                      outline: "none",
-                      boxSizing: "border-box",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#2563eb")}
-                    onBlur={(e) => (e.target.style.borderColor = "#d1d5db")}
-                  />
-                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af" }}>
-                    Displayed in the app header and window title.
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: "24px" }}>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                    Shop logo
-                  </label>
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", maxWidth: "620px" }}>
-                    <div
-                      title={localShopConfig.shopLogoPath || "No logo selected"}
-                      style={{
-                        flex: "1 1 260px",
-                        minWidth: 0,
-                        padding: "8px 11px",
-                        border: "1px solid #d1d5db",
-                        borderRadius: "6px",
-                        fontSize: "13px",
-                        color: localShopConfig.shopLogoName ? "#111" : "#9ca3af",
-                        background: "#f9fafb",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        fontStyle: localShopConfig.shopLogoName ? "normal" : "italic",
-                      }}
-                    >
-                      {localShopConfig.shopLogoName || "No logo selected"}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={pickShopLogo}
-                      style={{
-                        padding: "8px 14px",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: "6px",
-                        background: "#fff",
-                        cursor: "pointer",
-                        fontSize: "13px",
-                        fontWeight: 600,
-                        color: "#1e293b",
-                      }}
-                    >Browse...</button>
-                    {localShopConfig.shopLogoPath ? (
-                      <button
-                        type="button"
-                        onClick={() => setLocalShopConfig((prev) => ({ ...prev, shopLogoPath: "", shopLogoName: "" }))}
-                        style={{
-                          padding: "8px 12px",
-                          border: "none",
-                          borderRadius: "6px",
-                          background: "transparent",
-                          cursor: "pointer",
-                          fontSize: "13px",
-                          color: "#64748b",
-                          textDecoration: "underline",
-                        }}
-                      >Remove</button>
-                    ) : null}
-                  </div>
-                  {localShopConfig.shopLogoPath ? (
-                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#9ca3af", wordBreak: "break-all" }}>
-                      {localShopConfig.shopLogoPath}
-                    </div>
-                  ) : null}
-                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#9ca3af", maxWidth: "620px", lineHeight: 1.55 }}>
-                    Selected logos are copied into <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>C:\Spaila\Docs</code>. Spaila stores and uses the copied file. A transparent .png logo usually looks best.
-                  </div>
-                </div>
-
-                <div style={{ marginTop: "28px" }}>
+                <div>
                   <div style={{ fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "10px" }}>
                     App visibility
                   </div>
@@ -4534,6 +4765,9 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                 setShopConfig={setLocalShopConfig}
                 onOpenSupport={openAccountSupport}
                 onOpenDocumentation={openAccountDocumentation}
+                onSaveProfile={handleSave}
+                saveFeedback={saveFeedback}
+                onPickLogo={pickShopLogo}
               />
             )}
 
@@ -4564,7 +4798,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                 </div>
                 <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "18px", lineHeight: 1.6 }}>
                   Control which fields appear as columns and in what order. Drag columns directly in the
-                  table header, or use ↑ ↓ here. Renaming also updates the parser and everywhere else.
+                  table header, or use ↑ ↓ here. Renaming also updates the order processor and everywhere else.
                 </div>
                 <OrderFieldTable
                   fields={fields}
@@ -4662,7 +4896,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                       border: "1px solid #d1d5db", borderRadius: "5px",
                       padding: "3px 10px", cursor: "pointer",
                     }}
-                    title="Restore default parser field order"
+                    title="Restore default order processor field order"
                   >
                     Reset to Default Layout
                   </button>
@@ -5002,38 +5236,30 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           Account overview
                         </div>
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                          Account is the home for owner identity, shop identity, subscription, billing, license health, and support paths.
+                          Account is the home for owner identity, shop identity, logo, sign-in, trial access, subscription status, and billing actions.
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Subscription and trial
+                            Profile and identity
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Plan, trial status, renewal, and expiration fields are shown without fake payment data. Live billing details will appear after the billing portal is connected.
-                          </div>
-                        </div>
-                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
-                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Billing help
-                          </div>
-                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Upgrade, cancellation, subscription questions, and license issues route to support until self-service billing is connected.
+                            Use Profile / Account Identity to manage the owner name, shop name, logo, saved account email, password reset, and sign-out controls.
                           </div>
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Security
+                            Billing and access
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Password reset, device sessions, license transfer, and logout-all-devices are organized here for future desktop and web access.
+                            Subscription / Billing shows the current plan, renewal or expiration date, login/trial controls when needed, and billing actions without repeating the same status in multiple fields.
                           </div>
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Data ownership
+                            Local-first access
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Export, backup, privacy, and account deletion controls are grouped so account data remains portable and supportable as Spaila grows.
+                            Existing orders stay available even if billing needs attention. Subscription status controls active tools such as the order processor, inbox/helper sync, and new manual order creation.
                           </div>
                         </div>
                       </>
@@ -5089,23 +5315,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           General app settings
                         </div>
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                          General settings control shop identity, shop logo, app visibility, and background automation.
-                        </div>
-                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
-                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Shop identity
-                          </div>
-                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Shop name is used in the app header and window title so users know which workspace they are working in.
-                          </div>
-                        </div>
-                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
-                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                            Shop logo
-                          </div>
-                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Upload a PNG, JPG, or WebP logo. A transparent .png usually looks best because it blends cleanly into Spaila screens and printed layouts. Spaila copies the selected file into <strong>C:\Spaila\Docs</strong> and stores that copied path for future use.
-                          </div>
+                          General settings control app visibility and background automation. Shop identity and logo are managed in Account.
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
@@ -5234,7 +5444,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                     ) : activeTab === "learning" ? (
                       <>
                         <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "8px" }}>
-                          Parser learning
+                          Order processor learning
                         </div>
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
                           Learning helps Spaila remember field corrections you make during order processing, so similar future emails can be parsed more accurately.
@@ -5260,7 +5470,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                             Confidence
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Confidence starts as tracking and becomes promoted after repeated matching evidence. Promoted learning is trusted more strongly by the parser.
+                            Confidence starts as tracking and becomes promoted after repeated matching evidence. Promoted learning is trusted more strongly by the order processor.
                           </div>
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>

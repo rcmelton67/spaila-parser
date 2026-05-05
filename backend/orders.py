@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 import json
 import uuid
 import os
@@ -10,6 +10,7 @@ from pathlib import Path
 import mimetypes
 from .db import get_conn
 from .date_search import build_date_search_aliases, expand_search_value_aliases, normalized_search_matches
+from .api.routes.account import _require_feature
 from workspace_paths import ensure_workspace_layout
 
 _WORKSPACE_DIRS = ensure_workspace_layout(print)
@@ -137,6 +138,42 @@ def _parse_order_messages(value) -> list[dict]:
     except Exception:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _conflict_if_stale(cur, order_id: str, base_updated_at: str | None) -> None:
+    token = str(base_updated_at or "").strip()
+    if not token:
+        return
+    cur.execute("SELECT updated_at, order_number, buyer_name FROM orders WHERE id = ?", (order_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    current_updated_at = str(row[0] or "").strip()
+    if current_updated_at and current_updated_at != token:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Order changed since it was opened.",
+                "current_updated_at": current_updated_at,
+                "order_id": order_id,
+                "order_number": row[1],
+                "buyer_name": row[2],
+            },
+        )
+
+
+def _next_order_touch_ts(cur, order_id: str) -> str:
+    now = datetime.utcnow()
+    cur.execute("SELECT updated_at FROM orders WHERE id = ?", (order_id,))
+    row = cur.fetchone()
+    current = str(row[0] or "").strip() if row else ""
+    try:
+        current_dt = datetime.fromisoformat(current)
+        if now <= current_dt:
+            now = current_dt + timedelta(microseconds=1)
+    except Exception:
+        pass
+    return now.isoformat()
 
 
 def _norm_msg_id(value: object) -> str:
@@ -1047,6 +1084,7 @@ def _manual_assign_duplicate_reason(messages: list, new_msg: dict) -> str:
 
 @router.post("/orders/create")
 async def create_order(payload: dict):
+    _require_feature("parser")
     order = payload.get("order", {})
     items = payload.get("items", [])
 
@@ -1072,20 +1110,23 @@ async def create_order(payload: dict):
 
     cur.execute("""
         INSERT INTO orders (
-            id, order_number, order_date, buyer_name,
-            buyer_email, shipping_address, ship_by,
+            id, order_number, order_date, buyer_name, shipping_name,
+            buyer_email, shipping_address, phone_number, ship_by, pet_name,
             status, created_at, last_activity_at, updated_at,
             source_eml_path, eml_path, order_folder_path,
             platform, is_gift, gift_wrap
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
         order_date,
         buyer_name,
+        order.get("shipping_name") or None,
         order.get("buyer_email"),
         order.get("shipping_address"),
+        order.get("phone_number") or None,
         ship_by,
+        order.get("pet_name") or None,
         "active",
         created_at,
         activity_ts,
@@ -1153,6 +1194,7 @@ async def create_order(payload: dict):
 
 @router.post("/orders/create-manual")
 def create_manual_order(payload: dict):
+    _require_feature("manual_order_creation")
     order_number = str(payload.get("order_number") or "").strip()
     if not order_number:
         raise HTTPException(status_code=400, detail="Order number is required.")
@@ -1171,20 +1213,23 @@ def create_manual_order(payload: dict):
 
     cur.execute("""
         INSERT INTO orders (
-            id, order_number, order_date, buyer_name,
-            buyer_email, shipping_address, ship_by,
+            id, order_number, order_date, buyer_name, shipping_name,
+            buyer_email, shipping_address, phone_number, ship_by, pet_name,
             status, created_at, last_activity_at, updated_at,
             source_eml_path, eml_path, order_folder_path,
             platform, is_gift, gift_wrap
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
         order_date,
         buyer_name,
+        payload.get("shipping_name") or None,
         payload.get("buyer_email") or None,
         payload.get("shipping_address") or None,
+        payload.get("phone_number") or None,
         payload.get("ship_by") or None,
+        payload.get("pet_name") or None,
         status,
         created_at,
         activity_ts,
@@ -1302,8 +1347,10 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             (
                 LOWER(COALESCE(orders.order_number, '')) LIKE ?
                 OR LOWER(COALESCE(orders.buyer_name, '')) LIKE ?
+                OR LOWER(COALESCE(orders.shipping_name, '')) LIKE ?
                 OR LOWER(COALESCE(orders.buyer_email, '')) LIKE ?
                 OR LOWER(COALESCE(orders.shipping_address, '')) LIKE ?
+                OR LOWER(COALESCE(orders.phone_number, '')) LIKE ?
                 OR LOWER(COALESCE(orders.pet_name, '')) LIKE ?
                 OR LOWER(COALESCE(items.custom_1, '')) LIKE ?
                 OR LOWER(COALESCE(items.custom_2, '')) LIKE ?
@@ -1316,7 +1363,7 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             )
             """
         )
-        values.extend([like] * 13)
+        values.extend([like] * 15)
 
     sort_value = str(sort or "newest").strip().lower()
     order_by = {
@@ -1335,8 +1382,10 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             orders.id,
             orders.order_number,
             orders.buyer_name,
+            orders.shipping_name,
             orders.buyer_email,
             orders.shipping_address,
+            orders.phone_number,
             orders.order_date,
             orders.ship_by,
             orders.status,
@@ -1359,7 +1408,8 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             orders.is_gift,
             orders.gift_wrap,
             orders.messages,
-            orders.pet_name
+            orders.pet_name,
+            orders.updated_at
         FROM items
         JOIN orders ON items.order_id = orders.id
         WHERE {where_clause}
@@ -1375,31 +1425,34 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             "order_id": r[1],
             "order_number": r[2],
             "buyer_name": r[3],
-            "buyer_email": r[4],
-            "shipping_address": r[5],
-            "order_date": r[6],
-            "ship_by": r[7],
-            "status": r[8],
-            "price": r[9],
-            "quantity": r[10],
-            "custom_1": r[11],
-            "custom_2": r[12],
-            "custom_3": r[13],
-            "custom_4": r[14],
-            "custom_5": r[15],
-            "custom_6": r[16],
-            "order_folder_path": r[17],
-            "source_eml_path": r[18],
-            "eml_path": r[19],
-            "gift_message": r[20],
-            "order_notes": r[21],
-            "item_index": r[22],
-            "platform":    r[23] or "unknown",
-            "item_status": r[24] or None,
-            "is_gift": bool(r[25]),
-            "gift_wrap": bool(r[26]),
-            "messages": _parse_order_messages(r[27]),
-            "pet_name": r[28],
+            "shipping_name": r[4],
+            "buyer_email": r[5],
+            "shipping_address": r[6],
+            "phone_number": r[7],
+            "order_date": r[8],
+            "ship_by": r[9],
+            "status": r[10],
+            "price": r[11],
+            "quantity": r[12],
+            "custom_1": r[13],
+            "custom_2": r[14],
+            "custom_3": r[15],
+            "custom_4": r[16],
+            "custom_5": r[17],
+            "custom_6": r[18],
+            "order_folder_path": r[19],
+            "source_eml_path": r[20],
+            "eml_path": r[21],
+            "gift_message": r[22],
+            "order_notes": r[23],
+            "item_index": r[24],
+            "platform":    r[25] or "unknown",
+            "item_status": r[26] or None,
+            "is_gift": bool(r[27]),
+            "gift_wrap": bool(r[28]),
+            "messages": _parse_order_messages(r[29]),
+            "pet_name": r[30] or r[13],
+            "updated_at": r[31],
         }
         for r in rows
     ]
@@ -1409,8 +1462,8 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             if normalized_search_matches(
                 search_value,
                 (
-                    row.get("order_number"), row.get("buyer_name"), row.get("buyer_email"),
-                    row.get("shipping_address"), row.get("pet_name"), row.get("custom_1"),
+                    row.get("order_number"), row.get("buyer_name"), row.get("shipping_name"), row.get("buyer_email"),
+                    row.get("shipping_address"), row.get("phone_number"), row.get("pet_name"), row.get("custom_1"),
                     row.get("custom_2"), row.get("custom_3"), row.get("custom_4"),
                     row.get("custom_5"), row.get("custom_6"), row.get("order_date"),
                     row.get("ship_by"),
@@ -1431,8 +1484,10 @@ def get_order(order_id: str):
             id,
             order_number,
             buyer_name,
+            shipping_name,
             buyer_email,
             shipping_address,
+            phone_number,
             order_date,
             ship_by,
             status,
@@ -1484,21 +1539,23 @@ def get_order(order_id: str):
         "id": row[0],
         "order_number": row[1],
         "buyer_name": row[2],
-        "buyer_email": row[3],
-        "shipping_address": row[4],
-        "order_date": row[5],
-        "ship_by": row[6],
-        "status": row[7],
-        "order_folder_path": row[8],
-        "messages": _parse_order_messages(row[9]),
-        "source_eml_path": row[10],
-        "eml_path": row[11],
-        "platform": row[12] or "unknown",
-        "is_gift": bool(row[13]),
-        "gift_wrap": bool(row[14]),
-        "last_activity_at": row[15],
-        "updated_at": row[16],
-        "pet_name": row[17],
+        "shipping_name": row[3],
+        "buyer_email": row[4],
+        "shipping_address": row[5],
+        "phone_number": row[6],
+        "order_date": row[7],
+        "ship_by": row[8],
+        "status": row[9],
+        "order_folder_path": row[10],
+        "messages": _parse_order_messages(row[11]),
+        "source_eml_path": row[12],
+        "eml_path": row[13],
+        "platform": row[14] or "unknown",
+        "is_gift": bool(row[15]),
+        "gift_wrap": bool(row[16]),
+        "last_activity_at": row[17],
+        "updated_at": row[18],
+        "pet_name": row[19] or (item_rows[0][4] if item_rows else None),
         "items": [
             {
                 "id": item[0],
@@ -1556,9 +1613,11 @@ def preview_order_attachment(order_id: str, message_index: int, attachment_index
 def update_full(payload: dict):
     conn = get_conn()
     cur = conn.cursor()
-    touch_ts = datetime.utcnow().isoformat()
     order_id = payload.get("order_id")
     new_status = str(payload.get("status") or "active").lower()
+    if order_id:
+        _conflict_if_stale(cur, order_id, payload.get("base_updated_at"))
+    touch_ts = _next_order_touch_ts(cur, order_id) if order_id else datetime.utcnow().isoformat()
 
     moved_folder_path: str | None = None
     if order_id:
@@ -1576,10 +1635,13 @@ def update_full(payload: dict):
     order_parts: list[tuple[str, object]] = [
         ("order_number", payload.get("order_number")),
         ("buyer_name", payload.get("buyer_name") or None),
+        ("shipping_name", payload.get("shipping_name") or None),
         ("buyer_email", payload.get("buyer_email") or None),
         ("shipping_address", payload.get("shipping_address") or None),
+        ("phone_number", payload.get("phone_number") or None),
         ("order_date", payload.get("order_date")),
         ("ship_by", payload.get("ship_by")),
+        ("pet_name", payload.get("pet_name") or None),
         ("is_gift", _as_bool_int(payload.get("is_gift"))),
         ("gift_wrap", _as_bool_int(payload.get("gift_wrap"))),
         ("status", payload.get("status", "active")),
@@ -1605,7 +1667,8 @@ def update_full(payload: dict):
             custom_5     = ?,
             custom_6     = ?,
             order_notes  = ?,
-            gift_message = ?
+            gift_message = ?,
+            item_status  = ?
         WHERE id = ?
     """, (
         payload.get("quantity"),
@@ -1618,6 +1681,7 @@ def update_full(payload: dict):
         payload.get("custom_6"),
         payload.get("order_notes") or None,
         payload.get("gift_message") or None,
+        payload.get("item_status") or None,
         payload.get("id"),
     ))
 
@@ -1708,6 +1772,8 @@ def append_order_message(order_id: str, payload: dict):
         "status",
         "message_id",
         "email_id",
+        "source",
+        "delivery_status",
         "direction",
         "type",
     ):
@@ -2315,6 +2381,8 @@ def _try_delete_folder(folder_path: str) -> bool:
 @router.patch("/orders/{order_id}")
 def patch_order(order_id: str, payload: dict):
     """Partial update used by the helper to write back paths after folder creation / EML move."""
+    if any(key in payload for key in ("order_folder_path", "eml_path", "source_original_path")):
+        _require_feature("helper")
     PATCHABLE = {
         "order_folder_path",
         "source_eml_path",
@@ -2322,8 +2390,10 @@ def patch_order(order_id: str, payload: dict):
         "source_original_path",
         "status",
         "buyer_name",
+        "shipping_name",
         "buyer_email",
         "shipping_address",
+        "phone_number",
         "ship_by",
         "order_date",
         "pet_name",
@@ -2334,6 +2404,7 @@ def patch_order(order_id: str, payload: dict):
     fields = {k: v for k, v in payload.items() if k in PATCHABLE}
     conn = get_conn()
     cur = conn.cursor()
+    _conflict_if_stale(cur, order_id, payload.get("base_updated_at"))
 
     if fields.get("status") is not None and str(fields.get("status")).lower() == "archived":
         cur.execute("SELECT status, order_folder_path FROM orders WHERE id = ?", (order_id,))
@@ -2369,7 +2440,16 @@ def patch_item_status(item_id: str, payload: dict):
     status = payload.get("item_status")
     conn = get_conn()
     cur = conn.cursor()
+    touch_ts = _now_iso_utc()
     cur.execute("UPDATE items SET item_status = ? WHERE id = ?", (status, item_id))
+    cur.execute(
+        """
+        UPDATE orders
+        SET updated_at = ?, last_activity_at = ?
+        WHERE id = (SELECT order_id FROM items WHERE id = ?)
+        """,
+        (touch_ts, touch_ts, item_id),
+    )
     conn.commit()
     conn.close()
     return {"status": "ok"}

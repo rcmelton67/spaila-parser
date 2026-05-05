@@ -45,7 +45,7 @@ function legacyToneAndLabel(normalized) {
 /**
  * @param {string} [itemStatus] — Per-line-item workflow value from the API (same meaning as desktop picker).
  * @param {object|null} [statusConfig] — Shared layout.status (enabled, columnLabel, states).
- * @param {string} [unsetLabel] — Pill text when itemStatus is empty (desktop empty option uses fixed "Status"; web uses column header e.g. "Preview").
+ * @param {string} [unsetLabel] — Pill text when itemStatus is empty.
  * @param {string|null} [fallbackOrderStatus] — If set, used only when itemStatus is empty (e.g. order detail hero).
  */
 export default function OrderStatusBadge({

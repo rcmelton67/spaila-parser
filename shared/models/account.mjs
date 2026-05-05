@@ -1,7 +1,6 @@
 export const ACCOUNT_PLAN_CODES = Object.freeze({
   local: "local",
-  starter: "starter",
-  pro: "pro",
+  spailaOne: "spaila_one",
 });
 
 export const SUBSCRIPTION_STATES = Object.freeze({
@@ -10,6 +9,7 @@ export const SUBSCRIPTION_STATES = Object.freeze({
   active: "active",
   pastDue: "past_due",
   canceled: "canceled",
+  trialExpired: "trial_expired",
 });
 
 export const DEFAULT_ACCOUNT_PROFILE = Object.freeze({
@@ -22,6 +22,11 @@ export const DEFAULT_ACCOUNT_PROFILE = Object.freeze({
   subscriptionState: SUBSCRIPTION_STATES.localOnly,
   authMode: "local_first",
   multiShopReady: false,
+  trialStartedAt: "",
+  trialEndsAt: "",
+  billingStatus: "not_configured",
+  stripeCustomerId: "",
+  stripeSubscriptionId: "",
 });
 
 export function normalizeAccountProfile(profile = {}) {

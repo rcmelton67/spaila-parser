@@ -1,13 +1,20 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import AttachmentPreviewCard from "../../shared/components/AttachmentPreviewCard.jsx";
-import { loadFieldConfig, buildLabelMap, loadShopConfig, loadStatusConfig, loadOrderStatuses, setOrderStatus, contrastColor } from "../../shared/utils/fieldConfig.js";
+import { loadFieldConfig, buildLabelMap, loadShopConfig, loadStatusConfig, loadOrderStatuses, setOrderStatus, contrastColor, loadPriceList, matchPriceRule, PRICE_TYPE_FIELD_KEY } from "../../shared/utils/fieldConfig.js";
 
 const API = "http://127.0.0.1:8055";
 const DEV_MODE = true;
 
 // Keys shown in "Product info" panel — order preserved
 const CUSTOM_KEYS = ["custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6"];
+
+function applyPricingTypeFallback(row) {
+  if (!row || row[PRICE_TYPE_FIELD_KEY]) return row;
+  const priceRule = matchPriceRule(row.price, loadPriceList());
+  if (!priceRule?.typeValue) return row;
+  return { ...row, [PRICE_TYPE_FIELD_KEY]: priceRule.typeValue };
+}
 
 // ── Shared primitives ───────────────────────────────────────────────────────
 const input = {
@@ -131,6 +138,14 @@ function mergeRowFromServer(prev, server, reconciledOptimistic) {
   return merged;
 }
 
+function areMessageRowsEqual(a, b) {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  for (const key of keys) {
+    if (JSON.stringify(a?.[key]) !== JSON.stringify(b?.[key])) return false;
+  }
+  return true;
+}
+
 function findOptimisticSendingIndex(rows, serverMsg) {
   if ((serverMsg?.direction || serverMsg?.type) !== "outbound") return -1;
   for (let i = 0; i < rows.length; i += 1) {
@@ -193,8 +208,11 @@ function mergeOrderThreadFromServer(existing = [], incoming = [], orderIdForLog 
     }
     const dupIdx = findDuplicateIndex(next, serverMsg);
     if (dupIdx >= 0) {
-      next[dupIdx] = mergeRowFromServer(next[dupIdx], serverMsg, false);
-      updated += 1;
+      const mergedRow = mergeRowFromServer(next[dupIdx], serverMsg, false);
+      if (!areMessageRowsEqual(next[dupIdx], mergedRow)) {
+        next[dupIdx] = mergedRow;
+        updated += 1;
+      }
       continue;
     }
     next.push({ ...serverMsg });
@@ -377,7 +395,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   );
   const modalOrderId = orderIdentityKey;
 
-  const [form, setForm] = React.useState({ ...order });
+  const [form, setForm] = React.useState(() => applyPricingTypeFallback({ ...order }));
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
   const [draftReply, setDraftReply] = React.useState("");
@@ -406,7 +424,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
 
   React.useEffect(() => {
     if (!order) return;
-    setForm({ ...order });
+    setForm(applyPricingTypeFallback({ ...order }));
     setSaving(false);
     setError("");
     if (launchContext?.action === "email") {
@@ -472,7 +490,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       const shop = loadShopConfig();
       const payload = isNewOrder
         ? form
-        : { ...form, archive_root: String(shop.orderArchiveRoot || "").trim() };
+        : { ...form, base_updated_at: form.updated_at || order.updated_at || "", archive_root: String(shop.orderArchiveRoot || "").trim() };
       const res = await fetch(`${API}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -493,8 +511,8 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     }
   }
 
-  function handleReset() {
-    setForm({ ...order });
+  function handleRevertChanges() {
+    setForm(applyPricingTypeFallback({ ...order }));
   }
 
   async function handleArchiveNow() {
@@ -858,6 +876,11 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     ? `Order ${form.order_number}`
     : "Order conversation";
   const customerLabel = String(form.buyer_name || form.buyer_email || "Customer").trim();
+  const isThreadScrolledNearBottom = React.useCallback(() => {
+    const node = threadScrollRef.current;
+    if (!node) return true;
+    return node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+  }, []);
 
   React.useEffect(() => {
     if (!modalOrderId || isNewOrder) return undefined;
@@ -880,7 +903,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
           reconciled_count: merged.reconciled,
         });
         const hadNew = merged.added > 0 || merged.reconciled > 0;
-        if (hadNew || merged.updated > 0) {
+        if (hadNew && isThreadScrolledNearBottom()) {
           shouldAutoScrollRef.current = true;
         }
         return merged.next;
@@ -900,7 +923,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       window.clearInterval(interval);
       window.removeEventListener("order-thread-updated", onOrderThreadUpdated);
     };
-  }, [modalOrderId, isNewOrder]);
+  }, [modalOrderId, isNewOrder, isThreadScrolledNearBottom]);
 
   React.useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
@@ -1030,10 +1053,10 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
 
             <div style={{ display: "flex", gap: 8 }}>
               <button
-                onClick={handleReset}
+                onClick={handleRevertChanges}
                 style={{ padding: "7px 12px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13 }}
               >
-                Reset
+                Revert Changes
               </button>
               {!isNewOrder ? (
                 <button
@@ -1111,7 +1134,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
                       outline: "none",
                     }}
                   >
-                    <option value="">{statusConfig.columnLabel || "Status"}</option>
+                    <option value="" hidden></option>
                     {statusConfig.states.map((s) => (
                       <option key={s.key} value={s.key}>{s.label}</option>
                     ))}

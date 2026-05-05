@@ -23,8 +23,9 @@ export function formatDate(raw, config = {}) {
   const date = parseDate(raw);
   if (!date) return String(raw);
 
-  const format = config.format || "short";
-  const showYear = config.showYear !== false;
+  const safeConfig = config && typeof config === "object" ? config : {};
+  const format = safeConfig.format || "short";
+  const showYear = safeConfig.showYear !== false;
 
   if (format === "iso") {
     const year = date.getFullYear();

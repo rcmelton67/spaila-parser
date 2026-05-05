@@ -3157,7 +3157,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                                   maxWidth: "100%",
                                 }}
                               >
-                                <option value="">Status</option>
+                                <option value="" hidden></option>
                                 {statusConfig.states.map((s) => (
                                   <option key={s.key} value={s.key}>{s.label}</option>
                                 ))}

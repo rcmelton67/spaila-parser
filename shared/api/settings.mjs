@@ -18,13 +18,14 @@ export const DEFAULT_DATE_CONFIG = Object.freeze({
 });
 
 export function normalizeDateConfig(value = {}) {
-  const format = ["short", "numeric", "iso"].includes(value.format) ? value.format : DEFAULT_DATE_CONFIG.format;
+  const source = value && typeof value === "object" ? value : {};
+  const format = ["short", "numeric", "iso"].includes(source.format) ? source.format : DEFAULT_DATE_CONFIG.format;
   return {
     ...DEFAULT_DATE_CONFIG,
-    ...value,
+    ...source,
     format,
-    showYear: value.showYear != null ? Boolean(value.showYear) : DEFAULT_DATE_CONFIG.showYear,
-    flexibleSearch: value.flexibleSearch != null ? Boolean(value.flexibleSearch) : DEFAULT_DATE_CONFIG.flexibleSearch,
+    showYear: source.showYear != null ? Boolean(source.showYear) : DEFAULT_DATE_CONFIG.showYear,
+    flexibleSearch: source.flexibleSearch != null ? Boolean(source.flexibleSearch) : DEFAULT_DATE_CONFIG.flexibleSearch,
   };
 }
 

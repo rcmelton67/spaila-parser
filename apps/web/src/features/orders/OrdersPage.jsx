@@ -1,6 +1,8 @@
 import React from "react";
+import { PDFDocument, PageSizes, StandardFonts, rgb } from "pdf-lib";
 import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
 import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig.mjs";
+import { normalizeDocumentsConfig } from "../../../../../shared/models/documentsConfig.mjs";
 import { api, ordersApi, settingsApi } from "../../api.js";
 import OrdersTable from "./OrdersTable.jsx";
 import { DATE_FIELD_KEYS, formatDate } from "../../shared/dateConfig.js";
@@ -8,6 +10,7 @@ import { normalizedSearchMatches } from "../../../../../shared/search/dateSearch
 
 const DEFAULT_ORDER_SHEET_SIZE = 12;
 const ORDER_ROWS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const WEB_WIDTH_PROFILE_KEY = "spaila_web_column_width_profile";
 const orderRowsCache = new Map();
 const orderRowsInflight = new Map();
 
@@ -198,6 +201,58 @@ function normalizeWidthProfile(layout) {
   );
 }
 
+function readLocalWidthPercents() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WEB_WIDTH_PROFILE_KEY) || "null");
+    const columns = saved?.columns && typeof saved.columns === "object" ? saved.columns : null;
+    if (!columns) return {};
+    return Object.fromEntries(
+      Object.entries(columns)
+        .map(([key, value]) => [key, Number(value?.percent)])
+        .filter(([key, percent]) => key && Number.isFinite(percent) && percent > 0)
+    );
+  } catch {
+    return {};
+  }
+}
+
+function buildPrintColumnPercents(columns) {
+  const localPercents = readLocalWidthPercents();
+  const weightedColumns = columns.map((column) => {
+    const percent = Number(localPercents[column.key] || column.widthPercent);
+    return {
+      key: column.key,
+      percent: Number.isFinite(percent) && percent > 0 ? percent : 0,
+    };
+  });
+  const explicitTotal = weightedColumns.reduce((sum, column) => sum + column.percent, 0);
+  const missingCount = weightedColumns.filter((column) => column.percent <= 0).length;
+  const fallbackPercent = missingCount ? Math.max(0, 1 - explicitTotal) / missingCount || 1 / Math.max(1, columns.length) : 0;
+  const withFallbacks = weightedColumns.map((column) => ({
+    ...column,
+    percent: column.percent > 0 ? column.percent : fallbackPercent,
+  }));
+  const total = withFallbacks.reduce((sum, column) => sum + column.percent, 0) || 1;
+  return new Map(withFallbacks.map((column) => [column.key, column.percent / total]));
+}
+
+function printColumnClass(key) {
+  return `col-${String(key || "").replace(/[^a-z0-9_-]/gi, "-")}`;
+}
+
+function formatPrintHeaderDate(value = new Date()) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(value);
+  } catch (_) {
+    return value.toLocaleDateString();
+  }
+}
+
 function normalizeOrderLayout(layout) {
   const source = layout && typeof layout === "object" ? layout : DEFAULT_ORDER_LAYOUT;
   const widthProfile = normalizeWidthProfile(source);
@@ -237,13 +292,6 @@ function normalizeOrderLayout(layout) {
     searchDefaults: source.search_defaults || {},
     status: statusConfig,
   };
-}
-
-function filterRows(rows, filter) {
-  if (filter === "gift") return rows.filter((row) => row.is_gift || row.gift_wrap || row.gift_message);
-  if (filter === "has_notes") return rows.filter((row) => row.order_notes || row.gift_message);
-  if (filter === "needs_status") return rows.filter((row) => !row.item_status);
-  return rows;
 }
 
 function isCompletedRow(row) {
@@ -309,6 +357,120 @@ function getCellText(row, key, dateConfig, pricingRules) {
   return values[0] ?? "";
 }
 
+function normalizeHexColor(value) {
+  const raw = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    return `#${raw.slice(1).split("").map((char) => char + char).join("")}`;
+  }
+  return "";
+}
+
+function contrastColor(hex) {
+  const clean = normalizeHexColor(hex).replace("#", "");
+  if (clean.length !== 6) return "#1a1a1a";
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance < 0.55 ? "#ffffff" : "#1a1a1a";
+}
+
+function matchPriceRule(priceStr, pricingRules) {
+  if (!priceStr || !pricingRules?.length) return null;
+  const price = parseFloat(String(priceStr).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(price)) return null;
+  return pricingRules.find((rule) => {
+    const rulePrice = parseFloat(String(rule.price).replace(/[^0-9.]/g, ""));
+    return Number.isFinite(rulePrice) && Math.abs(rulePrice - price) < 0.001;
+  }) || null;
+}
+
+function findStatusState(statusConfig, value) {
+  const states = Array.isArray(statusConfig?.states) ? statusConfig.states : [];
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return states.find((state) => String(state.key || "") === raw)
+    || states.find((state) => String(state.key || "").toLowerCase() === raw.toLowerCase())
+    || null;
+}
+
+function legacyStatusColor(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["completed", "complete", "done"].includes(normalized)) return "#dcfce7";
+  if (normalized === "pending") return "#fef3c7";
+  if (normalized === "in_progress") return "#dbeafe";
+  if (normalized === "archived" || normalized === "not_started") return "#e5e7eb";
+  return "";
+}
+
+function inlineStyle(styleMap) {
+  return Object.entries(styleMap)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `${key}:${value}`)
+    .join(";");
+}
+
+function hexToPdfRgb(value) {
+  const clean = normalizeHexColor(value || "#000000").replace("#", "");
+  return rgb(
+    parseInt(clean.slice(0, 2), 16) / 255,
+    parseInt(clean.slice(2, 4), 16) / 255,
+    parseInt(clean.slice(4, 6), 16) / 255,
+  );
+}
+
+function wrapPdfText(text, font, fontSize, maxWidth) {
+  const lines = [];
+  for (const sourceLine of String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
+    let current = "";
+    for (const word of sourceLine.split(/\s+/).filter(Boolean)) {
+      const test = current ? `${current} ${word}` : word;
+      if (font.widthOfTextAtSize(test, fontSize) > maxWidth && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+    if (!sourceLine.trim()) lines.push("");
+  }
+  return lines;
+}
+
+function getPrintCellPresentation(row, column, dateConfig, pricingRules, statusConfig) {
+  const key = column.key;
+  const rawValue = row[key];
+  if (key === "status") {
+    const statusValue = row.item_status || row.status || "";
+    const state = findStatusState(statusConfig, statusValue);
+    const bg = normalizeHexColor(state?.color) || legacyStatusColor(statusValue);
+    return {
+      text: state?.label || statusValue || "Status",
+      bg,
+      color: bg ? contrastColor(bg) : "#9ca3af",
+      fontWeight: bg ? "700" : "",
+    };
+  }
+
+  const priceRule = matchPriceRule(row.price, pricingRules);
+  const highlight = column.highlight || {};
+  const highlightBg = highlight.enabled && normalizeHexColor(highlight.color) && rawValue
+    ? normalizeHexColor(highlight.color)
+    : "";
+  const paletteBg = priceRule && column.paletteEnabled ? normalizeHexColor(priceRule.color) : "";
+  const bg = highlightBg || paletteBg;
+  const text = getCellText(row, key, dateConfig, pricingRules) || "—";
+  return {
+    text,
+    bg,
+    color: bg ? contrastColor(bg) : (text === "—" ? "#94a3b8" : ""),
+    fontStyle: !rawValue && key === "custom_6" && priceRule?.typeValue ? "italic" : "",
+    fontWeight: "",
+  };
+}
+
 export default function OrdersPage({
   scope,
   activeTab,
@@ -317,8 +479,8 @@ export default function OrdersPage({
   showCompletedTab = true,
   layoutRefreshKey = 0,
   ordersRefreshKey = 0,
+  shopName = "Spaila",
   search = "",
-  filter = "all",
   sortField = "order_date",
   sortDirection = "asc",
   sheetSize = DEFAULT_ORDER_SHEET_SIZE,
@@ -346,10 +508,12 @@ export default function OrdersPage({
   const [pricingRules, setPricingRules] = React.useState([]);
   const [dateConfig, setDateConfig] = React.useState(null);
   const [printConfig, setPrintConfig] = React.useState(null);
+  const [documentsConfig, setDocumentsConfig] = React.useState(() => normalizeDocumentsConfig());
   const [state, setState] = React.useState({ loading: true, error: "" });
   const [savingStatusIds, setSavingStatusIds] = React.useState(() => new Set());
   const [searchExcludedColumns, setSearchExcludedColumns] = React.useState(() => new Set());
   const loadSeqRef = React.useRef(0);
+  const retryTimerRef = React.useRef(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -359,13 +523,16 @@ export default function OrdersPage({
     return () => { cancelled = true; };
   }, [layoutRefreshKey]);
 
-  const loadOrders = React.useCallback(async () => {
+  const loadOrders = React.useCallback(async ({ force = false, attempt = 0 } = {}) => {
     const seq = loadSeqRef.current + 1;
     loadSeqRef.current = seq;
     const cacheKey = getOrdersCacheKey({ tab: currentTab });
     const cached = orderRowsCache.get(cacheKey);
     const now = Date.now();
-    if (cached?.rows) {
+    if (force) {
+      orderRowsCache.delete(cacheKey);
+    }
+    if (!force && cached?.rows) {
       setRows(cached.rows);
       setState({ loading: false, error: "" });
       if (now - cached.updatedAt < ORDER_ROWS_CACHE_MAX_AGE_MS && !orderRowsInflight.has(cacheKey)) {
@@ -383,6 +550,17 @@ export default function OrdersPage({
     } catch (error) {
       orderRowsInflight.delete(cacheKey);
       if (loadSeqRef.current !== seq) return;
+      if (!cached?.rows && attempt < 3) {
+        setState({
+          loading: true,
+          error: `Could not load orders yet. Retrying... (${attempt + 1}/3)`,
+        });
+        if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = window.setTimeout(() => {
+          loadOrders({ force: true, attempt: attempt + 1 });
+        }, Math.min(7000, 1200 * (attempt + 1)));
+        return;
+      }
       setState({
         loading: false,
         error: cached?.rows ? "" : (error?.message || "Could not load orders."),
@@ -391,8 +569,11 @@ export default function OrdersPage({
   }, [currentTab, ordersRefreshKey]);
 
   React.useEffect(() => {
-    const timer = window.setTimeout(loadOrders, 180);
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(() => loadOrders(), 180);
+    return () => {
+      window.clearTimeout(timer);
+      if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+    };
   }, [loadOrders]);
 
   React.useEffect(() => {
@@ -416,7 +597,7 @@ export default function OrdersPage({
     function refreshFromOtherSurface() {
       orderRowsCache.clear();
       refreshSharedLayout();
-      loadOrders();
+      loadOrders({ force: true });
     }
     function handleVisibilityChange() {
       if (!document.hidden) refreshFromOtherSurface();
@@ -450,6 +631,16 @@ export default function OrdersPage({
     return () => { cancelled = true; };
   }, [layoutRefreshKey]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    api.get(API_ENDPOINTS.documentsConfig).then((config) => {
+      if (!cancelled) setDocumentsConfig(normalizeDocumentsConfig(config));
+    }).catch(() => {
+      if (!cancelled) setDocumentsConfig(normalizeDocumentsConfig());
+    });
+    return () => { cancelled = true; };
+  }, [layoutRefreshKey]);
+
   const searchSortConfig = React.useMemo(() => normalizeSearchSortConfig(layout), [layout]);
   React.useEffect(() => {
     if (!search.trim() && searchExcludedColumns.size) {
@@ -479,11 +670,11 @@ export default function OrdersPage({
     return { field, direction };
   }, [searchSortConfig.defaultSort?.field, sortDirection, sortField]);
   const visibleRows = React.useMemo(() => (
-    filterRows(rows, filter)
+    rows
       .filter((row) => matchesSearch(row, search, searchSortConfig, dateConfig, pricingRules, searchExcludedColumns))
       .slice()
       .sort((a, b) => compareRows(a, b, activeSort, dateConfig, pricingRules))
-  ), [activeSort, dateConfig, filter, pricingRules, rows, search, searchExcludedColumns, searchSortConfig]);
+  ), [activeSort, dateConfig, pricingRules, rows, search, searchExcludedColumns, searchSortConfig]);
 
   React.useEffect(() => {
     const query = search.trim();
@@ -554,6 +745,102 @@ export default function OrdersPage({
     }
   }
 
+  async function moveRowsToWorkflowStatus(targetRows, nextStatus) {
+    const rowsToMove = Array.isArray(targetRows) ? targetRows : [];
+    if (!rowsToMove.length) return;
+    const previousRows = rows;
+    const nextValue = nextStatus || "";
+    setRows((current) => current.map((item) => (
+      rowsToMove.some((row) => String(row.id) === String(item.id))
+        ? { ...item, item_status: nextValue }
+        : item
+    )));
+    try {
+      await Promise.all(rowsToMove.map((row) => ordersApi.updateItemStatus(row.id, nextValue)));
+      orderRowsCache.clear();
+      await loadOrders({ force: true });
+    } catch (error) {
+      setRows(previousRows);
+      setState((current) => ({
+        ...current,
+        error: error?.message || "Could not move selected orders.",
+      }));
+    }
+  }
+
+  async function deleteRows(targetRows) {
+    const rowsToDelete = Array.isArray(targetRows) ? targetRows : [];
+    if (!rowsToDelete.length) return;
+    const orderIds = [...new Set(rowsToDelete.map((row) => String(row.order_id || "").trim()).filter(Boolean))];
+    if (!orderIds.length) return;
+    const previousRows = rows;
+    setRows((current) => current.filter((item) => !orderIds.includes(String(item.order_id || ""))));
+    try {
+      await Promise.all(orderIds.map((orderId) => ordersApi.delete(orderId)));
+      orderRowsCache.clear();
+      await loadOrders({ force: true });
+    } catch (error) {
+      setRows(previousRows);
+      setState((current) => ({
+        ...current,
+        error: error?.message || "Could not delete selected orders.",
+      }));
+    }
+  }
+
+  async function generateGiftLetter(row) {
+    const giftMessage = String(row?.gift_message || "").trim();
+    if (!giftMessage) return;
+    try {
+      let pdfDoc;
+      if (documentsConfig.gift_template?.asset_key) {
+        const response = await fetch(`${api.baseUrl}${API_ENDPOINTS.documentAssetFile("gift_template")}`);
+        if (!response.ok) throw new Error("Could not load the gift message PDF template.");
+        pdfDoc = await PDFDocument.load(await response.arrayBuffer());
+      } else {
+        pdfDoc = await PDFDocument.create();
+        pdfDoc.addPage(PageSizes.Letter);
+      }
+      const pages = pdfDoc.getPages();
+      if (!pages.length) throw new Error("Gift message PDF has no pages.");
+      const page = pages[0];
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontSize = Number(documentsConfig.font_size || 12);
+      const maxWidth = Number(documentsConfig.gift_text_max_width || 450);
+      const lines = wrapPdfText(giftMessage, font, fontSize, maxWidth);
+      const lineHeight = fontSize * 1.4;
+      lines.forEach((line, index) => {
+        page.drawText(line, {
+          x: Number(documentsConfig.gift_text_x || 72),
+          y: Number(documentsConfig.gift_text_y || 500) - index * lineHeight,
+          size: fontSize,
+          font,
+          color: hexToPdfRgb(documentsConfig.text_color || "#000000"),
+        });
+      });
+      const blob = new Blob([await pdfDoc.save()], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const printWindow = window.open(url, "_blank", "width=900,height=700");
+      if (!printWindow) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      printWindow.onload = () => {
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } finally {
+          window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
+      };
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error?.message || "Could not generate gift message PDF.",
+      }));
+    }
+  }
+
   const printCurrentSheet = React.useCallback(() => {
     const config = printConfig || {};
     const printableColumns = (layout.fields || []).filter((field) => (
@@ -566,21 +853,50 @@ export default function OrdersPage({
     ));
     const mode = config.mode === "card" ? "card" : "sheet";
     const orientation = config.orientation === "landscape" ? "landscape" : "portrait";
-    const headerHtml = printableColumns.map((column) => `<th class="col-${column.key}">${escapeHtml(column.label || column.key)}</th>`).join("");
-    const columnCss = printableColumns.map((column) => (
-      `.col-${column.key} { ${config.wrap?.[column.key] ? "white-space: normal; overflow-wrap: anywhere;" : "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"} }`
-    )).join("\n");
+    const printTitle = mode === "card" ? "Order Cards" : "Orders";
+    const printSearch = String(search || "").trim();
+    const printDate = formatPrintHeaderDate();
+    const printColumnPercents = mode === "sheet" ? buildPrintColumnPercents(printableColumns) : new Map();
+    const headerHtml = printableColumns.map((column) => `<th class="${printColumnClass(column.key)}">${escapeHtml(column.label || column.key)}</th>`).join("");
+    const columnCss = printableColumns.map((column) => {
+      const wrapRule = config.wrap?.[column.key]
+        ? "white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word;"
+        : "white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; word-break: normal;";
+      return `.${printColumnClass(column.key)} { ${wrapRule} }`;
+    }).join("\n");
+    const colgroupHtml = mode === "sheet" && printableColumns.length
+      ? `<colgroup>${printableColumns.map((column) => {
+          const percent = (printColumnPercents.get(column.key) || 1 / printableColumns.length) * 100;
+          return `<col style="width:${percent.toFixed(4)}%">`;
+        }).join("")}</colgroup>`
+      : "";
     const rowsHtml = visibleRows.length
       ? visibleRows.map((row) => {
-          const cells = printableColumns.map((column) => `<td class="col-${column.key}">${escapeHtml(getCellText(row, column.key, dateConfig, pricingRules) || "—")}</td>`).join("");
+          const cells = printableColumns.map((column) => {
+            const presentation = getPrintCellPresentation(row, column, dateConfig, pricingRules, layout.status);
+            const styles = inlineStyle({
+              background: presentation.bg,
+              color: presentation.color,
+              "font-style": presentation.fontStyle,
+              "font-weight": presentation.fontWeight,
+              "print-color-adjust": "exact",
+              "-webkit-print-color-adjust": "exact",
+            });
+            return `<td class="${printColumnClass(column.key)}" style="${styles}">${escapeHtml(presentation.text)}</td>`;
+          }).join("");
           return `<tr>${cells}</tr>`;
         }).join("")
       : `<tr><td colspan="${Math.max(1, printableColumns.length)}">No orders to print</td></tr>`;
-    const cardsHtml = visibleRows.length && orderedCardColumns.length
+    const cardItemsHtml = visibleRows.length && orderedCardColumns.length
       ? visibleRows.map((row) => (
           `<section class="order-card">${orderedCardColumns.map((column) => (
             `<div class="card-field"><strong>${escapeHtml(column.label || column.key)}</strong><span>${escapeHtml(getCellText(row, column.key, dateConfig, pricingRules) || "—")}</span></div>`
           )).join("")}</section>`
+        ))
+      : [];
+    const cardsHtml = cardItemsHtml.length
+      ? Array.from({ length: Math.ceil(cardItemsHtml.length / 2) }, (_unused, pageIndex) => (
+          `<section class="card-page">${cardItemsHtml.slice(pageIndex * 2, pageIndex * 2 + 2).join("")}</section>`
         )).join("")
       : `<div class="empty-print">${visibleRows.length ? "No print fields are enabled" : "No orders to print"}</div>`;
     const html = `<!doctype html>
@@ -590,22 +906,48 @@ export default function OrdersPage({
     <style>
       @page { size: ${orientation}; margin: 0.35in; }
       body { margin: 24px; font-family: "Segoe UI", sans-serif; color: #111827; }
-      h1 { font-size: 18px; margin: 0 0 14px; }
+      .print-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; margin: 0 0 14px; padding-bottom: 10px; border-bottom: 1px solid #d1d5db; }
+      .print-header h1 { font-size: 18px; margin: 0; }
+      .print-header-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: flex-end; color: #475569; font-size: 12px; font-weight: 700; }
+      .print-header-search { margin-top: 3px; color: #64748b; font-size: 12px; }
+      * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       table { width: 100%; border-collapse: collapse; table-layout: fixed; }
       th { background: #e5e5e5; color: #475569; font-size: 11px; text-align: left; text-transform: uppercase; }
-      th, td { border: 1px solid #d1d5db; padding: 6px 7px; vertical-align: top; overflow-wrap: anywhere; }
+      th, td { border: 1px solid #d1d5db; padding: 6px 7px; vertical-align: top; }
       td { font-size: 12px; }
       ${columnCss}
-      .cards { display: grid; grid-template-columns: ${orientation === "landscape" ? "1fr 1fr" : "1fr"}; gap: 12px; }
-      .order-card { break-inside: avoid; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+      .cards { display: block; }
+      .card-page {
+        min-height: calc(100vh - 76px);
+        display: grid;
+        grid-template-columns: ${orientation === "landscape" ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)"};
+        grid-template-rows: ${orientation === "landscape" ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(0, 1fr)"};
+        gap: 12px;
+        break-after: page;
+        page-break-after: always;
+      }
+      .card-page:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+      .order-card { break-inside: avoid; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; display: grid; gap: 8px; align-content: start; min-width: 0; }
       .card-field { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; font-size: 12px; }
       .card-field strong { color: #475569; }
       .empty-print { color: #64748b; font-size: 13px; }
     </style>
   </head>
   <body>
-    <h1>${mode === "card" ? "Spaila Order Cards" : "Spaila Orders"}</h1>
+    <header class="print-header">
+      <div>
+        <h1>${escapeHtml(shopName || "Spaila")} ${escapeHtml(printTitle)}</h1>
+        <div class="print-header-search">Search: ${escapeHtml(printSearch || "All orders")}</div>
+      </div>
+      <div class="print-header-meta">
+        <span>${escapeHtml(printDate)}</span>
+      </div>
+    </header>
     ${mode === "card" ? `<div class="cards">${cardsHtml}</div>` : `<table>
+      ${colgroupHtml}
       <thead><tr>${headerHtml}</tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>`}
@@ -617,7 +959,7 @@ export default function OrdersPage({
     printWindow.document.open();
     printWindow.document.write(html);
     printWindow.document.close();
-  }, [dateConfig, layout.fields, pricingRules, printConfig, visibleRows]);
+  }, [dateConfig, layout.fields, layout.status, pricingRules, printConfig, search, shopName, visibleRows]);
 
   React.useEffect(() => {
     if (!onRegisterPrint) return undefined;
@@ -644,7 +986,14 @@ export default function OrdersPage({
         </div>
       ) : null}
 
-      {state.error ? <div className="error-banner">{state.error}</div> : null}
+      {state.error ? (
+        <div className="error-banner web-recovery-banner">
+          <span>{state.error}</span>
+          <button type="button" className="ghost-button" onClick={() => loadOrders({ force: true })}>
+            Retry orders
+          </button>
+        </div>
+      ) : null}
       <OrdersTable
         orders={visibleRows}
         loading={state.loading && rows.length === 0}
@@ -653,6 +1002,11 @@ export default function OrdersPage({
         savingStatusIds={savingStatusIds}
         layout={layout}
         statusConfig={layout.status}
+        documentsConfig={documentsConfig}
+        onGenerateGiftLetter={generateGiftLetter}
+        activeTab={currentTab}
+        onMoveRowsToStatus={moveRowsToWorkflowStatus}
+        onDeleteRows={deleteRows}
         sheetSize={sheetSize}
         dateConfig={dateConfig}
         pricingRules={pricingRules}

@@ -4032,21 +4032,28 @@ function getDocumentMimeType(filePath) {
   return "application/octet-stream";
 }
 
-ipcMain.handle("documents:sync-thank-you-template", async (_event, payload = {}) => {
+async function syncDocumentAssetFromPath(assetKey, payload = {}) {
   try {
+    const key = String(assetKey || "").trim();
+    if (!["gift_template", "thank_you_template"].includes(key)) {
+      return { ok: false, error: "Unknown document asset." };
+    }
     const filePath = String(payload.filePath || "").trim();
     if (!filePath || !path.isAbsolute(filePath)) {
-      return { ok: false, error: "Thank-you template path is required." };
+      return { ok: false, error: "Document template path is required." };
     }
     if (!fs.existsSync(filePath)) {
-      return { ok: false, error: "Thank-you template file not found." };
+      return { ok: false, error: "Document template file not found." };
     }
     const stat = safeStat(filePath);
     if (!stat?.isFile()) {
-      return { ok: false, error: "Thank-you template is not a file." };
+      return { ok: false, error: "Document template is not a file." };
     }
     const content = await fsp.readFile(filePath);
-    const response = await fetch("http://127.0.0.1:8055/account/thank-you-template", {
+    const endpoint = key === "thank_you_template"
+      ? "http://127.0.0.1:8055/account/thank-you-template"
+      : `http://127.0.0.1:8055/account/document-assets/${encodeURIComponent(key)}`;
+    const response = await fetch(endpoint, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4063,12 +4070,50 @@ ipcMain.handle("documents:sync-thank-you-template", async (_event, payload = {})
     const template = await response.json();
     return { ok: true, template };
   } catch (err) {
-    return { ok: false, error: err?.message || "Could not sync thank-you template." };
+    return { ok: false, error: err?.message || "Could not sync document template." };
+  }
+}
+
+ipcMain.handle("documents:sync-asset", async (_event, payload = {}) => {
+  return syncDocumentAssetFromPath(payload.assetKey || payload.asset_key, payload);
+});
+
+ipcMain.handle("documents:sync-thank-you-template", async (_event, payload = {}) => {
+  return syncDocumentAssetFromPath("thank_you_template", payload);
+});
+
+ipcMain.handle("documents:get-config", async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/documents-config");
+    if (!response.ok) return { ok: false };
+    const config = await response.json();
+    return { ok: true, config };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not load shared Docs settings." };
+  }
+});
+
+ipcMain.handle("documents:update-config", async (_event, config = {}) => {
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/documents-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config || {}),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      return { ok: false, error: detail || `Shared Docs settings save failed (${response.status}).` };
+    }
+    const saved = await response.json();
+    return { ok: true, config: saved };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not save shared Docs settings." };
   }
 });
 
 ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) => {
   try {
+    fs.mkdirSync(folderPath, { recursive: true });
     const dest = path.join(folderPath, filename);
     fs.writeFileSync(dest, typeof data === "string" ? data : JSON.stringify(data, null, 2), "utf8");
     return { ok: true, path: dest };

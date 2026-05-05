@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Body, HTTPException
 from .mail_service import mail_service
 from .inbox_service import mark_source_deleted
+from backend.api.routes.account import _require_feature
 
 
 router = APIRouter()
@@ -8,6 +9,7 @@ router = APIRouter()
 
 @router.post("/inbox/fetch")
 def fetch_inbox_emails(payload: dict = Body(default={})):
+    _require_feature("inbox")
     payload = payload if isinstance(payload, dict) else {}
     force = bool(payload.get("force", False))
     print("[INBOX FETCH] called")
@@ -40,6 +42,7 @@ def fetch_inbox_emails(payload: dict = Body(default={})):
 
 @router.get("/inbox/resync")
 def resync_inbox_emails(limit: int = 100):
+    _require_feature("inbox")
     try:
         result = mail_service.poll(
             force=True,
@@ -70,6 +73,7 @@ def inbox_service_status():
 
 @router.post("/inbox/service/start")
 def start_inbox_service():
+    _require_feature("inbox")
     return mail_service.start()
 
 
@@ -80,6 +84,7 @@ def stop_inbox_service():
 
 @router.post("/inbox/service/reconnect")
 def reconnect_inbox_service():
+    _require_feature("inbox")
     return mail_service.reconnect(reason="api_reconnect")
 
 

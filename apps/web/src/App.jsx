@@ -5,6 +5,7 @@ import OrdersPage from "./features/orders/OrdersPage.jsx";
 import OrderDetail from "./features/order-detail/OrderDetail.jsx";
 import ArchivePage from "./features/archive/ArchivePage.jsx";
 import AccountPage from "./features/account/AccountPage.jsx";
+import PasswordResetPage from "./features/account/PasswordResetPage.jsx";
 import SettingsPage from "./features/settings/SettingsPage.jsx";
 import OrdersSettingsPage from "./features/settings/OrdersSettingsPage.jsx";
 import SearchSortSettingsPage from "./features/settings/SearchSortSettingsPage.jsx";
@@ -12,6 +13,7 @@ import StatusSettingsPage from "./features/settings/StatusSettingsPage.jsx";
 import DatesSettingsPage from "./features/settings/DatesSettingsPage.jsx";
 import PricingSettingsPage from "./features/settings/PricingSettingsPage.jsx";
 import PrintingSettingsPage from "./features/settings/PrintingSettingsPage.jsx";
+import DocumentsSettingsPage from "./features/settings/DocumentsSettingsPage.jsx";
 import EmailsPage from "./features/settings/EmailsPage.jsx";
 import SupportPage from "./features/support/SupportPage.jsx";
 
@@ -32,7 +34,7 @@ const SETTINGS_TABS = [
   { id: "pricing",   label: "Pricing" },
   { kind: "divider" },
   { id: "printing",  label: "Printing" },
-  { id: "documents", label: "Docs",              desktopOnly: true },
+  { id: "documents", label: "Docs" },
   { kind: "divider" },
   { id: "support",   label: "Support" },
 ];
@@ -217,6 +219,37 @@ function ShopAvatar({ logoUrl, initial, size, name }) {
   return <span>{initial}</span>;
 }
 
+class WebErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("[WEB_APP_RENDER_ERROR]", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="web-page-inner wide">
+          <div className="error-banner web-recovery-banner">
+            <span>{this.state.error?.message || "The workspace hit a rendering error."}</span>
+            <button type="button" className="ghost-button" onClick={() => this.setState({ error: null })}>
+              Recover workspace
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function DesktopOnlyPanel({ label }) {
   return (
     <div className="section-card" style={{ display: "grid", gap: 10 }}>
@@ -281,6 +314,8 @@ function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, l
           <PricingSettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "printing" ? (
           <PrintingSettingsPage onSettingsSaved={onSettingsSaved} />
+        ) : settingsTab === "documents" ? (
+          <DocumentsSettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "emails" ? (
           <EmailsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "support" ? (
@@ -321,9 +356,8 @@ export default function App() {
   const [ordersRefreshKey, setOrdersRefreshKey] = React.useState(0);
   const [route, setRoute] = React.useState("orders");
   const [ordersTab, setOrdersTab] = React.useState("active");
-  const [selectedOrderId, setSelectedOrderId] = React.useState("");
+  const [selectedOrderContext, setSelectedOrderContext] = React.useState(null);
   const [orderSearch, setOrderSearch] = React.useState("");
-  const [orderFilter, setOrderFilter] = React.useState("all");
   const [orderSortField, setOrderSortField] = React.useState("order_date");
   const [orderSortDirection, setOrderSortDirection] = React.useState("asc");
   const [orderSearchCounts, setOrderSearchCounts] = React.useState({});
@@ -336,30 +370,43 @@ export default function App() {
   });
   const [orderPrintHandler, setOrderPrintHandler] = React.useState(null);
 
+  const loadFoundations = React.useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setStatus({ loading: true, error: "" });
+    const [profileResult, capabilitiesResult, settingsResult] = await Promise.allSettled([
+      api.get(API_ENDPOINTS.account),
+      api.get(API_ENDPOINTS.accountCapabilities),
+      settingsApi.getWebSettings(),
+    ]);
+
+    if (profileResult.status === "fulfilled") setAccount(profileResult.value);
+    if (capabilitiesResult.status === "fulfilled") setCapabilities(capabilitiesResult.value);
+    if (settingsResult.status === "fulfilled") setWebSettings(settingsResult.value);
+
+    const failures = [profileResult, capabilitiesResult, settingsResult].filter((result) => result.status === "rejected");
+    setStatus({
+      loading: false,
+      error: failures.length === 3
+        ? "Spaila is still connecting to the backend. Orders will retry automatically."
+        : "",
+    });
+    return failures.length;
+  }, []);
+
   React.useEffect(() => {
     let cancelled = false;
-    async function loadFoundations() {
-      try {
-        const [profile, capabilityMap, ws] = await Promise.all([
-          api.get(API_ENDPOINTS.account),
-          api.get(API_ENDPOINTS.accountCapabilities),
-          settingsApi.getWebSettings().catch(() => null),
-        ]);
-        if (!cancelled) {
-          setAccount(profile);
-          setCapabilities(capabilityMap);
-          if (ws) setWebSettings(ws);
-          setStatus({ loading: false, error: "" });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setStatus({ loading: false, error: error?.message || "Could not connect to the Spaila backend." });
-        }
+    let retryTimer = null;
+    async function loadWithRetry(attempt = 0) {
+      const failureCount = await loadFoundations({ silent: attempt > 0 });
+      if (!cancelled && failureCount === 3 && attempt < 3) {
+        retryTimer = window.setTimeout(() => loadWithRetry(attempt + 1), Math.min(8000, 1200 * (attempt + 1)));
       }
     }
-    loadFoundations();
-    return () => { cancelled = true; };
-  }, []);
+    loadWithRetry();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [loadFoundations]);
 
   // Listen for settings changes made in the Settings panel so the header updates live
   const refreshWebSettings = React.useCallback(async () => {
@@ -372,7 +419,8 @@ export default function App() {
 
   const shopName = account?.shop_name || "Spaila";
   const shopInitial = String(shopName).trim().slice(0, 1).toUpperCase() || "S";
-  const logoUrl = "http://127.0.0.1:8055/account/logo";
+  const logoVersion = encodeURIComponent(account?.updated_at || account?.shop_logo_path || "");
+  const logoUrl = `http://127.0.0.1:8055/account/logo${logoVersion ? `?v=${logoVersion}` : ""}`;
 
   React.useEffect(() => {
     const titleName = String(shopName || "").trim() || "Spaila";
@@ -383,7 +431,15 @@ export default function App() {
   const showCompletedTab = webSettings != null ? webSettings.show_completed_tab : true;
   const showInventoryTab = webSettings != null ? webSettings.show_inventory_tab : false;
   const showThankYouShortcut = webSettings != null ? webSettings.show_thank_you_shortcut : true;
+  const entitlements = capabilities?.entitlements || {};
+  const isSubscriptionLocked = entitlements.locked === true;
 
+  const selectedOrderId = typeof selectedOrderContext === "string"
+    ? selectedOrderContext
+    : selectedOrderContext?.order_id || "";
+  const selectedItemId = typeof selectedOrderContext === "object" && selectedOrderContext
+    ? selectedOrderContext.id || selectedOrderContext.item_id || ""
+    : "";
   const showDetail = Boolean(selectedOrderId);
   const hasActiveOrderSearch = orderSearch.trim().length > 0;
   const topNavItems = [
@@ -412,19 +468,43 @@ export default function App() {
   }, [showCompletedTab, showInventoryTab, route, ordersTab]);
 
   function navigate(nextRoute) {
-    setSelectedOrderId("");
+    setSelectedOrderContext(null);
     setRoute(nextRoute);
+  }
+
+  function closeOrderDetail() {
+    setSelectedOrderContext(null);
+    setRoute("orders");
+    setOrdersRefreshKey((key) => key + 1);
   }
 
   async function navigateOrderScope(nextScope) {
     const leavingSettings = route === "settings";
-    setSelectedOrderId("");
+    setSelectedOrderContext(null);
     setOrdersTab(nextScope);
     if (leavingSettings) {
       await refreshWebSettings();
     }
     setRoute("orders");
   }
+
+  React.useEffect(() => {
+    const validRoutes = new Set(["orders", "archive", "thankyou", "settings", "reset-password"]);
+    if (!validRoutes.has(route)) setRoute("orders");
+  }, [route]);
+
+  React.useEffect(() => {
+    function applyHashRoute() {
+      const hashRoute = String(window.location.hash || "").replace(/^#\/?/, "").split("?")[0];
+      if (hashRoute === "reset-password") {
+        setSelectedOrderContext(null);
+        setRoute("reset-password");
+      }
+    }
+    applyHashRoute();
+    window.addEventListener("hashchange", applyHashRoute);
+    return () => window.removeEventListener("hashchange", applyHashRoute);
+  }, []);
 
   // When navigating to settings, refresh web settings when leaving (covers saves made there)
   function navigateFromSettings(nextRoute) {
@@ -444,63 +524,64 @@ export default function App() {
               <span className="web-topnav-app-label">Spaila workspace</span>
             </div>
           </div>
-
-          <div className="web-topnav-account-actions" aria-label="Account actions">
-            {showThankYouShortcut ? (
-              <button
-                type="button"
-                className={`web-header-icon-btn${route === "thankyou" ? " active" : ""}`}
-                title="Thank-you letter"
-                aria-label="Thank-you letter"
-                onClick={() => navigate("thankyou")}
-              >
-                <IconThankYou />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`web-header-icon-btn${route === "settings" ? " active" : ""}`}
-              title="Settings"
-              aria-label="Settings"
-              onClick={() => navigateFromSettings("settings")}
-            >
-              <IconSettings />
-            </button>
-          </div>
         </div>
 
         <div className="web-topnav-ops-row">
-          <nav className="web-topnav-tabs" aria-label="Main navigation">
-            {topNavItems.map((item) => {
-              const isOrdersTab = item.route === "orders";
-              const isActive = !showDetail && (
-                isOrdersTab
-                  ? route === "orders" && ordersTab === item.ordersTab
-                  : route === item.route
-              );
-              return (
+          <div className="web-topnav-left-cluster">
+            <div className="web-topnav-account-actions" aria-label="Workspace utilities">
+              <button
+                type="button"
+                className={`web-header-icon-btn${route === "settings" ? " active" : ""}`}
+                title="Settings"
+                aria-label="Settings"
+                onClick={() => navigateFromSettings("settings")}
+              >
+                <IconSettings />
+              </button>
+              {showThankYouShortcut ? (
                 <button
-                  key={item.id}
                   type="button"
-                  className={isActive ? "active" : ""}
-                  onClick={() => {
-                    if (isOrdersTab) {
-                      navigateOrderScope(item.ordersTab);
-                    } else {
-                      navigateFromSettings(item.route);
-                    }
-                  }}
+                  className={`web-header-icon-btn${route === "thankyou" ? " active" : ""}`}
+                  title="Docs"
+                  aria-label="Docs and thank-you letter"
+                  onClick={() => navigate("thankyou")}
                 >
-                  <span>{item.label}</span>
-                  {hasActiveOrderSearch && Number(item.searchCount || 0) > 0 ? (
-                    <span className="web-tab-search-badge" title={`${item.searchCount} search matches`}>
-                      {item.searchCount}
-                    </span>
-                  ) : null}
+                  <IconThankYou />
                 </button>
-              );
-            })}
-          </nav>
+              ) : null}
+            </div>
+            <nav className="web-topnav-tabs" aria-label="Main navigation">
+              {topNavItems.map((item) => {
+                const isOrdersTab = item.route === "orders";
+                const isActive = !showDetail && (
+                  isOrdersTab
+                    ? route === "orders" && ordersTab === item.ordersTab
+                    : route === item.route
+                );
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={isActive ? "active" : ""}
+                    onClick={() => {
+                      if (isOrdersTab) {
+                        navigateOrderScope(item.ordersTab);
+                      } else {
+                        navigateFromSettings(item.route);
+                      }
+                    }}
+                  >
+                    <span>{item.label}</span>
+                    {hasActiveOrderSearch && Number(item.searchCount || 0) > 0 ? (
+                      <span className="web-tab-search-badge" title={`${item.searchCount} search matches`}>
+                        {item.searchCount}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
 
           {!showDetail && route === "orders" ? (
             <div className="web-header-order-controls">
@@ -555,17 +636,6 @@ export default function App() {
                 <option value="asc">Ascending ↑</option>
                 <option value="desc">Descending ↓</option>
               </select>
-              <select
-                className="web-header-select filter"
-                value={orderFilter}
-                onChange={(event) => setOrderFilter(event.target.value)}
-                aria-label="Filter orders"
-              >
-                <option value="all">All</option>
-                <option value="gift">Gift orders</option>
-                <option value="has_notes">Has notes</option>
-                <option value="needs_status">Needs status</option>
-              </select>
               <button
                 type="button"
                 className="web-header-print"
@@ -582,50 +652,74 @@ export default function App() {
 
       {/* ── Page content ───────────────────────────────────────────────── */}
       <div className="web-page">
-        {!showDetail ? (
-          <div className="web-page-inner wide" style={{ display: route === "orders" ? undefined : "none" }}>
-            <OrdersPage
-              scope={ordersTab}
-              activeTab={ordersTab}
-              onTabChange={setOrdersTab}
-              onSelectOrder={setSelectedOrderId}
-              showCompletedTab={showCompletedTab}
-              layoutRefreshKey={layoutRefreshKey}
-              ordersRefreshKey={ordersRefreshKey}
-              search={orderSearch}
-              filter={orderFilter}
-              sortField={orderSortField}
-              sortDirection={orderSortDirection}
-              sheetSize={orderSheetSize}
-              onRegisterPrint={setOrderPrintHandler}
-              onSearchCountsChange={setOrderSearchCounts}
-              onClearSearch={() => setOrderSearch("")}
-            />
-          </div>
-        ) : null}
+        <WebErrorBoundary key={showDetail ? `detail:${selectedOrderId}` : route}>
+          {status.error ? (
+            <div className="web-page-inner wide">
+              <div className="error-banner web-recovery-banner">
+                <span>{status.error}</span>
+                <button type="button" className="ghost-button" onClick={() => loadFoundations()}>
+                  Retry connection
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {isSubscriptionLocked ? (
+            <div className="web-page-inner wide">
+              <div className="error-banner web-recovery-banner">
+                <span>Trial access has ended. Parser, inbox, helper sync, and manual order creation are locked; order and archive viewing remain available.</span>
+                <button type="button" className="ghost-button" onClick={() => navigateFromSettings("settings")}>
+                  Manage billing
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {!showDetail ? (
+            <div className="web-page-inner wide" style={{ display: route === "orders" ? undefined : "none" }}>
+              <OrdersPage
+                scope={ordersTab}
+                activeTab={ordersTab}
+                onTabChange={setOrdersTab}
+                onSelectOrder={setSelectedOrderContext}
+                showCompletedTab={showCompletedTab}
+                layoutRefreshKey={layoutRefreshKey}
+                ordersRefreshKey={ordersRefreshKey}
+                shopName={shopName}
+                search={orderSearch}
+                sortField={orderSortField}
+                sortDirection={orderSortDirection}
+                sheetSize={orderSheetSize}
+                onRegisterPrint={setOrderPrintHandler}
+                onSearchCountsChange={setOrderSearchCounts}
+                onClearSearch={() => setOrderSearch("")}
+              />
+            </div>
+          ) : null}
 
-        {showDetail ? (
-          <div className="web-page-inner">
-            <OrderDetail orderId={selectedOrderId} onBack={() => setSelectedOrderId("")} />
-          </div>
-        ) : route === "archive" ? (
-          <div className="web-page-inner">
-            <ArchivePage />
-          </div>
-        ) : route === "thankyou" ? (
-          <div className="web-page-inner">
-            <ThankYouPage />
-          </div>
-        ) : route === "settings" ? (
-          <SettingsShell
-            account={account}
-            capabilities={capabilities}
-            onAccountUpdated={setAccount}
-            shopInitial={shopInitial}
-            logoUrl={logoUrl}
-            onSettingsSaved={refreshWebSettings}
-          />
-        ) : null}
+          {showDetail ? (
+            <div className="web-page-inner">
+              <OrderDetail orderId={selectedOrderId} initialItemId={selectedItemId} onBack={closeOrderDetail} />
+            </div>
+          ) : route === "archive" ? (
+            <div className="web-page-inner">
+              <ArchivePage />
+            </div>
+          ) : route === "thankyou" ? (
+            <div className="web-page-inner">
+              <ThankYouPage />
+            </div>
+          ) : route === "settings" ? (
+            <SettingsShell
+              account={account}
+              capabilities={capabilities}
+              onAccountUpdated={setAccount}
+              shopInitial={shopInitial}
+              logoUrl={logoUrl}
+              onSettingsSaved={refreshWebSettings}
+            />
+          ) : route === "reset-password" ? (
+            <PasswordResetPage onBack={() => navigateFromSettings("settings")} />
+          ) : null}
+        </WebErrorBoundary>
       </div>
     </div>
   );

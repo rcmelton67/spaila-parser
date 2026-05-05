@@ -2302,6 +2302,30 @@ export default function WorkspacePage({
     }),
     [displayInboxItems, emailTrash, inboxEvents, orderUpdateLinks, ordersForLinking, sourceDeletedInboxItems],
   );
+  const activityInboxItems = React.useMemo(() => (
+    visibleInboxActivityEvents.map((event) => ({
+      id: `activity:${event.id}`,
+      email_id: `activity:${event.id}`,
+      activity_event_id: event.id,
+      is_activity_event: true,
+      linked_order_id: event.order_id || "",
+      order_number: event.order_number || "",
+      subject: `${event.buyer_name || "Order reply"}${event.order_number ? ` - #${event.order_number}` : ""}`,
+      sender: event.type === "order_update" ? "Order Reply" : "New Order",
+      preview: event.preview || "",
+      preview_text: event.preview || "",
+      timestamp: event.timestamp || event.created_at || "",
+      received_at: event.timestamp || event.created_at || "",
+      direction: "inbound",
+      inbox_type: event.type || "order_update",
+      unread: event.unread,
+      order_score: 0,
+    }))
+  ), [visibleInboxActivityEvents]);
+  const selectableInboxItems = React.useMemo(
+    () => [...activityInboxItems, ...displayInboxItems],
+    [activityInboxItems, displayInboxItems],
+  );
   const sentMessages = workspaceState?.sentMessages || [];
   const buckets = workspaceState?.buckets || [];
   const inboxPath = workspaceState?.inboxPath || buckets.find((item) => item.key === "Inbox")?.path || "";
@@ -2313,9 +2337,9 @@ export default function WorkspacePage({
   const mailServiceBusy = !!mailServiceState?.in_flight || refreshingInbox;
   const showInboxEmptyState = !loading && inboxItems.length === 0 && sentMessages.length === 0;
   const displayInboxPath = inboxPath || "C:\\Spaila\\Inbox";
-  const inboxModeItems = displayInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
+  const inboxModeItems = selectableInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
   const sentItems = sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound");
-  const checkedInboxItems = displayInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
+  const checkedInboxItems = selectableInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
 
   const mailSearchResults = React.useMemo(() => {
     const q = mailSearchQuery.toLowerCase().trim();
@@ -2343,7 +2367,7 @@ export default function WorkspacePage({
       ]
         .some((f) => String(f || "").toLowerCase().includes(q));
     }
-    for (const item of displayInboxItems) {
+    for (const item of selectableInboxItems) {
       const id = getInboxItemId(item);
       if (id && !seen.has(id) && matchItem(item, "inbox")) { seen.add(id); results.push({ item, source: "inbox" }); }
     }
@@ -2355,12 +2379,12 @@ export default function WorkspacePage({
       if (!seen.has(emailId) && matchItem(entry.item, "trash")) { seen.add(emailId); results.push({ item: entry.item, source: "trash" }); }
     }
     return results;
-  }, [mailSearchQuery, displayInboxItems, sentItems, emailTrash, ordersForLinking, orderUpdateLinks]);
+  }, [mailSearchQuery, selectableInboxItems, sentItems, emailTrash, ordersForLinking, orderUpdateLinks]);
 
   const effectivePreviewSource = mode === "search" ? searchSelectedSource : mode;
   const selectedInboxItem = (mode === "trash" || (mode === "search" && searchSelectedSource === "trash"))
     ? (emailTrash[selectedEmailId]?.item || null)
-    : (displayInboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null);
+    : (selectableInboxItems.find((item) => getInboxItemId(item) === selectedEmailId) || null);
   const selectedSentItem = sentItems.find((item) => getMessageId(item) === selectedSentId) || null;
   const selectedMailboxItem = effectivePreviewSource === "sent" ? selectedSentItem : selectedInboxItem;
   const selectedOrderLinkState = buildOrderLinkState(selectedMailboxItem, ordersForLinking);
@@ -2395,7 +2419,7 @@ export default function WorkspacePage({
       ...selectedSubjectSentMessages,
     ]).sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")))
     : [];
-  const inboxContextMenuItem = displayInboxItems.find((item) => getInboxItemId(item) === inboxContextMenu?.emailId) || null;
+  const inboxContextMenuItem = selectableInboxItems.find((item) => getInboxItemId(item) === inboxContextMenu?.emailId) || null;
   const inboxContextOrderLinkState = buildOrderLinkState(inboxContextMenuItem, ordersForLinking);
   const threadItems = threadState.threads || [];
   const unlinkedMessages = threadState.unlinkedMessages || [];
@@ -3396,6 +3420,11 @@ export default function WorkspacePage({
   }
 
   function handleMoveToTrash(item) {
+    if (item?.is_activity_event && item?.activity_event_id) {
+      dismissEvent(item.activity_event_id);
+      setDropMessage("Email removed from Inbox activity.");
+      return;
+    }
     const emailId = getInboxItemId(item);
     if (!emailId) { setDropMessage("Email id is missing."); return; }
 
@@ -3568,11 +3597,19 @@ export default function WorkspacePage({
   function handleBulkDelete() {
     if (!checkedInboxItems.length) return;
     const itemsToDelete = [...checkedInboxItems];
+    if (itemsToDelete.length > 1) {
+      const confirmed = window.confirm(
+        `Move ${itemsToDelete.length} selected emails to Trash?\n\nYou can restore them from Trash if needed.`
+      );
+      if (!confirmed) return;
+    }
+    const activityItemsToDelete = itemsToDelete.filter((item) => item?.is_activity_event && item?.activity_event_id);
+    const mailboxItemsToDelete = itemsToDelete.filter((item) => !(item?.is_activity_event && item?.activity_event_id));
     const now = Date.now();
 
     setEmailTrash((prev) => {
       const next = { ...prev };
-      for (const item of itemsToDelete) {
+      for (const item of mailboxItemsToDelete) {
         const emailId = getInboxItemId(item);
         if (!emailId) continue;
         const previousIndex = inboxItems.findIndex((c) => getInboxItemId(c) === emailId);
@@ -3583,7 +3620,7 @@ export default function WorkspacePage({
     });
     setPendingRemovals((prev) => {
       const next = { ...prev };
-      for (const item of itemsToDelete) {
+      for (const item of mailboxItemsToDelete) {
         const emailId = getInboxItemId(item);
         const imapUid = String(item?.imap_uid || "").trim();
         if (emailId) next[emailId] = true;
@@ -3591,11 +3628,15 @@ export default function WorkspacePage({
       }
       return next;
     });
-    for (const item of itemsToDelete) {
+    for (const item of mailboxItemsToDelete) {
       hideInboxItemInState(item);
+    }
+    for (const item of activityItemsToDelete) {
+      dismissEvent(item.activity_event_id);
     }
     const count = itemsToDelete.length;
     setDropMessage(`${count} email${count === 1 ? "" : "s"} moved to Trash.`);
+    setCheckedEmailIds(new Set());
   }
 
   function renderThreadRow(thread) {
@@ -3673,6 +3714,9 @@ export default function WorkspacePage({
     const linkedOrderBadge = linkedOrderNumber ? `#${linkedOrderNumber}` : "Linked Order";
 
     function openInboxCard() {
+      if (item?.is_activity_event && item?.activity_event_id) {
+        markEventRead(item.activity_event_id);
+      }
       if (linkedOrder) {
         handleOpenLinkedOrder(linkedOrder);
         return;
@@ -4233,7 +4277,6 @@ export default function WorkspacePage({
     }
     return (
       <>
-        {renderActivityFeed()}
         {inboxModeItems.length ? inboxModeItems.map(renderUnlinkedRow) : (
           <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: 14, color: "#64748b", fontSize: 13 }}>
             No inbox emails.
@@ -4405,39 +4448,63 @@ export default function WorkspacePage({
           {checkedInboxItems.length > 0 ? (
             <div style={{
               margin: "0 16px 12px",
-              border: "1px solid #dbeafe",
-              background: "#eff6ff",
-              borderRadius: 12,
-              padding: "10px 12px",
+              border: "1px solid #bfdbfe",
+              borderLeft: "5px solid #2563eb",
+              background: "linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%)",
+              borderRadius: 14,
+              padding: "12px 14px",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 8,
+              gap: "10px 18px",
               flexWrap: "wrap",
+              minWidth: 0,
+              boxShadow: "0 8px 22px rgba(37, 99, 235, 0.10)",
             }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#1e3a8a" }}>
+              <div style={{ flex: "1 1 120px", minWidth: 0, fontSize: 13, fontWeight: 800, color: "#1e3a8a", whiteSpace: "nowrap" }}>
                 {checkedInboxItems.length} selected
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={handleBulkProcess} style={{ border: "1px solid #bfdbfe", background: "#fff", color: "#0f172a", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-                  Process
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, flex: "1 1 260px", minWidth: 0, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={handleBulkProcess}
+                  style={{
+                    border: "1px solid #93c5fd",
+                    background: "#fff",
+                    color: "#0f172a",
+                    borderRadius: 9,
+                    padding: "7px 14px",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    flex: "0 1 auto",
+                    minWidth: 126,
+                    whiteSpace: "nowrap",
+                    boxShadow: "0 1px 2px rgba(15,23,42,0.06)",
+                  }}
+                >
+                  Process Selected
                 </button>
                 <button
                   type="button"
                   onClick={handleBulkDelete}
                   title="Move selected emails to Trash"
                   style={{
-                    border: "1px solid #fecaca",
-                    background: "#fff",
+                    border: "1px solid #fca5a5",
+                    background: "#fff7f7",
                     color: "#991b1b",
-                    borderRadius: 8,
-                    padding: "6px 10px",
+                    borderRadius: 9,
+                    padding: "7px 14px",
                     cursor: "pointer",
                     fontSize: 12,
-                    fontWeight: 700,
+                    fontWeight: 800,
+                    flex: "0 1 auto",
+                    minWidth: 116,
+                    whiteSpace: "nowrap",
+                    boxShadow: "0 1px 2px rgba(127,29,29,0.08)",
                   }}
                 >
-                  🗑 Trash
+                  Trash Selected
                 </button>
               </div>
             </div>

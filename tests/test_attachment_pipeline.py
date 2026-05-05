@@ -212,6 +212,87 @@ def test_new_order_email_with_different_order_number_does_not_attach_to_recent_o
     assert len(messages) == 1
 
 
+def test_new_order_email_with_reused_order_number_does_not_attach_to_existing_conversation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(attachment_store, "_ATTACHMENT_ROOT", tmp_path / "attachments")
+    monkeypatch.setattr(email_archive, "_INTERNAL_DIR", tmp_path / ".spaila_internal")
+    monkeypatch.setattr(email_archive, "_EMAIL_ARCHIVE_DIR", tmp_path / ".spaila_internal" / "email_archive")
+    monkeypatch.setattr(email_archive, "_RETENTION_INDEX_PATH", tmp_path / ".spaila_internal" / "email_retention_index.json")
+    conn = sqlite3.connect("spaila.db")
+    conn.execute(
+        """
+        CREATE TABLE orders (
+            id TEXT,
+            order_number TEXT,
+            buyer_name TEXT,
+            buyer_email TEXT,
+            messages TEXT,
+            source_eml_path TEXT,
+            eml_path TEXT,
+            created_at TEXT,
+            order_date TEXT,
+            last_activity_at TEXT,
+            status TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE inbox_events (
+            id TEXT,
+            type TEXT,
+            order_id TEXT,
+            order_number TEXT,
+            buyer_name TEXT,
+            preview TEXT,
+            timestamp TEXT,
+            unread INTEGER,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "order-2380-a",
+            "2380",
+            "Kelly Leetch",
+            "sunyogi74@gmail.com",
+            json.dumps([{
+                "type": "outbound",
+                "subject": "Ella memorial preview | order number 2380",
+                "message_id": "old-thread@example.com",
+            }]),
+            "",
+            "",
+            "2026-04-29T18:26:52+00:00",
+            "2026-04-29",
+            "2026-05-02T18:09:31+00:00",
+            "active",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    result = _persist_inbound_to_order_thread(
+        _raw_order_email(
+            order_number="2380",
+            message_id="reused-2380@example.com",
+            subject="[Melton Memorials]: You've got a new order: #2380",
+        ),
+        "42356",
+    )
+
+    assert result["matched"] is False
+    assert result["reason"].startswith("new_order_notice_blocked_existing_order:")
+    conn = sqlite3.connect("spaila.db")
+    row = conn.execute("SELECT messages FROM orders WHERE id = 'order-2380-a'").fetchone()
+    events = conn.execute("SELECT COUNT(*) FROM inbox_events").fetchone()[0]
+    conn.close()
+    assert len(json.loads(row[0])) == 1
+    assert events == 0
+
+
 def test_archive_attachment_metadata_is_restore_safe(tmp_path):
     source = tmp_path / "proof.png"
     source.write_bytes(b"proof")

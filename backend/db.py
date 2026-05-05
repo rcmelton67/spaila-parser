@@ -128,6 +128,53 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS account_users (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'owner',
+        created_at TEXT,
+        updated_at TEXT,
+        last_login_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+        session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        created_at TEXT,
+        expires_at TEXT,
+        revoked_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        created_at TEXT,
+        expires_at TEXT,
+        used_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS billing_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT,
+        stripe_customer_id TEXT,
+        stripe_subscription_id TEXT,
+        payload_json TEXT,
+        received_at TEXT
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS web_settings (
         account_id TEXT PRIMARY KEY,
         default_order_scope TEXT DEFAULT 'active',
@@ -159,10 +206,13 @@ def init_db():
         ("order_folder_path", "TEXT"),
         ("source_eml_path",   "TEXT"),
         ("eml_path",          "TEXT"),
+        ("source_original_path", "TEXT"),
         ("platform",          "TEXT"),   # "etsy" | "woo" | "shopify" | "unknown"
         ("messages",          "TEXT"),   # JSON conversation messages persisted per order
         ("is_gift",           "INTEGER DEFAULT 0"),
         ("gift_wrap",         "INTEGER DEFAULT 0"),
+        ("shipping_name",     "TEXT"),
+        ("phone_number",      "TEXT"),
         ("last_activity_at",  "TEXT"),
         ("updated_at",        "TEXT"),
         ("pet_name",          "TEXT"),   # primary personalisation field for archive/search
@@ -204,8 +254,49 @@ def init_db():
         ("subscription_state", "TEXT DEFAULT 'local_only'"),
         ("auth_mode", "TEXT DEFAULT 'local_first'"),
         ("multi_shop_ready", "INTEGER DEFAULT 0"),
+        ("trial_started_at", "TEXT"),
+        ("trial_ends_at", "TEXT"),
+        ("stripe_customer_id", "TEXT"),
+        ("stripe_subscription_id", "TEXT"),
+        ("subscription_status", "TEXT"),
+        ("subscription_current_period_end", "TEXT"),
+        ("subscription_cancel_at_period_end", "INTEGER DEFAULT 0"),
+        ("billing_status", "TEXT DEFAULT 'not_configured'"),
+        ("last_payment_status", "TEXT"),
+        ("canceled_at", "TEXT"),
         ("created_at", "TEXT"),
         ("updated_at", "TEXT"),
+    ])
+    _ensure_columns(cur, "account_users", [
+        ("account_id", "TEXT"),
+        ("email", "TEXT"),
+        ("name", "TEXT"),
+        ("password_hash", "TEXT"),
+        ("role", "TEXT DEFAULT 'owner'"),
+        ("created_at", "TEXT"),
+        ("updated_at", "TEXT"),
+        ("last_login_at", "TEXT"),
+    ])
+    _ensure_columns(cur, "auth_sessions", [
+        ("user_id", "TEXT"),
+        ("account_id", "TEXT"),
+        ("created_at", "TEXT"),
+        ("expires_at", "TEXT"),
+        ("revoked_at", "TEXT"),
+    ])
+    _ensure_columns(cur, "password_reset_tokens", [
+        ("user_id", "TEXT"),
+        ("account_id", "TEXT"),
+        ("created_at", "TEXT"),
+        ("expires_at", "TEXT"),
+        ("used_at", "TEXT"),
+    ])
+    _ensure_columns(cur, "billing_events", [
+        ("event_type", "TEXT"),
+        ("stripe_customer_id", "TEXT"),
+        ("stripe_subscription_id", "TEXT"),
+        ("payload_json", "TEXT"),
+        ("received_at", "TEXT"),
     ])
     _ensure_columns(cur, "web_settings", [
         ("default_order_scope", "TEXT DEFAULT 'active'"),
@@ -235,6 +326,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_archive_orders_archived_at ON archive_orders(archived_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_archive_orders_status ON archive_orders(archive_status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_archive_orders_folder_path ON archive_orders(folder_path)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_account_users_account_id ON account_users(account_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_account_id ON auth_sessions(account_id)")
 
     cur.execute(
         "UPDATE orders SET last_activity_at = created_at "
