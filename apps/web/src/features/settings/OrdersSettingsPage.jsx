@@ -291,7 +291,6 @@ export default function OrdersSettingsPage({ onSettingsSaved }) {
             <div className="table-state"><div className="spinner" /><span>Loading shared order fields...</span></div>
           ) : null}
           <div className="orders-field-head">
-            <span>System Key</span>
             <span>Display Name</span>
             <span className="center">👁</span>
             <span className="center">🎨</span>
@@ -301,7 +300,6 @@ export default function OrdersSettingsPage({ onSettingsSaved }) {
 
           {fields.map((field, index) => (
             <div className="orders-field-row" key={field.key}>
-              <code>{field.key}</code>
               <input
                 value={field.label}
                 disabled={field.fixed}

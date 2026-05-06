@@ -2,8 +2,6 @@ import React from "react";
 import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
 import { api } from "../../api.js";
 
-const SUPPORT_EMAIL = "support@spaila.com";
-
 function formatAccountCode(value, fallback = "") {
   const raw = String(value || "").trim();
   const normalized = raw.toLowerCase();
@@ -19,10 +17,11 @@ function formatAccountCode(value, fallback = "") {
   return raw.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatCountdown(value) {
+function formatCountdown(value, referenceTime) {
   const target = value ? new Date(value) : null;
   if (!target || Number.isNaN(target.getTime())) return "";
-  const diffMs = target.getTime() - Date.now();
+  const refMs = referenceTime ? new Date(referenceTime).getTime() : Date.now();
+  const diffMs = target.getTime() - (Number.isNaN(refMs) ? Date.now() : refMs);
   if (diffMs <= 0) return "Expired";
   const days = Math.ceil(diffMs / 86400000);
   return `${days} day${days === 1 ? "" : "s"} remaining`;
@@ -44,6 +43,19 @@ function fileToBase64(file) {
     reader.onerror = () => reject(reader.error || new Error("Could not read file."));
     reader.readAsDataURL(file);
   });
+}
+
+function getOrCreateInstallId() {
+  try {
+    const key = "spaila_install_id";
+    const existing = window.localStorage?.getItem(key);
+    if (existing) return existing;
+    const generated = window.crypto?.randomUUID?.() || `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage?.setItem(key, generated);
+    return generated;
+  } catch {
+    return "";
+  }
 }
 
 function DetailField({ label, children }) {
@@ -74,19 +86,6 @@ function AccountHelpPanel() {
   );
 }
 
-function openSupportEmail(type = "account") {
-  const typeLabel = type === "billing"
-    ? "Billing help"
-    : type === "account"
-      ? "Account help"
-      : type === "tutorials"
-        ? "Tutorials and documentation"
-        : "Support request";
-  const subject = encodeURIComponent(`Spaila Support - ${typeLabel}`);
-  const body = encodeURIComponent(`Support type: ${typeLabel}\n\nDescribe what you need help with:\n`);
-  window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
-}
-
 function openPasswordReset(email = "") {
   const query = email ? `?email=${encodeURIComponent(email)}` : "";
   window.location.hash = `/reset-password${query}`;
@@ -106,10 +105,13 @@ function validateAuthForm(authForm, mode) {
   if (mode === "signup" && password.length < 8) {
     return "Enter a password with at least 8 characters to start your 7-day trial.";
   }
+  if (mode === "signup" && password !== String(authForm?.confirm_password || "")) {
+    return "Passwords do not match.";
+  }
   return "";
 }
 
-export default function AccountPage({ account, capabilities, onAccountUpdated }) {
+export default function AccountPage({ account, capabilities, onAccountUpdated, onOpenSupport }) {
   const [form, setForm] = React.useState(() => ({
     shop_name: account?.shop_name || "",
     owner_name: account?.owner_name || "",
@@ -121,10 +123,12 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
   const [authForm, setAuthForm] = React.useState({
     email: account?.account_email || "",
     password: "",
+    confirm_password: "",
     name: account?.owner_name || "",
     shop_name: account?.shop_name || "",
   });
   const [authState, setAuthState] = React.useState({ loading: false, error: "", message: "" });
+  const [showPasswords, setShowPasswords] = React.useState(false);
   const [logoState, setLogoState] = React.useState({ saving: false, error: "", message: "" });
   const [logoError, setLogoError] = React.useState(false);
   const logoInputRef = React.useRef(null);
@@ -187,12 +191,13 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
             email: authForm.email.trim(),
             name: form.owner_name || authForm.name,
             shop_name: form.shop_name || authForm.shop_name,
+            install_id: getOrCreateInstallId(),
           }
         : { email: authForm.email.trim(), password: authForm.password };
       const result = await api.post(endpoint, payload);
       setSession(result);
       if (result.profile) onAccountUpdated?.(result.profile);
-      setAuthState({ loading: false, error: "", message: mode === "signup" ? "Trial started." : "Signed in." });
+      setAuthState({ loading: false, error: "", message: mode === "signup" ? "Account created. Your access status is shown below." : "Signed in." });
     } catch (error) {
       setAuthState({ loading: false, error: error?.message || "Could not authenticate.", message: "" });
     }
@@ -206,12 +211,13 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
       setSession(result);
       setAuthState({ loading: false, error: "", message: "Signed out." });
     } catch (error) {
+      api.clearSessionToken?.();
       setAuthState({ loading: false, error: error?.message || "Could not sign out.", message: "" });
     }
   }
 
   async function startCheckout() {
-    setAuthState({ loading: true, error: "", message: "Opening Stripe Checkout..." });
+    setAuthState({ loading: true, error: "", message: "Opening secure checkout..." });
     try {
       const result = await api.post(API_ENDPOINTS.billingCheckout, {
         success_url: window.location.href,
@@ -271,7 +277,7 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
   const rawSubscriptionState = entitlements.subscription_state || account?.subscription_state || "local_only";
   const rawPlanCode = entitlements.plan_code || account?.plan_code || "local";
   const accountStatusLabel = entitlements.account_status || formatAccountCode(rawSubscriptionState, "Local Mode");
-  const trialCountdown = formatCountdown(entitlements.trial_ends_at);
+  const trialCountdown = formatCountdown(entitlements.trial_ends_at, entitlements.server_time);
   const billingStatusLabel = formatAccountCode(entitlements.billing_status, "Setup Pending");
   const hasBillingIssue = billingStatusLabel === "Billing Issue" || entitlements.locked === true && rawSubscriptionState !== "trial";
   const normalizedBillingState = String(accountStatusLabel || "").toLowerCase();
@@ -297,13 +303,18 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
         : isExpiredBilling
           ? "Access"
           : "Access";
-  const billingNotice = hasBillingIssue
-    ? "Billing Issue Detected"
-    : isExpiredBilling
-      ? "Restricted Mode"
-      : isTrialBilling && trialCountdown && trialCountdown !== "Expired"
-        ? `Trial ends in ${trialCountdown.toLowerCase()}`
-        : "";
+  const clockTampered = entitlements.clock_tamper_detected === true;
+  const billingNotice = clockTampered
+    ? "Device clock mismatch detected. Access is suspended until the system clock is corrected and the app reconnects."
+    : hasBillingIssue
+      ? "Billing Issue Detected"
+      : entitlements.trial_reminder_message
+        ? entitlements.trial_reminder_message
+        : isExpiredBilling
+          ? "Restricted Mode"
+          : isTrialBilling && trialCountdown && trialCountdown !== "Expired"
+            ? `Trial ends in ${trialCountdown.toLowerCase()}`
+            : "";
   const showUpgradeAction = !isActiveBilling || isTrialBilling || isExpiredBilling || hasBillingIssue;
   const showBillingActions = !isLocalBilling && (isActiveBilling || isTrialBilling);
   const logoVersion = encodeURIComponent(account?.updated_at || account?.shop_logo_path || "");
@@ -325,8 +336,8 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
                 Manage your Spaila profile, sign-in access, subscription, billing, and support options.
               </p>
               <div className="account-action-row account-hero-support-actions">
-                <button type="button" className="primary-button" onClick={() => openSupportEmail("account")}>Contact Support</button>
-                <button type="button" className="ghost-button" onClick={() => openSupportEmail("tutorials")}>Tutorials &amp; Documentation</button>
+                <button type="button" className="primary-button" onClick={() => onOpenSupport ? onOpenSupport("support_request") : null}>Contact Support</button>
+                <button type="button" className="ghost-button" onClick={() => onOpenSupport ? onOpenSupport("support_request") : null}>Tutorials &amp; Documentation</button>
               </div>
             </div>
             <div className="account-logo-panel">
@@ -442,9 +453,16 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
                       </label>
                       <label>
                         <span>Password</span>
-                        <input type="password" value={authForm.password} onChange={(e) => setAuthForm((p) => ({ ...p, password: e.target.value }))} placeholder="At least 8 characters" />
+                        <input type={showPasswords ? "text" : "password"} value={authForm.password} onChange={(e) => setAuthForm((p) => ({ ...p, password: e.target.value }))} placeholder="At least 8 characters" />
+                      </label>
+                      <label>
+                        <span>Confirm password</span>
+                        <input type={showPasswords ? "text" : "password"} value={authForm.confirm_password} onChange={(e) => setAuthForm((p) => ({ ...p, confirm_password: e.target.value }))} placeholder="Required for trial signup" />
                       </label>
                     </div>
+                    <button type="button" className="account-link-button" onClick={() => setShowPasswords((value) => !value)}>
+                      {showPasswords ? "Hide passwords" : "Show passwords"}
+                    </button>
                     {authState.error ? <div className="error-banner">{authState.error}</div> : null}
                     <div className="account-action-row">
                       <button className="primary-button" type="submit" disabled={authState.loading}>
@@ -466,12 +484,15 @@ export default function AccountPage({ account, capabilities, onAccountUpdated })
                   <span>{billingNotice}</span>
                 </div>
               ) : null}
-              {hasBillingIssue ? (
+              {clockTampered ? (
+                <div className="error-banner">
+                  Access suspended: system clock was moved backward. Correct your device clock, then reopen this page to restore access.
+                </div>
+              ) : hasBillingIssue ? (
                 <div className="error-banner">
                   Billing needs attention. Order processor, inbox/helper, and new manual order creation are restricted until billing is resolved.
                 </div>
-              ) : null}
-              {isLocked ? (
+              ) : isLocked ? (
                 <div className="error-banner">
                   Trial access has ended. Order processor, inbox, helper sync, and manual order creation are locked; order and archive viewing remain available.
                 </div>

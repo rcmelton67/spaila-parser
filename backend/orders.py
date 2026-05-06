@@ -17,8 +17,9 @@ _WORKSPACE_DIRS = ensure_workspace_layout(print)
 BASE_PATH = _WORKSPACE_DIRS["root"]
 INBOX_PATH = _WORKSPACE_DIRS["Inbox"]
 ORDERS_PATH = _WORKSPACE_DIRS["Orders"]
-ORDER_ARCHIVE_SETTINGS_FILENAME = "order_archive_settings.json"
-PROCESSED_REFS_FILENAME = ".processedInboxRefs.json"
+# Paths for system JSON files — all live under .spaila_internal/
+_PROCESSED_REFS_PATH = _WORKSPACE_DIRS["ProcessedInboxRefs"]
+_ORDER_ARCHIVE_SETTINGS_PATH = _WORKSPACE_DIRS["OrderArchiveSettings"]
 MAX_PROCESSED_REFS = 5000
 
 
@@ -52,7 +53,7 @@ def _persist_processed_refs(new_refs: list[str]) -> None:
     load them on startup and keep inbox filtering working after orders are removed
     from the database.
     """
-    fp = BASE_PATH / PROCESSED_REFS_FILENAME
+    fp = _PROCESSED_REFS_PATH
     try:
         existing: list[str] = []
         if fp.is_file():
@@ -114,7 +115,7 @@ def _make_order_folder(
             dt = datetime.now().date()
 
         year  = str(dt.year)
-        month = dt.strftime("%B").lower()
+        month = dt.strftime("%B")
         folder_name = _format_folder_name(buyer_name, order_number)
         path = ORDERS_PATH / year / month / folder_name
         path.mkdir(parents=True, exist_ok=True)
@@ -412,7 +413,7 @@ def _resolve_archive_root(body: dict | None) -> Path:
         p = Path(br).expanduser()
         p.mkdir(parents=True, exist_ok=True)
         return p.resolve()
-    fp = BASE_PATH / ORDER_ARCHIVE_SETTINGS_FILENAME
+    fp = _ORDER_ARCHIVE_SETTINGS_PATH
     if fp.is_file():
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
@@ -423,7 +424,7 @@ def _resolve_archive_root(body: dict | None) -> Path:
                 return p.resolve()
         except (OSError, json.JSONDecodeError, TypeError):
             pass
-    default = (BASE_PATH / "archive").resolve()
+    default = _WORKSPACE_DIRS["Archive"].resolve()
     default.mkdir(parents=True, exist_ok=True)
     return default
 
@@ -1964,7 +1965,7 @@ def get_processed_refs():
     The frontend merges these into localStorage on startup so inbox filtering
     works even when the Workspace never loaded the archived order.
     """
-    fp = BASE_PATH / PROCESSED_REFS_FILENAME
+    fp = _PROCESSED_REFS_PATH
     try:
         if fp.is_file():
             data = json.loads(fp.read_text(encoding="utf-8"))
@@ -2453,3 +2454,227 @@ def patch_item_status(item_id: str, payload: dict):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+@router.get("/workspace/detect-stale-paths")
+def detect_stale_paths():
+    """Return a summary of DB path records that point to locations outside the current workspace root.
+
+    Used on startup to detect whether a manual workspace move left stale absolute paths in the DB.
+    Returns the detected old root(s) so the caller can invoke /workspace/rewrite-paths to fix them.
+    """
+    current_root = str(_WORKSPACE_DIRS["root"]).replace("\\", "/").rstrip("/")
+
+    path_columns: list[tuple[str, str]] = [
+        ("orders", "order_folder_path"),
+        ("orders", "source_eml_path"),
+        ("orders", "eml_path"),
+        ("archive_orders", "folder_path"),
+        ("archive_orders", "manifest_path"),
+    ]
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    stale_prefixes: dict[str, int] = {}
+    total_stale = 0
+
+    for table, col in path_columns:
+        try:
+            cur.execute(f"SELECT {col} FROM {table} WHERE {col} IS NOT NULL AND {col} != ''")  # noqa: S608
+            for (val,) in cur.fetchall():
+                if not val:
+                    continue
+                normalized = val.replace("\\", "/")
+                if not normalized.startswith(current_root):
+                    # Infer root by taking everything before the first standard subfolder name
+                    # e.g. C:/Spaila/Orders/2026/... → old root is C:/Spaila
+                    for marker in ("/Orders/", "/orders/", "/Archive/", "/archive/",
+                                   "/Inbox/", "/inbox/", "/Backup/", "/backup/",
+                                   "/.spaila_internal/"):
+                        idx = normalized.find(marker)
+                        if idx != -1:
+                            prefix = normalized[:idx]
+                            stale_prefixes[prefix] = stale_prefixes.get(prefix, 0) + 1
+                            total_stale += 1
+                            break
+        except Exception:
+            pass
+
+    conn.close()
+
+    return {
+        "current_root": current_root,
+        "stale_path_count": total_stale,
+        "detected_old_roots": stale_prefixes,
+        "needs_repair": total_stale > 0,
+    }
+
+
+@router.post("/workspace/rewrite-paths")
+async def rewrite_workspace_paths(request: Request):
+    """Rewrite all absolute paths in the database after the workspace root moves.
+
+    Replaces every occurrence of old_root with new_root in all path columns,
+    handling both forward-slash and backslash variants for Windows compatibility.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    old_root = str(body.get("old_root") or "").strip().rstrip("/\\")
+    new_root = str(body.get("new_root") or "").strip().rstrip("/\\")
+
+    if not old_root or not new_root:
+        raise HTTPException(status_code=400, detail="old_root and new_root are required")
+    if old_root == new_root:
+        return {"ok": True, "updated_paths": 0, "message": "Roots are identical — nothing to rewrite"}
+
+    # Build both slash forms for robust replacement across all stored path formats
+    old_fwd = old_root.replace("\\", "/")
+    old_bwd = old_root.replace("/", "\\")
+    new_fwd = new_root.replace("\\", "/")
+    new_bwd = new_root.replace("/", "\\")
+
+    # All (table, column) pairs that store absolute filesystem paths
+    path_columns: list[tuple[str, str]] = [
+        ("orders", "order_folder_path"),
+        ("orders", "source_eml_path"),
+        ("orders", "eml_path"),
+        ("orders", "source_original_path"),
+        ("archive_orders", "folder_path"),
+        ("archive_orders", "manifest_path"),
+        ("archive_orders", "conversation_path"),
+    ]
+
+    conn = get_conn()
+    cur = conn.cursor()
+    total_updated = 0
+    errors: list[str] = []
+
+    for table, col in path_columns:
+        for old, new in ((old_fwd, new_fwd), (old_bwd, new_bwd)):
+            try:
+                cur.execute(
+                    f"UPDATE {table} SET {col} = replace({col}, ?, ?) "  # noqa: S608
+                    f"WHERE {col} IS NOT NULL AND ({col} LIKE ? OR {col} LIKE ?)",
+                    (old, new, old + "/%", old + "\\%"),
+                )
+                total_updated += cur.rowcount
+            except Exception as exc:
+                errors.append(f"{table}.{col}: {exc}")
+
+    # ── Also rewrite paths embedded inside the messages JSON column ──────────
+    # Attachment paths (original_path, path, thumbnail_path) are stored as JSON
+    # inside orders.messages and are not covered by SQLite's replace() above.
+    messages_updated = 0
+    try:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT id, messages FROM orders WHERE messages IS NOT NULL AND messages != ''")
+        rows = cur2.fetchall()
+        for row_id, messages_json in rows:
+            try:
+                msgs = json.loads(messages_json)
+                if not isinstance(msgs, list):
+                    continue
+                changed = False
+                for msg in msgs:
+                    if not isinstance(msg, dict):
+                        continue
+                    for field in ("original_path", "path", "thumbnail_path"):
+                        val = msg.get(field)
+                        if not val:
+                            continue
+                        new_val = val
+                        for old, new in ((old_fwd, new_fwd), (old_bwd, new_bwd)):
+                            new_val = new_val.replace(old, new)
+                        if new_val != val:
+                            msg[field] = new_val
+                            changed = True
+                    for att in msg.get("attachments", []):
+                        if not isinstance(att, dict):
+                            continue
+                        for field in ("original_path", "path", "thumbnail_path"):
+                            val = att.get(field)
+                            if not val:
+                                continue
+                            new_val = val
+                            for old, new in ((old_fwd, new_fwd), (old_bwd, new_bwd)):
+                                new_val = new_val.replace(old, new)
+                            if new_val != val:
+                                att[field] = new_val
+                                changed = True
+                if changed:
+                    cur2.execute(
+                        "UPDATE orders SET messages = ? WHERE id = ?",
+                        (json.dumps(msgs, ensure_ascii=False), row_id),
+                    )
+                    messages_updated += 1
+            except Exception:
+                pass
+        conn2.commit()
+        conn2.close()
+    except Exception as exc:
+        errors.append(f"messages JSON: {exc}")
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": not errors,
+        "updated_paths": total_updated,
+        "messages_json_updated": messages_updated,
+        "errors": errors or None,
+    }
+
+
+@router.post("/workspace/reload")
+async def reload_workspace():
+    """Hot-reload workspace paths across all Python backend services.
+
+    Called by the Electron main process immediately after a workspace root change
+    so the backend picks up the new paths without requiring a full app restart.
+    Patches module-level path constants in every service that cached them at import time.
+    """
+    from workspace_paths import ensure_workspace_layout
+
+    new_dirs = ensure_workspace_layout()
+
+    # ── Patch backend/orders.py globals ──────────────────────────────────────
+    import backend.orders as _orders
+    _orders._WORKSPACE_DIRS = new_dirs
+    _orders.BASE_PATH = new_dirs["root"]
+    _orders.INBOX_PATH = new_dirs["Inbox"]
+
+    # ── Patch server/inbox/inbox_service.py globals ───────────────────────────
+    try:
+        import server.inbox.inbox_service as _is
+        _is._WORKSPACE_DIRS = new_dirs
+        _is._INBOX_DIR = new_dirs["InboxModule"]
+        _is._HIDDEN_EMAILS_PATH = new_dirs["HiddenEmails"]
+        _is._INTERNAL_DIR = new_dirs["Internal"]
+        _is._DEDUP_STORE_PATH = new_dirs["Internal"] / "dedup_store.json"
+        _is._FETCH_STATE_PATH = new_dirs["Internal"] / "inbox_fetch_state.json"
+        _is._SOURCE_STATE_PATH = new_dirs["Internal"] / "inbox_source_state.json"
+    except Exception:
+        pass
+
+    # ── Patch server/inbox/eml_writer.py globals ─────────────────────────────
+    try:
+        import server.inbox.eml_writer as _ew
+        _ew._WORKSPACE_DIRS = new_dirs
+        _ew._INBOX_DIR = new_dirs["InboxModule"]
+    except Exception:
+        pass
+
+    # ── Patch server/inbox/attachments.py globals ────────────────────────────
+    try:
+        import server.inbox.attachments as _att
+        _att._WORKSPACE_DIRS = new_dirs
+        _att._ATTACHMENT_ROOT = new_dirs["root"] / ".spaila_internal" / "attachments"
+    except Exception:
+        pass
+
+    return {"ok": True, "root": str(new_dirs["root"])}

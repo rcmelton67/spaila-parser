@@ -34,6 +34,15 @@ app/ui/dist/
 
 # Database
 spaila.db
+*.db.bak
+*.db.pre_*.bak
+spaila.db.*.bak
+
+# Support reports (may contain customer info)
+support_reports/
+
+# IDE
+.cursor/
 
 # OS
 .DS_Store

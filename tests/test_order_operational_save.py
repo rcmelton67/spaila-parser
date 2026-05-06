@@ -3,12 +3,17 @@ import asyncio
 from fastapi import HTTPException
 
 from backend import orders
+from backend.api.routes import account
 from backend.db import init_db
 
 
 def setup_db(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     init_db()
+    account.update_subscription_for_dev(account.DevSubscriptionUpdate(
+        subscription_state="active",
+        plan_code="spaila_one",
+    ))
 
 
 def test_parser_create_order_persists_shared_order_fields(tmp_path, monkeypatch):

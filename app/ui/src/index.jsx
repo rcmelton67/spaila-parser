@@ -4,6 +4,7 @@ import ParserApp from "./features/parser/ParserApp.jsx";
 import OrdersPage from "./features/orders/OrdersPage.jsx";
 import WorkspacePage from "./features/workspace/WorkspacePage.jsx";
 import SettingsPage from "./settings/SettingsModal.jsx";
+import SupportModal from "./features/support/SupportModal.jsx";
 import {
   loadColumnOrder,
   loadFieldConfig,
@@ -18,7 +19,6 @@ import {
 } from "./shared/utils/fieldConfig.js";
 import "./features/parser/styles.css";
 
-const SUPPORT_EMAIL = "support@spaila.com";
 
 function applySharedWidthProfile(layout) {
   const profiles = layout?.column_width_profiles && typeof layout.column_width_profiles === "object"
@@ -108,188 +108,6 @@ function getCurrentRoute() {
   return "/workspace";
 }
 
-function getSupportTypeLabel(type) {
-  if (type === "feature") return "Feature request";
-  if (type === "billing") return "Billing help";
-  return "Bug report";
-}
-
-function getSupportRouteLabel(route) {
-  if (route === "/") return "Orders";
-  if (route === "/parser") return "Order Processing";
-  if (route === "/settings" || route.startsWith("/settings/")) return "Settings";
-  if (route === "/workspace") return "Workspace";
-  return route || "Unknown";
-}
-
-function SupportReportModal({ route, initialType = "bug", onClose }) {
-  const [type, setType] = React.useState(initialType || "bug");
-  const [description, setDescription] = React.useState("");
-  const [includeDiagnostics, setIncludeDiagnostics] = React.useState(true);
-  const [screenshotPath, setScreenshotPath] = React.useState("");
-  const [screenshotName, setScreenshotName] = React.useState("");
-  const [status, setStatus] = React.useState({ sending: false, message: "", error: "" });
-
-  React.useEffect(() => {
-    setType(initialType || "bug");
-  }, [initialType]);
-
-  async function pickScreenshot() {
-    const result = await window.parserApp?.pickFile?.({
-      title: "Select Screenshot",
-      filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
-        { name: "All Files", extensions: ["*"] },
-      ],
-    });
-    if (!result || result.canceled) return;
-    setScreenshotPath(result.path || "");
-    setScreenshotName(result.name || result.path || "");
-  }
-
-  async function submitReport() {
-    const trimmedDescription = description.trim();
-    if (!trimmedDescription) {
-      setStatus({ sending: false, message: "", error: "Please describe what you need help with." });
-      return;
-    }
-
-    setStatus({ sending: true, message: "", error: "" });
-    const appInfoResult = await window.parserApp?.getSupportAppInfo?.();
-    const appInfo = appInfoResult?.ok ? appInfoResult.appInfo : {};
-    let diagnostics = null;
-    if (includeDiagnostics) {
-      const diagnosticsResult = await window.parserApp?.createSupportDiagnostics?.({
-        type,
-        description: trimmedDescription,
-        route,
-        screenshotPath,
-      });
-      if (diagnosticsResult?.ok) {
-        diagnostics = diagnosticsResult;
-      }
-    }
-
-    const version = appInfo.version || "unknown";
-    const typeLabel = getSupportTypeLabel(type);
-    const subject = `Spaila Support - ${typeLabel} - v${version}`;
-    const bodyLines = [
-      `Support type: ${typeLabel}`,
-      `Spaila version: ${version}`,
-      `Screen: ${getSupportRouteLabel(route)}`,
-      `Timestamp: ${new Date().toISOString()}`,
-      "",
-      "Description:",
-      trimmedDescription,
-      "",
-      "System info:",
-      `Platform: ${appInfo.platform || "unknown"} ${appInfo.release || ""}`,
-      `Architecture: ${appInfo.arch || "unknown"}`,
-      `Electron: ${appInfo.electron || "unknown"}`,
-      `Chrome: ${appInfo.chrome || "unknown"}`,
-      `Node: ${appInfo.node || "unknown"}`,
-      "",
-      "Attachments / diagnostics:",
-      screenshotPath ? `Screenshot selected: ${screenshotPath}` : "Screenshot selected: No",
-      diagnostics?.path ? `Diagnostic report: ${diagnostics.path}` : "Diagnostic report: Not generated",
-      "",
-      "Please attach the screenshot and diagnostic report paths listed above if your email app did not attach them automatically.",
-    ];
-
-    try {
-      const composeResult = await window.parserApp?.composeEmail?.({
-        to: SUPPORT_EMAIL,
-        subject,
-        body: bodyLines.join("\n"),
-        attachmentFolderPath: diagnostics?.folderPath || screenshotPath || "",
-      });
-      if (!composeResult?.ok) {
-        setStatus({ sending: false, message: "", error: composeResult?.error || "Could not open your email app." });
-        return;
-      }
-      setStatus({ sending: false, message: "Your email app opened with a prepared support message.", error: "" });
-    } catch (error) {
-      setStatus({ sending: false, message: "", error: error?.message || "Could not open your email app." });
-    }
-  }
-
-  return (
-    <div style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 100000,
-      background: "rgba(15, 23, 42, 0.38)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 24,
-    }}>
-      <div style={{ width: "min(620px, 100%)", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.28)", overflow: "hidden" }}>
-        <div style={{ padding: "18px 22px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>Contact Spaila Support</div>
-            <div style={{ marginTop: 3, fontSize: 12, color: "#64748b" }}>Opens your default email app so you can review before sending.</div>
-          </div>
-          <button type="button" onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 22, color: "#64748b", lineHeight: 1 }}>×</button>
-        </div>
-
-        <div style={{ padding: "18px 22px 22px" }}>
-          <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 6 }}>Support type</label>
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: 8, fontSize: 13, marginBottom: 14 }}
-          >
-            <option value="bug">Report a bug</option>
-            <option value="feature">Feature request</option>
-            <option value="billing">Billing help</option>
-          </select>
-
-          <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 6 }}>Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe what happened, what you expected, and any steps support should try."
-            rows={7}
-            style={{ width: "100%", boxSizing: "border-box", padding: "10px 11px", border: "1px solid #cbd5e1", borderRadius: 8, fontSize: 13, resize: "vertical", marginBottom: 12 }}
-          />
-
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-            <button type="button" onClick={pickScreenshot} style={{ padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 999, background: "#fff", color: "#334155", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-              Choose Screenshot
-            </button>
-            <span style={{ fontSize: 12, color: screenshotName ? "#475569" : "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 360 }}>
-              {screenshotName || "No screenshot selected"}
-            </span>
-          </div>
-
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#475569", cursor: "pointer", marginBottom: 14 }}>
-            <input
-              type="checkbox"
-              checked={includeDiagnostics}
-              onChange={(e) => setIncludeDiagnostics(e.target.checked)}
-              style={{ width: 15, height: 15, accentColor: "#2563eb" }}
-            />
-            Include system info and a lightweight diagnostic report
-          </label>
-
-          {status.error ? <div style={{ color: "#b91c1c", fontSize: 12, marginBottom: 10 }}>{status.error}</div> : null}
-          {status.message ? <div style={{ color: "#166534", fontSize: 12, marginBottom: 10 }}>{status.message}</div> : null}
-
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <button type="button" onClick={onClose} style={{ padding: "9px 13px", border: "1px solid #cbd5e1", borderRadius: 8, background: "#fff", color: "#334155", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-              Close
-            </button>
-            <button type="button" onClick={submitReport} disabled={status.sending} style={{ padding: "9px 14px", border: "none", borderRadius: 8, background: status.sending ? "#93c5fd" : "#2563eb", color: "#fff", cursor: status.sending ? "default" : "pointer", fontSize: 13, fontWeight: 800 }}>
-              {status.sending ? "Preparing..." : "Open Email"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Shell() {
   const [route, setRoute] = React.useState(() => getCurrentRoute());
   const [refreshKey, setRefreshKey] = React.useState(0);
@@ -357,10 +175,11 @@ function Shell() {
 
   React.useEffect(() => {
     function handleSupportReport(event) {
-      setSupportReportRequest({
-        key: Date.now(),
-        type: event?.detail?.type || "bug",
-      });
+      const raw = event?.detail?.type || "bug_report";
+      // Map legacy type names to new format
+      const typeMap = { bug: "bug_report", feature: "feature_request", billing: "billing_help" };
+      const type = typeMap[raw] || raw;
+      setSupportReportRequest({ key: Date.now(), type });
     }
 
     window.addEventListener("spaila:open-support-report", handleSupportReport);
@@ -513,7 +332,7 @@ function Shell() {
 
       <button
         type="button"
-        onClick={() => setSupportReportRequest({ key: Date.now(), type: "bug" })}
+        onClick={() => setSupportReportRequest({ key: Date.now(), type: "bug_report" })}
         style={{
           position: "fixed",
           left: 18,
@@ -534,7 +353,7 @@ function Shell() {
       </button>
 
       {supportReportRequest ? (
-        <SupportReportModal
+        <SupportModal
           key={supportReportRequest.key}
           route={route}
           initialType={supportReportRequest.type}

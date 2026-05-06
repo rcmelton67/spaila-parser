@@ -16,6 +16,7 @@ import PrintingSettingsPage from "./features/settings/PrintingSettingsPage.jsx";
 import DocumentsSettingsPage from "./features/settings/DocumentsSettingsPage.jsx";
 import EmailsPage from "./features/settings/EmailsPage.jsx";
 import SupportPage from "./features/support/SupportPage.jsx";
+import SupportModal from "./features/support/SupportModal.jsx";
 
 const WEB_ORDER_SHEET_SIZE_KEY = "spaila_web_order_sheet_size";
 const DEFAULT_ORDER_SHEET_SIZE = 12;
@@ -261,7 +262,7 @@ function DesktopOnlyPanel({ label }) {
   );
 }
 
-function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, logoUrl, onSettingsSaved }) {
+function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, logoUrl, onSettingsSaved, onOpenSupport }) {
   const [settingsTab, setSettingsTab] = React.useState("account");
 
   const activeTab = SETTINGS_TABS.find((t) => t.id === settingsTab && !t.kind);
@@ -299,7 +300,7 @@ function SettingsShell({ account, capabilities, onAccountUpdated, shopInitial, l
       {/* Settings content panel */}
       <div className="web-settings-panel">
         {settingsTab === "account" ? (
-          <AccountPage account={account} capabilities={capabilities} onAccountUpdated={onAccountUpdated} />
+          <AccountPage account={account} capabilities={capabilities} onAccountUpdated={onAccountUpdated} onOpenSupport={onOpenSupport} />
         ) : settingsTab === "general" ? (
           <SettingsPage onSettingsSaved={onSettingsSaved} />
         ) : settingsTab === "orders_cfg" ? (
@@ -369,6 +370,7 @@ export default function App() {
     }
   });
   const [orderPrintHandler, setOrderPrintHandler] = React.useState(null);
+  const [supportModal, setSupportModal] = React.useState(null); // null | { type: string }
 
   const loadFoundations = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) setStatus({ loading: true, error: "" });
@@ -445,7 +447,7 @@ export default function App() {
   const topNavItems = [
     { id: "orders", label: "Active", route: "orders", ordersTab: "active", searchCount: orderSearchCounts.active },
     ...(showCompletedTab ? [{ id: "completed", label: "Completed", route: "orders", ordersTab: "completed", searchCount: orderSearchCounts.completed }] : []),
-    ...(showInventoryTab ? [{ id: "inventory", label: "Inventory Needed", route: "orders", ordersTab: "inventory", searchCount: 0 }] : []),
+    ...(showInventoryTab ? [{ id: "inventory", label: "Inventory Needed", route: "orders", ordersTab: "inventory" }] : []),
   ];
 
   function changeOrderSheetSize(delta) {
@@ -572,7 +574,7 @@ export default function App() {
                     }}
                   >
                     <span>{item.label}</span>
-                    {hasActiveOrderSearch && Number(item.searchCount || 0) > 0 ? (
+                    {item.ordersTab !== "inventory" && hasActiveOrderSearch && Number(item.searchCount || 0) > 0 ? (
                       <span className="web-tab-search-badge" title={`${item.searchCount} search matches`}>
                         {item.searchCount}
                       </span>
@@ -715,12 +717,42 @@ export default function App() {
               shopInitial={shopInitial}
               logoUrl={logoUrl}
               onSettingsSaved={refreshWebSettings}
+              onOpenSupport={(type) => setSupportModal({ type: type || "support_request" })}
             />
           ) : route === "reset-password" ? (
             <PasswordResetPage onBack={() => navigateFromSettings("settings")} />
           ) : null}
         </WebErrorBoundary>
       </div>
+
+      {/* Global "Report a Bug" button — always visible */}
+      <button
+        type="button"
+        className="global-bug-btn"
+        onClick={() => setSupportModal({ type: "bug_report" })}
+        title="Report a Bug"
+      >
+        Report a bug
+      </button>
+
+      {supportModal && (
+        <SupportModal
+          key={supportModal.type}
+          initialType={supportModal.type}
+          account={account}
+          screenName={
+            route === "orders"
+              ? ordersTab === "completed" ? "Completed Orders"
+                : ordersTab === "inventory" ? "Inventory Needed"
+                : "Active Orders"
+              : route === "archive" ? "Archive Search"
+              : route === "settings" ? "Settings"
+              : route === "thankyou" ? "Thank-You Letter"
+              : route || "Spaila Web"
+          }
+          onClose={() => setSupportModal(null)}
+        />
+      )}
     </div>
   );
 }

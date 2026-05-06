@@ -65,6 +65,8 @@ LOCKED_FEATURES = {
     "inbox",
     "helper",
     "manual_order_creation",
+    "imports",
+    "email_sending",
 }
 
 GATED_CAPABILITIES = {
@@ -148,8 +150,10 @@ class DocumentsConfigUpdate(BaseModel):
 class SignupRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=200)
+    confirm_password: str | None = Field(default=None, min_length=8, max_length=200)
     name: str | None = Field(default=None, max_length=200)
     shop_name: str | None = Field(default=None, max_length=200)
+    install_id: str | None = Field(default=None, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -164,6 +168,7 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirm(BaseModel):
     token: str = Field(min_length=12, max_length=300)
     password: str = Field(min_length=8, max_length=200)
+    confirm_password: str | None = Field(default=None, min_length=8, max_length=200)
 
 
 class DevSubscriptionUpdate(BaseModel):
@@ -195,6 +200,150 @@ def _parse_iso(value: str | None) -> datetime | None:
         return parsed
     except Exception:
         return None
+
+
+def _install_hash(install_id: str | None) -> str:
+    normalized = str(install_id or "").strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _trial_history_for_install(install_id: str | None) -> dict[str, Any] | None:
+    install_hash = _install_hash(install_id)
+    if not install_hash:
+        return None
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT install_hash, account_id, first_email, trial_started_at, trial_ends_at, created_at, updated_at
+            FROM trial_install_history
+            WHERE install_hash = ?
+            """,
+            (install_hash,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "install_hash": row[0],
+            "account_id": row[1],
+            "first_email": row[2] or "",
+            "trial_started_at": row[3] or "",
+            "trial_ends_at": row[4] or "",
+            "created_at": row[5] or "",
+            "updated_at": row[6] or "",
+        }
+    finally:
+        conn.close()
+
+
+def _record_trial_install(install_id: str | None, email: str, trial_started_at: str, trial_ends_at: str) -> None:
+    install_hash = _install_hash(install_id)
+    if not install_hash:
+        return
+    now = _now_iso()
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO trial_install_history (
+                install_hash, account_id, first_email, trial_started_at, trial_ends_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(install_hash) DO UPDATE SET
+                updated_at = excluded.updated_at
+            """,
+            (install_hash, ACCOUNT_ID, email, trial_started_at, trial_ends_at, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _write_clock_checkpoint(now_iso: str, tamper: bool, advance_server_time: bool = True) -> None:
+    """Directly update only the clock-checkpoint columns — avoids full profile save.
+
+    When advance_server_time is False only the tamper flag is updated; the stored
+    entitlement_last_server_time is left unchanged so we never permanently lock the
+    reference to a future timestamp.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if advance_server_time:
+            cur.execute(
+                """
+                UPDATE account_profiles
+                SET entitlement_last_verified_at = ?,
+                    entitlement_last_server_time = ?,
+                    clock_tamper_detected = ?,
+                    updated_at = ?
+                WHERE account_id = ?
+                """,
+                (now_iso, now_iso, 1 if tamper else 0, now_iso, ACCOUNT_ID),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE account_profiles
+                SET entitlement_last_verified_at = ?,
+                    clock_tamper_detected = ?,
+                    updated_at = ?
+                WHERE account_id = ?
+                """,
+                (now_iso, 1 if tamper else 0, now_iso, ACCOUNT_ID),
+            )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+_CLOCK_CORRUPTION_DAYS = 30  # If checkpoint is this far ahead, treat it as corrupted
+
+
+def _verified_server_time(profile: dict[str, Any]) -> tuple[datetime, bool]:
+    """Return (authoritative_time, clock_tamper_detected).
+
+    Returns a fresh tuple so callers never rely on the stale profile dict for
+    the tamper flag — the profile may have been loaded before a previous save
+    cleared or set the flag.
+
+    Rules:
+    - First run (no stored checkpoint): save now, return (now, False).
+    - Stored checkpoint is more than _CLOCK_CORRUPTION_DAYS ahead of now: the
+      value is stale/corrupted (e.g. clock was once set far in the future).
+      Reset to now and clear the tamper flag.
+    - Clock moved backward by more than 5 minutes: mark tamper, keep the stored
+      checkpoint as-is so callers can use it as the authoritative reference.
+      Do NOT overwrite entitlement_last_server_time — that would permanently
+      re-lock subsequent checks to the future timestamp.
+    - Clock is OK: advance checkpoint to now and clear any previous tamper flag.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    last_verified = _parse_iso(profile.get("entitlement_last_server_time"))
+
+    if last_verified:
+        ahead_by = (last_verified - now).total_seconds() / 86400  # days
+        if ahead_by > _CLOCK_CORRUPTION_DAYS:
+            # Stored checkpoint is absurdly in the future — treat as corrupted.
+            _write_clock_checkpoint(now_iso, tamper=False, advance_server_time=True)
+            return now, False
+
+        if now + timedelta(minutes=5) < last_verified:
+            # Clock moved backward — flag tamper but preserve the stored reference
+            # timestamp so we never permanently advance it further into the future.
+            _write_clock_checkpoint(now_iso, tamper=True, advance_server_time=False)
+            return last_verified, True
+
+    # Clock is OK (or first run) — advance checkpoint and clear any previous tamper flag.
+    _write_clock_checkpoint(now_iso, tamper=False, advance_server_time=True)
+    return now, False
 
 
 def _stripe_ts(value: Any) -> str:
@@ -370,23 +519,26 @@ def _create_session(response: Response, user_id: str, account_id: str) -> str:
         httponly=True,
         samesite="lax",
         max_age=SESSION_DAYS * 24 * 60 * 60,
+        path="/",
     )
     return session_id
 
 
 def _clear_session(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(SESSION_COOKIE, path="/")
 
 
 def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now, clock_tamper_detected = _verified_server_time(profile)
     state = str(profile.get("subscription_state") or "local_only").strip().lower()
     trial_ends_at = profile.get("trial_ends_at") or ""
     trial_end = _parse_iso(trial_ends_at)
     trial_expired = state == "trial" and bool(trial_end and trial_end <= now)
     billing_status = str(profile.get("billing_status") or "").strip().lower()
-    active = state in {"local_only", "active"} or (state == "trial" and not trial_expired)
+    active = state == "active" or (state == "trial" and not trial_expired)
     if billing_status in {"payment_failed", "past_due", "unpaid", "canceled"}:
+        active = False
+    if clock_tamper_detected and state != "active":
         active = False
     locked = not active
     if trial_expired:
@@ -401,6 +553,24 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
         "can_search_archive": True,
     })
     account_status = "Local Mode" if state == "local_only" else ("Trial Expired" if trial_expired else ("Billing Issue" if billing_status in {"payment_failed", "past_due", "unpaid"} else ("Active Subscription" if state == "active" else "Free Trial" if state == "trial" else "Setup Pending")))
+    days_remaining = None
+    reminder_level = ""
+    reminder_message = ""
+    if state == "trial" and trial_end:
+        remaining_seconds = (trial_end - now).total_seconds()
+        days_remaining = max(0, int((remaining_seconds + 86399) // 86400))
+        if trial_expired:
+            reminder_level = "expired"
+            reminder_message = "Trial expired. Upgrade to restore the order processor, inbox, helper sync, and new order creation."
+        elif days_remaining <= 1:
+            reminder_level = "urgent"
+            reminder_message = "Final day of your free trial. Upgrade now to avoid interruptions."
+        elif days_remaining in {2, 3}:
+            reminder_level = "warning"
+            reminder_message = f"Your free trial ends in {days_remaining} days. Upgrade when you are ready to keep access uninterrupted."
+        elif days_remaining in {5, 7}:
+            reminder_level = "notice"
+            reminder_message = f"Your free trial has {days_remaining} days remaining."
     return {
         "plan_code": profile.get("plan_code") or "local",
         "subscription_state": "trial_expired" if trial_expired else state,
@@ -411,6 +581,12 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
         "trial_start": profile.get("trial_started_at") or "",
         "trial_end": trial_ends_at,
         "trial_expired": trial_expired,
+        "trial_days_remaining": days_remaining,
+        "trial_reminder_level": reminder_level,
+        "trial_reminder_message": reminder_message,
+        "server_time": now.isoformat(),
+        "last_verified_server_time": profile.get("entitlement_last_server_time") or "",
+        "clock_tamper_detected": clock_tamper_detected,
         "locked": locked,
         "locked_features": locked_features,
         "preserved_features": ["order_viewing", "archive_viewing", "settings", "billing"],
@@ -431,12 +607,20 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
 def _require_feature(feature: str) -> None:
     entitlements = _subscription_view(_load_profile())
     if feature in entitlements["locked_features"]:
+        messages = {
+            "parser": "Trial expired - upgrade required to use the order processor.",
+            "imports": "Subscription required - importing orders is disabled until billing is active.",
+            "inbox": "Inbox processing disabled - upgrade or fix billing to continue.",
+            "helper": "Helper sync disabled - upgrade or fix billing to continue.",
+            "manual_order_creation": "Subscription required - new manual order creation is locked.",
+            "email_sending": "Subscription required - sending messages is disabled until billing is active.",
+        }
         raise HTTPException(
             status_code=402,
             detail={
                 "code": "subscription_required",
                 "feature": feature,
-                "message": "Your Spaila trial has ended. Upgrade to continue using this feature.",
+                "message": messages.get(feature, "Subscription required - upgrade to continue using this feature."),
                 "entitlements": entitlements,
             },
         )
@@ -576,6 +760,11 @@ def _default_profile() -> dict[str, Any]:
         "multi_shop_ready": False,
         "trial_started_at": "",
         "trial_ends_at": "",
+        "trial_device_id": "",
+        "trial_claimed_at": "",
+        "entitlement_last_verified_at": "",
+        "entitlement_last_server_time": "",
+        "clock_tamper_detected": False,
         "stripe_customer_id": "",
         "stripe_subscription_id": "",
         "subscription_status": "",
@@ -607,6 +796,11 @@ def _coerce_profile(row: tuple | None) -> dict[str, Any]:
         multi_shop_ready,
         trial_started_at,
         trial_ends_at,
+        trial_device_id,
+        trial_claimed_at,
+        entitlement_last_verified_at,
+        entitlement_last_server_time,
+        clock_tamper_detected,
         stripe_customer_id,
         stripe_subscription_id,
         subscription_status,
@@ -632,6 +826,11 @@ def _coerce_profile(row: tuple | None) -> dict[str, Any]:
         "multi_shop_ready": bool(multi_shop_ready),
         "trial_started_at": trial_started_at or "",
         "trial_ends_at": trial_ends_at or "",
+        "trial_device_id": trial_device_id or "",
+        "trial_claimed_at": trial_claimed_at or "",
+        "entitlement_last_verified_at": entitlement_last_verified_at or "",
+        "entitlement_last_server_time": entitlement_last_server_time or "",
+        "clock_tamper_detected": bool(clock_tamper_detected),
         "stripe_customer_id": stripe_customer_id or "",
         "stripe_subscription_id": stripe_subscription_id or "",
         "subscription_status": subscription_status or "",
@@ -655,6 +854,8 @@ def _load_profile() -> dict[str, Any]:
             SELECT account_id, shop_id, shop_name, owner_name, account_email,
                    business_timezone, shop_logo_path, plan_code, subscription_state,
                    auth_mode, multi_shop_ready, trial_started_at, trial_ends_at,
+                   trial_device_id, trial_claimed_at, entitlement_last_verified_at,
+                   entitlement_last_server_time, clock_tamper_detected,
                    stripe_customer_id, stripe_subscription_id, subscription_status,
                    subscription_current_period_end, subscription_cancel_at_period_end,
                    billing_status, last_payment_status, canceled_at, created_at, updated_at
@@ -684,10 +885,12 @@ def _save_profile(patch: AccountProfileUpdate) -> dict[str, Any]:
                 account_id, shop_id, shop_name, owner_name, account_email,
                 business_timezone, shop_logo_path, plan_code, subscription_state,
                 auth_mode, multi_shop_ready, trial_started_at, trial_ends_at,
+                trial_device_id, trial_claimed_at, entitlement_last_verified_at,
+                entitlement_last_server_time, clock_tamper_detected,
                 stripe_customer_id, stripe_subscription_id, subscription_status,
                 subscription_current_period_end, subscription_cancel_at_period_end,
                 billing_status, last_payment_status, canceled_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 shop_name = excluded.shop_name,
                 owner_name = excluded.owner_name,
@@ -710,6 +913,11 @@ def _save_profile(patch: AccountProfileUpdate) -> dict[str, Any]:
                 1 if current["multi_shop_ready"] else 0,
                 current["trial_started_at"],
                 current["trial_ends_at"],
+                current["trial_device_id"],
+                current["trial_claimed_at"],
+                current["entitlement_last_verified_at"],
+                current["entitlement_last_server_time"],
+                1 if current["clock_tamper_detected"] else 0,
                 current["stripe_customer_id"],
                 current["stripe_subscription_id"],
                 current["subscription_status"],
@@ -742,10 +950,12 @@ def _save_commercial_profile_fields(fields: dict[str, Any]) -> dict[str, Any]:
                 account_id, shop_id, shop_name, owner_name, account_email,
                 business_timezone, shop_logo_path, plan_code, subscription_state,
                 auth_mode, multi_shop_ready, trial_started_at, trial_ends_at,
+                trial_device_id, trial_claimed_at, entitlement_last_verified_at,
+                entitlement_last_server_time, clock_tamper_detected,
                 stripe_customer_id, stripe_subscription_id, subscription_status,
                 subscription_current_period_end, subscription_cancel_at_period_end,
                 billing_status, last_payment_status, canceled_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 shop_name = excluded.shop_name,
                 owner_name = excluded.owner_name,
@@ -756,6 +966,11 @@ def _save_commercial_profile_fields(fields: dict[str, Any]) -> dict[str, Any]:
                 multi_shop_ready = excluded.multi_shop_ready,
                 trial_started_at = excluded.trial_started_at,
                 trial_ends_at = excluded.trial_ends_at,
+                trial_device_id = excluded.trial_device_id,
+                trial_claimed_at = excluded.trial_claimed_at,
+                entitlement_last_verified_at = excluded.entitlement_last_verified_at,
+                entitlement_last_server_time = excluded.entitlement_last_server_time,
+                clock_tamper_detected = excluded.clock_tamper_detected,
                 stripe_customer_id = excluded.stripe_customer_id,
                 stripe_subscription_id = excluded.stripe_subscription_id,
                 subscription_status = excluded.subscription_status,
@@ -780,6 +995,11 @@ def _save_commercial_profile_fields(fields: dict[str, Any]) -> dict[str, Any]:
                 1 if current["multi_shop_ready"] else 0,
                 current["trial_started_at"],
                 current["trial_ends_at"],
+                current["trial_device_id"],
+                current["trial_claimed_at"],
+                current["entitlement_last_verified_at"],
+                current["entitlement_last_server_time"],
+                1 if current["clock_tamper_detected"] else 0,
                 current["stripe_customer_id"],
                 current["stripe_subscription_id"],
                 current["subscription_status"],
@@ -1265,11 +1485,16 @@ def signup(payload: SignupRequest, response: Response):
     email = str(payload.email or "").strip().lower()
     if "@" not in email:
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if payload.confirm_password is not None and payload.confirm_password != payload.password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
     if _load_user_by_email(email):
         raise HTTPException(status_code=409, detail="An account already exists for this email.")
 
     now = datetime.now(timezone.utc)
-    trial_ends_at = now + timedelta(days=TRIAL_DAYS)
+    existing_profile = _load_profile()
+    existing_state = str(existing_profile.get("subscription_state") or "local_only").strip().lower()
+    trial_history = _trial_history_for_install(payload.install_id)
+    trial_already_used = bool(existing_profile.get("trial_started_at") or existing_profile.get("trial_ends_at") or trial_history)
     user_id = str(uuid.uuid4())
     conn = get_conn()
     try:
@@ -1298,16 +1523,33 @@ def signup(payload: SignupRequest, response: Response):
 
     profile_fields = {
         "account_email": email,
-        "owner_name": str(payload.name or "").strip(),
-        "shop_name": str(payload.shop_name or "").strip() or _load_profile().get("shop_name", ""),
-        "plan_code": "spaila_one",
-        "subscription_state": "trial",
+        "owner_name": str(payload.name or "").strip() or existing_profile.get("owner_name", ""),
+        "shop_name": str(payload.shop_name or "").strip() or existing_profile.get("shop_name", ""),
         "auth_mode": "saas",
         "multi_shop_ready": False,
-        "trial_started_at": now.isoformat(),
-        "trial_ends_at": trial_ends_at.isoformat(),
-        "billing_status": "trialing",
     }
+    if not trial_already_used and existing_state in {"local_only", "setup_pending", ""}:
+        trial_ends_at = now + timedelta(days=TRIAL_DAYS)
+        profile_fields.update({
+            "plan_code": "spaila_one",
+            "subscription_state": "trial",
+            "trial_started_at": now.isoformat(),
+            "trial_ends_at": trial_ends_at.isoformat(),
+            "trial_device_id": _install_hash(payload.install_id),
+            "trial_claimed_at": now.isoformat(),
+            "billing_status": "trialing",
+        })
+        _record_trial_install(payload.install_id, email, now.isoformat(), trial_ends_at.isoformat())
+    elif trial_history and existing_state in {"local_only", "setup_pending", ""}:
+        profile_fields.update({
+            "plan_code": "spaila_one",
+            "subscription_state": "trial",
+            "trial_started_at": trial_history.get("trial_started_at") or existing_profile.get("trial_started_at", ""),
+            "trial_ends_at": trial_history.get("trial_ends_at") or existing_profile.get("trial_ends_at", ""),
+            "trial_device_id": trial_history.get("install_hash", ""),
+            "trial_claimed_at": trial_history.get("created_at", ""),
+            "billing_status": "trialing",
+        })
     profile = _save_commercial_profile_fields(profile_fields)
     token = _create_session(response, user_id, ACCOUNT_ID)
     return {
@@ -1394,6 +1636,8 @@ def request_password_reset(payload: PasswordResetRequest):
 
 @router.post("/auth/password-reset/confirm")
 def confirm_password_reset(payload: PasswordResetConfirm):
+    if payload.confirm_password is not None and payload.confirm_password != payload.password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
     token_hash = _hash_token(payload.token)
     now = _now_iso()
     conn = get_conn()

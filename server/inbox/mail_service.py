@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict
 
-from workspace_paths import get_workspace_root
+from workspace_paths import get_workspace_dirs
 
 from .imap_client import check_imap_connection, delete_message, move_message_to_trash
 from .inbox_service import fetch_and_store_emails
@@ -46,7 +46,7 @@ def clamp_poll_interval(value: Any) -> int:
 
 
 def load_email_settings() -> dict:
-    settings_path = Path(get_workspace_root()) / "email_settings.json"
+    settings_path = get_workspace_dirs()["EmailSettings"]
     if not settings_path.is_file():
         raise ValueError("Email settings have not been saved yet.")
     try:

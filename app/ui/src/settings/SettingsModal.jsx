@@ -87,11 +87,14 @@ function humanizeAccountApiDetail(detail, fallback = "Account request failed.") 
 }
 
 async function accountRequest(endpoint, options = {}) {
+  const storedSession = await window.parserApp?.getAccountAuthToken?.().catch(() => null);
+  const sessionToken = String(storedSession?.session_token || "").trim();
   const response = await fetch(`${ACCOUNT_API_BASE}${endpoint}`, {
     credentials: "include",
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -104,6 +107,11 @@ async function accountRequest(endpoint, options = {}) {
   if (!response.ok) {
     const detail = payload?.detail || payload?.message || payload?.error;
     throw new Error(humanizeAccountApiDetail(detail, `Account request failed (${response.status})`));
+  }
+  if (payload?.session_token) {
+    await window.parserApp?.saveAccountAuthToken?.(payload.session_token).catch(() => {});
+  } else if (endpoint === API_ENDPOINTS.accountSession && payload?.authenticated === false && sessionToken) {
+    await window.parserApp?.clearAccountAuthToken?.().catch(() => {});
   }
   return payload;
 }
@@ -279,17 +287,16 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
 
   return (
     <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
-      <div style={{ minWidth: "700px" }}>
+      <div style={{ minWidth: "680px" }}>
         {/* Column headers */}
         <div style={{
-          display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
+          display: "grid", gridTemplateColumns: "1fr 64px 64px 120px 104px",
           gap: "0 8px", padding: "5px 10px",
           background: "#f3f4f6", borderRadius: "6px 6px 0 0",
           borderBottom: "1px solid #e5e7eb",
           fontSize: "11px", fontWeight: 600, color: "#6b7280",
           letterSpacing: "0.05em", textTransform: "uppercase", alignItems: "center",
         }}>
-          <span>System key</span>
           <span>Display name</span>
           <span style={{ textAlign: "center" }} title="Show/hide column">👁</span>
           <span style={{ textAlign: "center" }} title="Apply row color to this cell">🎨</span>
@@ -308,17 +315,11 @@ function OrderFieldTable({ fields, localOrder, setLabel, toggleVisible, togglePa
 
             return (
               <div key={f.key} style={{
-                display: "grid", gridTemplateColumns: "140px 1fr 44px 44px 72px 52px",
+                display: "grid", gridTemplateColumns: "1fr 64px 64px 120px 104px",
                 gap: "0 8px", padding: "8px 10px", alignItems: "center",
                 background: i % 2 === 0 ? "#fff" : "#fafafa",
                 borderBottom: i < orderedFields.length - 1 ? "1px solid #f3f4f6" : "none",
               }}>
-              {/* System key */}
-              <div style={{ fontSize: "12px", color: "#9ca3af", fontFamily: "monospace",
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {f.key}
-              </div>
-
               {/* Label — routes to statusConfig for "status"; locked for virtual columns */}
               <input type="text"
                 value={f._isStatus ? (localStatusConfig?.columnLabel ?? "Status") : f.label}
@@ -2388,6 +2389,174 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
   );
 }
 
+function WorkspaceLocationSection() {
+  const [workspacePath, setWorkspacePath] = React.useState(null);
+  const [homePath, setHomePath] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [notice, setNotice] = React.useState("");
+  const [noticeType, setNoticeType] = React.useState("info"); // "info" | "error" | "success"
+  const [repairing, setRepairing] = React.useState(false);
+  const [repairResult, setRepairResult] = React.useState(null); // null | { fixed, oldRoot }
+
+  React.useEffect(() => {
+    window.parserApp?.getWorkspacePaths?.().then((result) => {
+      if (result?.ok) {
+        setWorkspacePath(result.root);
+        if (result.homePath) setHomePath(result.homePath);
+      }
+    }).catch(() => {});
+  }, []);
+
+  async function repairPaths() {
+    setRepairing(true);
+    setRepairResult(null);
+    try {
+      // Detect stale paths via backend
+      const detectRes = await fetch("http://127.0.0.1:8055/workspace/detect-stale-paths");
+      const detected = await detectRes.json();
+      if (!detected.needs_repair) {
+        setRepairResult({ fixed: 0, message: "No stale paths found — all references are current." });
+        return;
+      }
+      const currentRoot = workspacePath;
+      let totalFixed = 0;
+      const oldRoots = Object.keys(detected.detected_old_roots || {});
+      for (const oldRoot of oldRoots) {
+        const res = await fetch("http://127.0.0.1:8055/workspace/rewrite-paths", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_root: oldRoot, new_root: currentRoot }),
+        });
+        const result = await res.json();
+        totalFixed += result.updated_paths || 0;
+      }
+      setRepairResult({
+        fixed: totalFixed,
+        message: `Fixed ${totalFixed} path reference${totalFixed !== 1 ? "s" : ""} — thumbnails and attachments will reload on next open.`,
+      });
+    } catch (err) {
+      setRepairResult({ fixed: 0, message: `Repair failed: ${err.message || "unknown error"}` });
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  async function pickNewLocation() {
+    // Default the picker to ~/Spaila (home dir avoids OneDrive/cloud-sync issues)
+    const sep = homePath && homePath.includes("\\") ? "\\" : "/";
+    const defaultPath = homePath
+      ? `${homePath}${homePath.endsWith("\\") || homePath.endsWith("/") ? "" : sep}Spaila`
+      : undefined;
+
+    const result = await window.parserApp?.pickFolder?.({
+      title: "Choose Spaila workspace folder",
+      defaultPath,
+    });
+    if (!result || result.canceled) return;
+
+    const chosenPath = result.path;
+    if (!chosenPath) return;
+
+    setLoading(true);
+    setNotice("Moving workspace files… this may take a moment.");
+    setNoticeType("info");
+    try {
+      const res = await window.parserApp?.setWorkspaceRoot?.(chosenPath);
+      if (res?.ok) {
+        setWorkspacePath(res.root);
+        const msg = res.moved
+          ? `Workspace moved to ${res.root}. Reloading…`
+          : `Workspace set to ${res.root}. Reloading…`;
+        setNotice(msg);
+        setNoticeType("success");
+        // Give the user a moment to read the message, then reload the renderer
+        // so all components pick up the new workspace root immediately.
+        setTimeout(() => { window.location.reload(); }, 1800);
+      } else {
+        setNotice(res?.error || "Could not update workspace location.");
+        setNoticeType("error");
+      }
+    } catch (err) {
+      setNotice(err?.message || "Unexpected error.");
+      setNoticeType("error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const sectionStyle = { marginTop: "28px", paddingTop: "20px", borderTop: "1px solid #e5e7eb" };
+  const labelStyle = { fontSize: "15px", fontWeight: 700, color: "#111", marginBottom: "6px" };
+  const descStyle = { fontSize: "12px", color: "#6b7280", marginBottom: "14px", lineHeight: 1.55, maxWidth: "520px" };
+  const pathBoxStyle = {
+    fontSize: "12px", fontFamily: "monospace", color: "#374151",
+    background: "#f9fafb", border: "1px solid #e5e7eb",
+    borderRadius: "5px", padding: "6px 10px", wordBreak: "break-all",
+    maxWidth: "480px", marginBottom: "10px",
+  };
+  const btnStyle = {
+    fontSize: "12px", fontWeight: 600, padding: "6px 14px", borderRadius: "5px",
+    background: "#2563eb", color: "#fff", border: "none", cursor: loading ? "wait" : "pointer",
+    opacity: loading ? 0.7 : 1,
+  };
+  const noticeColor = noticeType === "error" ? "#dc2626" : noticeType === "success" ? "#15803d" : "#2563eb";
+  const noticeStyle = { marginTop: "10px", fontSize: "12px", lineHeight: 1.55, maxWidth: "480px", color: noticeColor };
+
+  const sep = homePath && homePath.includes("\\") ? "\\" : "/";
+  const proposedDefault = homePath
+    ? `${homePath}${homePath.endsWith("\\") || homePath.endsWith("/") ? "" : sep}Spaila`
+    : null;
+
+  return (
+    <div style={sectionStyle}>
+      <div style={labelStyle}>Workspace location</div>
+      <p style={descStyle}>
+        The folder where Spaila stores your orders, inbox, archive, and backups.
+        Default location is <span style={{ fontFamily: "monospace" }}>~/Spaila</span> in your home directory.
+        When you change this, all existing files are moved automatically.
+        Restart Spaila after changing.
+      </p>
+      {workspacePath ? (
+        <div style={pathBoxStyle} title={workspacePath}>{workspacePath}</div>
+      ) : (
+        <div style={{ ...pathBoxStyle, color: "#9ca3af" }}>Loading…</div>
+      )}
+      {proposedDefault && workspacePath && proposedDefault.toLowerCase() !== workspacePath.toLowerCase() && (
+        <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "10px" }}>
+          Recommended: <span style={{ fontFamily: "monospace" }}>{proposedDefault}</span>
+        </div>
+      )}
+      <button type="button" onClick={pickNewLocation} disabled={loading || repairing} style={btnStyle}>
+        {loading ? "Moving files…" : "Change workspace location…"}
+      </button>
+      {notice && <div style={noticeStyle}>{notice}</div>}
+
+      <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid #f3f4f6" }}>
+        <div style={{ fontSize: "12px", fontWeight: 600, color: "#374151", marginBottom: "4px" }}>
+          Repair path references
+        </div>
+        <div style={{ fontSize: "11px", color: "#9ca3af", marginBottom: "8px", lineHeight: 1.5, maxWidth: "480px" }}>
+          If you manually moved your workspace folder, past order thumbnails and attachments may be broken.
+          Run this to update all stored file references to match the current workspace location.
+        </div>
+        <button
+          type="button"
+          onClick={repairPaths}
+          disabled={repairing || loading}
+          style={{ ...btnStyle, background: repairing ? "#6b7280" : "#059669" }}
+        >
+          {repairing ? "Scanning and repairing…" : "Repair path references"}
+        </button>
+        {repairResult && (
+          <div style={{ marginTop: "8px", fontSize: "12px", lineHeight: 1.5, maxWidth: "480px",
+            color: repairResult.fixed > 0 ? "#15803d" : "#6b7280" }}>
+            {repairResult.message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BackgroundAutomationSection() {
   const [state, setState] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
@@ -2511,10 +2680,12 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
   const [authForm, setAuthForm] = React.useState({
     email: shopConfig?.accountEmail ?? shopConfig?.smtpEmailAddress ?? shopConfig?.imapUsername ?? "",
     password: "",
+    confirm_password: "",
     name: shopConfig?.accountUserName ?? shopConfig?.sender_name ?? "",
     shop_name: shopConfig?.shopName ?? "",
   });
   const [authState, setAuthState] = React.useState({ loading: false, error: "", message: "" });
+  const [showPasswords, setShowPasswords] = React.useState(false);
 
   // On mount, sync shop_name from the shared account profile (written by webapp).
   // Calls saveShopConfig so the spaila:shopconfig event fires, updating titlebar,
@@ -2633,6 +2804,9 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     if (mode === "signup" && password.length < 8) {
       return "Enter a password with at least 8 characters to start your 7-day trial.";
     }
+    if (mode === "signup" && password !== String(authForm?.confirm_password || "")) {
+      return "Passwords do not match.";
+    }
     return "";
   }
 
@@ -2652,6 +2826,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
             email: authForm.email.trim(),
             name: accountName || authForm.name,
             shop_name: shopConfig?.shopName || authForm.shop_name,
+            install_id: getOrCreateInstallId(),
           }
         : { email: authForm.email.trim(), password: authForm.password };
       const result = await accountRequest(endpoint, {
@@ -2660,7 +2835,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
       });
       setSession(result);
       mergeAccountProfile(result?.profile);
-      setAuthState({ loading: false, error: "", message: mode === "signup" ? "Trial started." : "Signed in." });
+      setAuthState({ loading: false, error: "", message: mode === "signup" ? "Account created. Your access status is shown below." : "Signed in." });
     } catch (error) {
       setAuthState({ loading: false, error: error?.message || "Could not authenticate.", message: "" });
     }
@@ -2670,10 +2845,12 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     setAuthState({ loading: true, error: "", message: "" });
     try {
       await accountRequest(API_ENDPOINTS.authLogout, { method: "POST", body: JSON.stringify({}) });
+      await window.parserApp?.clearAccountAuthToken?.().catch(() => {});
       const result = await accountRequest(API_ENDPOINTS.accountSession);
       setSession(result);
       setAuthState({ loading: false, error: "", message: "Signed out." });
     } catch (error) {
+      await window.parserApp?.clearAccountAuthToken?.().catch(() => {});
       setAuthState({ loading: false, error: error?.message || "Could not sign out.", message: "" });
     }
   }
@@ -2695,7 +2872,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
   }
 
   async function startCheckout() {
-    setAuthState({ loading: true, error: "", message: "Opening Stripe Checkout..." });
+    setAuthState({ loading: true, error: "", message: "Opening secure checkout..." });
     try {
       const result = await accountRequest(API_ENDPOINTS.billingCheckout, {
         method: "POST",
@@ -2709,18 +2886,18 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
         setAuthState({
           loading: false,
           error: "",
-          message: launchTarget === "external" ? "Stripe Checkout opened in your browser." : "Stripe Checkout opened in a secure payment window.",
+          message: launchTarget === "external" ? "Checkout opened in your browser." : "Checkout opened in a secure payment window.",
         });
         return;
       }
-      setAuthState({ loading: false, error: "", message: result.message || "Billing setup is pending Stripe configuration." });
+      setAuthState({ loading: false, error: "", message: result.message || "Billing setup is pending configuration." });
     } catch (error) {
       setAuthState({ loading: false, error: error?.message || "Could not start checkout.", message: "" });
     }
   }
 
   async function openBillingPortal() {
-    setAuthState({ loading: true, error: "", message: "Opening Stripe Billing Portal..." });
+    setAuthState({ loading: true, error: "", message: "Opening secure billing portal..." });
     try {
       const result = await accountRequest(API_ENDPOINTS.billingPortal, {
         method: "POST",
@@ -2731,11 +2908,11 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
         setAuthState({
           loading: false,
           error: "",
-          message: launchTarget === "external" ? "Stripe Billing Portal opened in your browser." : "Stripe Billing Portal opened in a secure payment window.",
+          message: launchTarget === "external" ? "Billing portal opened in your browser." : "Billing portal opened in a secure payment window.",
         });
         return;
       }
-      setAuthState({ loading: false, error: "", message: result.message || "Billing portal is pending Stripe configuration." });
+      setAuthState({ loading: false, error: "", message: result.message || "Billing portal is pending configuration." });
     } catch (error) {
       setAuthState({ loading: false, error: error?.message || "Could not open billing.", message: "" });
     }
@@ -2747,6 +2924,19 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
       await openAccountUrl(`http://127.0.0.1:5173/#/reset-password${query}`);
     } catch (error) {
       setAuthState({ loading: false, error: error?.message || "Could not open password reset.", message: "" });
+    }
+  }
+
+  function getOrCreateInstallId() {
+    try {
+      const key = "spaila_install_id";
+      const existing = window.localStorage?.getItem(key);
+      if (existing) return existing;
+      const generated = window.crypto?.randomUUID?.() || `desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      window.localStorage?.setItem(key, generated);
+      return generated;
+    } catch {
+      return "";
     }
   }
 
@@ -2765,10 +2955,11 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     return raw.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
-  function formatCountdown(value) {
+  function formatCountdown(value, referenceTime) {
     const target = value ? new Date(value) : null;
     if (!target || Number.isNaN(target.getTime())) return "";
-    const diffMs = target.getTime() - Date.now();
+    const refMs = referenceTime ? new Date(referenceTime).getTime() : Date.now();
+    const diffMs = target.getTime() - (Number.isNaN(refMs) ? Date.now() : refMs);
     if (diffMs <= 0) return "Expired";
     const days = Math.ceil(diffMs / 86400000);
     return `${days} day${days === 1 ? "" : "s"} remaining`;
@@ -2783,7 +2974,8 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
   const displaySubscriptionStatus = formatAccountCode(subscriptionStatus, "Local Mode");
   const heroSubscriptionLabel = session?.authenticated ? displaySubscriptionStatus : "Local Mode";
   const displayBillingStatus = formatAccountCode(billingStatus, "Setup Pending");
-  const trialCountdown = formatCountdown(shopConfig?.trialEndsAt || shopConfig?.trialEnd || shopConfig?.trial_ends_at || "");
+  const entitlements = session?.entitlements || {};
+  const trialCountdown = formatCountdown(shopConfig?.trialEndsAt || shopConfig?.trialEnd || shopConfig?.trial_ends_at || "", entitlements.server_time);
   const hasBillingIssue = displayBillingStatus === "Billing Issue";
   const normalizedBillingState = String(heroSubscriptionLabel || "").toLowerCase();
   const isLocalBilling = normalizedBillingState === "local mode" || !session?.authenticated;
@@ -2804,13 +2996,18 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     : isActiveBilling
       ? "Renews"
       : "Access";
-  const billingNotice = hasBillingIssue
-    ? "Billing Issue Detected"
-    : isExpiredBilling
-      ? "Restricted Mode"
-      : isTrialBilling && trialCountdown && trialCountdown !== "Expired"
-        ? `Trial ends in ${trialCountdown.toLowerCase()}`
-        : "";
+  const clockTampered = entitlements.clock_tamper_detected === true;
+  const billingNotice = clockTampered
+    ? "Device clock mismatch detected. Access is suspended until the system clock is corrected and the app reconnects."
+    : hasBillingIssue
+      ? "Billing Issue Detected"
+      : entitlements.trial_reminder_message
+        ? entitlements.trial_reminder_message
+        : isExpiredBilling
+          ? "Restricted Mode"
+          : isTrialBilling && trialCountdown && trialCountdown !== "Expired"
+            ? `Trial ends in ${trialCountdown.toLowerCase()}`
+            : "";
   const showUpgradeAction = !isLocalBilling && (!isActiveBilling || isTrialBilling || isExpiredBilling || hasBillingIssue);
   const showBillingActions = !isLocalBilling && (isActiveBilling || isTrialBilling);
 
@@ -2824,7 +3021,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
               Manage your Spaila profile, sign-in access, subscription, billing, and support options.
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: "auto", paddingTop: 18 }}>
-              <button type="button" onClick={() => onOpenSupport?.("billing")} style={primaryButtonStyle}>Contact Support</button>
+              <button type="button" onClick={() => onOpenSupport?.("support_request")} style={primaryButtonStyle}>Contact Support</button>
               <button type="button" onClick={onOpenDocumentation} style={secondaryButtonStyle}>Tutorials &amp; Documentation</button>
             </div>
           </div>
@@ -2939,9 +3136,16 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
                     </label>
                     <label>
                       <span style={labelStyle}>Password</span>
-                      <input type="password" value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="At least 8 characters" style={inputStyle} />
+                      <input type={showPasswords ? "text" : "password"} value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="At least 8 characters" style={inputStyle} />
+                    </label>
+                    <label>
+                      <span style={labelStyle}>Confirm password</span>
+                      <input type={showPasswords ? "text" : "password"} value={authForm.confirm_password} onChange={(e) => setAuthForm((prev) => ({ ...prev, confirm_password: e.target.value }))} placeholder="Required for trial signup" style={inputStyle} />
                     </label>
                   </div>
+                  <button type="button" onClick={() => setShowPasswords((value) => !value)} style={dangerLinkStyle}>
+                    {showPasswords ? "Hide passwords" : "Show passwords"}
+                  </button>
                   {authState.error ? (
                     <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
                       {authState.error}
@@ -2967,7 +3171,11 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
                 <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55 }}>{billingNotice}</div>
               </div>
             ) : null}
-            {hasBillingIssue ? (
+            {clockTampered ? (
+              <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
+                Access suspended: system clock was moved backward. Correct your device clock, then reopen Settings to restore access.
+              </div>
+            ) : hasBillingIssue ? (
               <div style={{ border: "1px solid #fecaca", borderRadius: 12, background: "#fef2f2", color: "#991b1b", padding: 10, fontSize: 12 }}>
                 Billing needs attention. Order processor, inbox/helper, and new manual order creation are restricted until billing is resolved.
               </div>
@@ -3358,8 +3566,8 @@ function DataTab({ shopConfig, setShopConfig }) {
         <span style={headStyle}>Archive folder</span>
         <p style={mutedStyle}>Choose where archived order folders are stored on your computer.</p>
         <div style={rowStyle}>
-          <div style={pathBox} title={shopConfig.orderArchiveRoot || "Default: C:/Spaila/archive"}>
-            {shopConfig.orderArchiveRoot || <span style={{ color: "#9ca3af", fontFamily: "inherit" }}>Default: C:/Spaila/archive</span>}
+          <div style={pathBox} title={shopConfig.orderArchiveRoot || "Default: workspace/Archive"}>
+            {shopConfig.orderArchiveRoot || <span style={{ color: "#9ca3af", fontFamily: "inherit" }}>Default: workspace/Archive</span>}
           </div>
           <button type="button" onClick={pickOrderArchiveRoot} style={browseBtn}>Browse…</button>
           {shopConfig.orderArchiveRoot ? (
@@ -3736,7 +3944,7 @@ function DocumentsTab({ config, setConfig }) {
     if (!result || result.canceled) return;
     const copied = await window.parserApp?.copyDocumentToDocs?.({ filePath: result.path });
     if (!copied?.ok) {
-      alert(`Could not save document to C:\\Spaila\\Docs: ${copied?.error || "unknown error"}`);
+      alert(`Could not save document to Docs folder: ${copied?.error || "unknown error"}`);
       return;
     }
     setConfig((prev) => ({ ...prev, [field]: copied.path, [nameField]: copied.name }));
@@ -4450,7 +4658,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
       allowedExtensions: ["png", "jpg", "jpeg", "webp"],
     });
     if (!copied?.ok) {
-      alert(`Could not save logo to C:\\Spaila\\Docs: ${copied?.error || "unknown error"}`);
+      alert(`Could not save logo to Docs folder: ${copied?.error || "unknown error"}`);
       return;
     }
     setLocalShopConfig((prev) => ({
@@ -4460,9 +4668,8 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
     }));
   }
 
-  function openAccountSupport(type = "billing") {
-    setActiveSupportSubtab("contact");
-    openSupportReport(type);
+  function openAccountSupport(type = "support_request") {
+    window.dispatchEvent(new CustomEvent("spaila:open-support-report", { detail: { type } }));
   }
 
   function openAccountDocumentation() {
@@ -4755,6 +4962,10 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                 </div>
 
                 <BackgroundAutomationSection />
+
+                {window.parserApp?.getWorkspacePaths && (
+                  <WorkspaceLocationSection />
+                )}
 
               </div>
             )}
@@ -5270,13 +5481,13 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                         </div>
                         {activeSupportSubtab === "contact" ? (
                           <>
-                            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                              Use Contact Support to prepare a message for bugs, feature requests, or billing help.
+                        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                              Use Contact Support for bugs, feature requests, or billing help. Reports go directly to Spaila — no email app required.
                             </div>
                             <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                               <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
-                                Prepared email
-                              </div>
+                                Diagnostics
+                            </div>
                               <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
                                 Spaila opens your default email app with support details filled in. You can review and edit everything before sending.
                               </div>
@@ -5286,7 +5497,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                                 Diagnostics
                               </div>
                               <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                                Bug reports can include system info, a lightweight diagnostic report path, and an optional screenshot path.
+                                Bug reports can include app version, platform info, and recent coordinator activity. Sensitive keys and tokens are automatically removed before sending.
                               </div>
                             </div>
                           </>
@@ -5306,7 +5517,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           </>
                         )}
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>
-                          Use the <strong>Contact Support</strong> tab or the bottom-left <strong>Report a bug</strong> shortcut when you need help.
+                          Use <strong>Contact Support</strong> in Account or the bottom-left <strong>Report a bug</strong> button to reach Spaila at any time.
                         </div>
                       </>
                     ) : activeTab === "general" ? (
@@ -5315,7 +5526,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           General app settings
                         </div>
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                          General settings control app visibility and background automation. Shop identity and logo are managed in Account.
+                          General settings control app visibility, background automation, and workspace location. The workspace defaults to <span style={{ fontFamily: "monospace" }}>~/Spaila</span> in your home directory — change it any time under Workspace location below. Shop identity and logo are managed in Account.
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
@@ -5331,6 +5542,15 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
                             Background automation can watch for new order emails while Spaila is open, keep duplicate messages from reappearing, and leave emails visible in Inbox for review.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                            Workspace location
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
+                            Shows and lets you change where Spaila stores orders, inbox, archive, and backups.
+                            Restart Spaila after changing location.
                           </div>
                         </div>
                         <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65, marginTop: "14px" }}>

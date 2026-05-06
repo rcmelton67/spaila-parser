@@ -1,5 +1,7 @@
 import { DEFAULT_LOCAL_API_BASE } from "./endpoints.mjs";
 
+const WEB_SESSION_TOKEN_KEY = "spaila_web_session_token";
+
 export function resolveApiBase(explicitBase = "") {
   const configured = String(explicitBase || "").trim();
   if (configured) return configured.replace(/\/+$/, "");
@@ -32,6 +34,33 @@ function humanizeApiDetail(detail, fallback = "Spaila API request failed.") {
   return fallback;
 }
 
+function canUseBrowserStorage() {
+  return typeof window !== "undefined" && !!window.localStorage;
+}
+
+function readStoredSessionToken() {
+  try {
+    if (!canUseBrowserStorage()) return "";
+    return String(window.localStorage.getItem(WEB_SESSION_TOKEN_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredSessionToken(token) {
+  try {
+    if (!canUseBrowserStorage()) return;
+    const value = String(token || "").trim();
+    if (value) {
+      window.localStorage.setItem(WEB_SESSION_TOKEN_KEY, value);
+    } else {
+      window.localStorage.removeItem(WEB_SESSION_TOKEN_KEY);
+    }
+  } catch {
+    // Browser storage is a persistence fallback; HTTP-only cookies remain primary.
+  }
+}
+
 export function createApiClient({ baseUrl = "", fetchImpl } = {}) {
   const resolvedBase = resolveApiBase(baseUrl);
   const requestFetch = fetchImpl || globalThis.fetch;
@@ -40,11 +69,13 @@ export function createApiClient({ baseUrl = "", fetchImpl } = {}) {
   }
 
   async function request(path, options = {}) {
+    const storedSessionToken = readStoredSessionToken();
     const response = await requestFetch(`${resolvedBase}${path}`, {
       credentials: "include",
       ...options,
       headers: {
         "Content-Type": "application/json",
+        ...(storedSessionToken ? { Authorization: `Bearer ${storedSessionToken}` } : {}),
         ...(options.headers || {}),
       },
     });
@@ -56,6 +87,13 @@ export function createApiClient({ baseUrl = "", fetchImpl } = {}) {
       error.status = response.status;
       error.detail = detail;
       throw error;
+    }
+    if (payload?.session_token) {
+      writeStoredSessionToken(payload.session_token);
+    } else if (path === "/account/session" && payload?.authenticated === false && storedSessionToken) {
+      writeStoredSessionToken("");
+    } else if (path === "/account/auth/logout") {
+      writeStoredSessionToken("");
     }
     return payload;
   }
@@ -74,5 +112,8 @@ export function createApiClient({ baseUrl = "", fetchImpl } = {}) {
       body: JSON.stringify(body || {}),
     }),
     delete: (path, options = {}) => request(path, { ...options, method: "DELETE" }),
+    getSessionToken: readStoredSessionToken,
+    saveSessionToken: writeStoredSessionToken,
+    clearSessionToken: () => writeStoredSessionToken(""),
   };
 }

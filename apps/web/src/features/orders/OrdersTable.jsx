@@ -4,6 +4,7 @@ import { DATE_FIELD_KEYS, formatDate } from "../../shared/dateConfig.js";
 const WEB_WIDTH_PROFILE_KEY = "spaila_web_column_width_profile";
 const PRICE_TYPE_FIELD_KEY = "custom_6";
 const CHECKBOX_COLUMN_WIDTH = 38;
+const EMPTY_TRAILING_ROW_COUNT = 4;
 
 function contrastColor(hex) {
   const value = String(hex || "").replace("#", "");
@@ -311,6 +312,7 @@ export default function OrdersTable({
   searchableColumnKeys = [],
   excludedSearchColumns = new Set(),
   onExcludeSearchColumn,
+  onNewOrder,
 }) {
   const [localProfile, setLocalProfile] = React.useState(readLocalWidthProfile);
   const [selectedIds, setSelectedIds] = React.useState(() => new Set());
@@ -483,17 +485,9 @@ export default function OrdersTable({
     );
   }
 
-  if (!orders.length) {
-    return (
-      <div className="table-state table-state-empty">
-        <strong>No orders found</strong>
-        <span>Try changing the search or filter controls.</span>
-      </div>
-    );
-  }
-
   return (
-    <div className={`orders-table-wrap${searchActive ? " search-active" : ""}`} style={tableStyleVars}>
+    <>
+    <div className={`orders-table-wrap orders-table-wrap--no-bottom-radius${searchActive ? " search-active" : ""}`} style={tableStyleVars}>
       <table ref={tableRef} className="orders-table" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
         <colgroup>
           <col style={{ width: CHECKBOX_COLUMN_WIDTH, minWidth: CHECKBOX_COLUMN_WIDTH, maxWidth: CHECKBOX_COLUMN_WIDTH }} />
@@ -555,6 +549,13 @@ export default function OrdersTable({
           ) : null}
         </thead>
         <tbody>
+          {orders.length === 0 ? (
+            <tr>
+              <td colSpan={columns.length + 1} className="orders-empty-hint-row-cell">
+                No orders found. Double-click a blank row below to add a manual order.
+              </td>
+            </tr>
+          ) : null}
           {orders.map((row) => {
             const priceRule = matchPriceRule(row.price, pricingRules);
             const rowId = getRowId(row);
@@ -685,5 +686,23 @@ export default function OrdersTable({
         </div>
       ) : null}
     </div>
+    <div
+      className="orders-empty-zone"
+      style={{ minWidth: tableMinWidth, ...tableStyleVars }}
+    >
+      {Array.from({ length: EMPTY_TRAILING_ROW_COUNT }).map((_, index) => (
+        <div
+          key={`empty-row-${index}`}
+          className="orders-empty-zone-row"
+          style={{ background: index % 2 === 0 ? "#fff" : "#fafafa" }}
+          onDoubleClick={() => onNewOrder?.()}
+        >
+          {index === 0 ? (
+            <span className="orders-empty-hint">Double-click to add a manual order</span>
+          ) : null}
+        </div>
+      ))}
+    </div>
+    </>
   );
 }

@@ -44,6 +44,120 @@ def test_signup_starts_seven_day_trial_and_login_creates_session(tmp_path, monke
     assert login["user"]["email"] == "owner@example.com"
 
 
+def test_bearer_session_persists_until_logout_or_revocation(tmp_path, monkeypatch):
+    setup_db(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    signup = client.post("/account/auth/signup", json={
+        "email": "persist@example.com",
+        "password": "correct horse battery",
+        "name": "Owner",
+        "shop_name": "Persistent Shop",
+    })
+    assert signup.status_code == 200
+    token = signup.json()["session_token"]
+    assert token
+
+    fresh_client = TestClient(app)
+    session = fresh_client.get("/account/session", headers={"Authorization": f"Bearer {token}"})
+    assert session.status_code == 200
+    assert session.json()["authenticated"] is True
+    assert session.json()["user"]["email"] == "persist@example.com"
+
+    logout = fresh_client.post("/account/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert logout.status_code == 200
+    after_logout = fresh_client.get("/account/session", headers={"Authorization": f"Bearer {token}"})
+    assert after_logout.status_code == 200
+    assert after_logout.json()["authenticated"] is False
+
+
+def test_new_email_signup_does_not_extend_existing_trial(tmp_path, monkeypatch):
+    setup_db(tmp_path, monkeypatch)
+    expired_trial_end = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    first = account.signup(account.SignupRequest(
+        email="first@example.com",
+        password="correct horse battery",
+        name="Owner",
+        shop_name="Trial Shop",
+    ), Response())
+    assert first["entitlements"]["locked"] is False
+
+    account.update_subscription_for_dev(account.DevSubscriptionUpdate(
+        subscription_state="trial",
+        plan_code="spaila_one",
+        trial_ends_at=expired_trial_end,
+    ))
+
+    second = account.signup(account.SignupRequest(
+        email="second@example.com",
+        password="correct horse battery",
+        name="Second Owner",
+        shop_name="Trial Shop",
+    ), Response())
+
+    assert second["authenticated"] is True
+    assert second["profile"]["trial_ends_at"] == expired_trial_end
+    assert second["entitlements"]["trial_expired"] is True
+    assert second["entitlements"]["locked"] is True
+    assert second["entitlements"]["can_parse"] is False
+
+
+def test_same_install_id_cannot_claim_second_fresh_trial(tmp_path, monkeypatch):
+    setup_db(tmp_path, monkeypatch)
+    install_id = "same-device-install"
+
+    first = account.signup(account.SignupRequest(
+        email="device-one@example.com",
+        password="correct horse battery",
+        confirm_password="correct horse battery",
+        name="Owner",
+        shop_name="Trial Shop",
+        install_id=install_id,
+    ), Response())
+    first_end = first["profile"]["trial_ends_at"]
+
+    expired_trial_end = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    account.update_subscription_for_dev(account.DevSubscriptionUpdate(
+        subscription_state="trial",
+        plan_code="spaila_one",
+        trial_ends_at=expired_trial_end,
+    ))
+
+    second = account.signup(account.SignupRequest(
+        email="device-two@example.com",
+        password="correct horse battery",
+        confirm_password="correct horse battery",
+        name="Second Owner",
+        shop_name="Trial Shop",
+        install_id=install_id,
+    ), Response())
+
+    assert second["profile"]["trial_ends_at"] == expired_trial_end
+    assert second["profile"]["trial_ends_at"] != first_end or second["entitlements"]["trial_expired"] is True
+    assert second["entitlements"]["locked"] is True
+    assert second["entitlements"]["can_parse"] is False
+
+
+def test_clock_rollback_does_not_extend_trial_access(tmp_path, monkeypatch):
+    setup_db(tmp_path, monkeypatch)
+    future_server_time = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    account._save_commercial_profile_fields({
+        "subscription_state": "trial",
+        "plan_code": "spaila_one",
+        "trial_started_at": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
+        "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        "billing_status": "trialing",
+        "entitlement_last_server_time": future_server_time,
+    })
+
+    entitlements = account.get_entitlements()
+
+    assert entitlements["clock_tamper_detected"] is True
+    assert entitlements["locked"] is True
+    assert entitlements["can_parse"] is False
+
+
 def test_expired_trial_blocks_gated_operations_but_keeps_existing_viewing(tmp_path, monkeypatch):
     setup_db(tmp_path, monkeypatch)
     account.update_subscription_for_dev(account.DevSubscriptionUpdate(
@@ -113,7 +227,8 @@ def test_billing_checkout_reports_configuration_requirements(tmp_path, monkeypat
     ))
 
     assert result["status"] == "configuration_required"
-    assert result["entitlements"]["locked"] is False
+    assert result["entitlements"]["locked"] is True
+    assert result["entitlements"]["can_parse"] is False
 
 
 def _stripe_signature(secret: str, payload: dict) -> tuple[str, str]:

@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spaila Support Console</title>
+<style>
+/* ── Variables ─────────────────────────────────────────────────────────────── */
+:root {
+  --bg:          #0d1117;
+  --bg2:         #161b22;
+  --bg3:         #1c2128;
+  --bg4:         #21262d;
+  --border:      #30363d;
+  --border2:     #3d444d;
+  --text:        #e6edf3;
+  --text2:       #9198a1;
+  --text3:       #656d76;
+  --blue:        #4493f8;
+  --blue-dim:    rgba(68, 147, 248, 0.15);
+  --green:       #3fb950;
+  --green-dim:   rgba(63, 185, 80, 0.15);
+  --yellow:      #d29922;
+  --yellow-dim:  rgba(210, 153, 34, 0.15);
+  --red:         #f85149;
+  --red-dim:     rgba(248, 81, 73, 0.15);
+  --orange:      #e09b4e;
+  --orange-dim:  rgba(224, 155, 78, 0.15);
+  --purple:      #a371f7;
+  --purple-dim:  rgba(163, 113, 247, 0.15);
+  --radius:      6px;
+  --radius2:     10px;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button { cursor: pointer; font-family: inherit; font-size: 12px; }
+input, select { font-family: inherit; font-size: 12px; }
+code, pre { font-family: "Cascadia Code", "Fira Code", "SF Mono", Consolas, monospace; font-size: 11.5px; }
+a { color: var(--blue); text-decoration: none; }
+
+/* ── Layout ────────────────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Top bar */
+.topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px; height: 48px; flex-shrink: 0;
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+}
+.topbar-logo { font-size: 13px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.topbar-logo-badge {
+  background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(68,147,248,0.3);
+  border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+}
+.topbar-sep { flex: 1; }
+.topbar-stat { font-size: 11px; color: var(--text3); }
+.topbar-btn {
+  padding: 5px 12px; border-radius: var(--radius); border: 1px solid var(--border2);
+  background: var(--bg3); color: var(--text2); font-weight: 600;
+  transition: border-color .15s, color .15s;
+}
+.topbar-btn:hover { border-color: var(--border2); color: var(--text); background: var(--bg4); }
+.topbar-btn.active { background: var(--blue-dim); border-color: rgba(68,147,248,.4); color: var(--blue); }
+
+/* Main split */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* ── List panel ────────────────────────────────────────────────────────────── */
+.list-panel {
+  width: 340px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+.filter-bar {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 7px; flex-shrink: 0;
+}
+.filter-search {
+  width: 100%; padding: 6px 10px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--bg2); color: var(--text);
+  outline: none;
+}
+.filter-search:focus { border-color: var(--blue); }
+.filter-row { display: flex; gap: 6px; }
+.filter-select {
+  flex: 1; padding: 5px 8px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--bg2); color: var(--text2);
+  outline: none; appearance: none;
+}
+.filter-select:focus { border-color: var(--blue); color: var(--text); }
+.report-list { flex: 1; overflow-y: auto; padding: 6px; }
+
+/* Report card */
+.report-card {
+  padding: 11px 12px; border-radius: var(--radius2);
+  border: 1px solid transparent; cursor: pointer;
+  margin-bottom: 4px; transition: background .1s, border-color .1s;
+}
+.report-card:hover { background: var(--bg3); border-color: var(--border); }
+.report-card.selected { background: var(--blue-dim); border-color: rgba(68,147,248,.35); }
+.report-card.resolved { opacity: .6; }
+.card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.card-subject { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.card-email { color: var(--text2); }
+.card-dot { color: var(--text3); }
+
+/* ── Badges ────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  white-space: nowrap;
+}
+.badge-blocking { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+.badge-high     { background: var(--orange-dim);  color: var(--orange); border: 1px solid rgba(224,155,78,.3); }
+.badge-normal   { background: var(--blue-dim);    color: var(--blue);   border: 1px solid rgba(68,147,248,.3); }
+.badge-low      { background: var(--bg4);         color: var(--text2);  border: 1px solid var(--border); }
+.badge-open         { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
+.badge-investigating{ background: var(--blue-dim);   color: var(--blue);   border: 1px solid rgba(68,147,248,.3); }
+.badge-resolved     { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+.badge-desktop  { background: var(--purple-dim);  color: var(--purple); border: 1px solid rgba(163,113,247,.3); }
+.badge-web      { background: var(--blue-dim);    color: var(--blue);   border: 1px solid rgba(68,147,248,.3); }
+.badge-type     { background: var(--bg4);         color: var(--text2);  border: 1px solid var(--border); }
+.badge-email-ok     { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+.badge-email-fail   { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+.badge-email-off    { background: var(--bg4);         color: var(--text3);  border: 1px solid var(--border); }
+
+/* ── Detail panel ──────────────────────────────────────────────────────────── */
+.detail-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.detail-empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px; color: var(--text3);
+}
+.detail-empty-icon { font-size: 48px; opacity: .3; }
+.detail-scroll { flex: 1; overflow-y: auto; padding: 20px 24px 32px; }
+
+/* Detail header */
+.detail-header { margin-bottom: 18px; }
+.detail-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.detail-subject { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 4px; line-height: 1.35; }
+.detail-meta { font-size: 12px; color: var(--text3); display: flex; gap: 12px; flex-wrap: wrap; }
+.detail-meta span { display: flex; align-items: center; gap: 4px; }
+
+/* Action bar */
+.action-bar {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.action-btn {
+  padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--border2);
+  background: var(--bg3); color: var(--text2); font-weight: 600;
+  transition: all .12s;
+}
+.action-btn:hover { background: var(--bg4); color: var(--text); border-color: var(--text3); }
+.action-btn.primary { background: var(--blue-dim); color: var(--blue); border-color: rgba(68,147,248,.4); }
+.action-btn.primary:hover { background: rgba(68,147,248,.25); }
+.action-btn.success { background: var(--green-dim); color: var(--green); border-color: rgba(63,185,80,.4); }
+.action-btn.success:hover { background: rgba(63,185,80,.25); }
+.action-btn.warn { background: var(--yellow-dim); color: var(--yellow); border-color: rgba(210,153,34,.4); }
+.action-btn.warn:hover { background: rgba(210,153,34,.25); }
+.action-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Detail sections */
+.section { margin-bottom: 24px; }
+.section-title {
+  font-size: 11px; font-weight: 700; letter-spacing: .7px;
+  color: var(--text3); text-transform: uppercase; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.section-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+/* Info table */
+.info-table { width: 100%; border-collapse: collapse; }
+.info-table td { padding: 5px 8px; vertical-align: top; }
+.info-table td:first-child { color: var(--text3); width: 160px; font-size: 11.5px; white-space: nowrap; }
+.info-table td:last-child { color: var(--text); word-break: break-word; }
+.info-table tr:nth-child(even) td { background: var(--bg2); }
+.info-table tr:first-child td { border-radius: var(--radius) var(--radius) 0 0; }
+.info-table tr:last-child td { border-radius: 0 0 var(--radius) var(--radius); }
+
+/* Content blocks */
+.content-block {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius2);
+  padding: 14px 16px; font-size: 13px; line-height: 1.65; color: var(--text); white-space: pre-wrap;
+}
+.content-block.mono {
+  font-family: "Cascadia Code", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 11.5px; line-height: 1.55;
+}
+
+/* Accordion / collapsible */
+details.accordion { margin-bottom: 8px; }
+details.accordion summary {
+  list-style: none; cursor: pointer;
+  padding: 8px 12px; border-radius: var(--radius);
+  background: var(--bg2); border: 1px solid var(--border);
+  color: var(--text2); font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; justify-content: space-between;
+  user-select: none; transition: background .1s;
+}
+details.accordion summary::-webkit-details-marker { display: none; }
+details.accordion summary::after { content: "▸"; font-size: 10px; color: var(--text3); }
+details.accordion[open] summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: transparent; color: var(--text); }
+details.accordion[open] summary::after { content: "▾"; }
+details.accordion > .accordion-body {
+  background: var(--bg2); border: 1px solid var(--border); border-top: none;
+  border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
+  padding: 10px 12px; max-height: 280px; overflow-y: auto;
+}
+.accordion-count { font-size: 11px; color: var(--text3); margin-left: 8px; font-weight: 400; }
+
+/* Log list */
+.log-list { list-style: none; }
+.log-item { padding: 4px 0; border-bottom: 1px solid var(--bg4); font-size: 11.5px; line-height: 1.5; }
+.log-item:last-child { border-bottom: none; }
+.log-ts { color: var(--text3); margin-right: 8px; }
+.log-level-info  { color: var(--blue); }
+.log-level-warn  { color: var(--yellow); }
+.log-level-error { color: var(--red); }
+
+/* Raw JSON */
+.json-pre {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
+  padding: 12px 14px; max-height: 420px; overflow: auto;
+  font-family: "Cascadia Code", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 11px; line-height: 1.6; color: var(--text2); white-space: pre;
+}
+.json-key    { color: #79c0ff; }
+.json-string { color: #a5d6ff; }
+.json-number { color: #79c0ff; }
+.json-bool   { color: var(--orange); }
+.json-null   { color: var(--text3); }
+
+/* Empty / error states */
+.state-empty { padding: 24px; text-align: center; color: var(--text3); font-size: 12.5px; }
+.state-error { padding: 12px 14px; background: var(--red-dim); border: 1px solid rgba(248,81,73,.25); border-radius: var(--radius); color: var(--red); font-size: 12px; }
+.toast {
+  position: fixed; bottom: 18px; right: 18px;
+  padding: 10px 16px; border-radius: var(--radius2);
+  background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  z-index: 9999; opacity: 0; transform: translateY(6px);
+  transition: opacity .2s, transform .2s; pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+/* Loading indicator */
+.spinner {
+  width: 18px; height: 18px; border: 2px solid var(--border);
+  border-top-color: var(--blue); border-radius: 50%; animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Top bar ───────────────────────────────────────────────────────────── -->
+  <div class="topbar">
+    <div class="topbar-logo">
+      &#9632; Spaila
+      <span class="topbar-logo-badge">SUPPORT CONSOLE</span>
+    </div>
+    <span class="topbar-sep"></span>
+    <span class="topbar-stat" id="stat-count">Loading…</span>
+    <button class="topbar-btn" id="btn-refresh" title="Reload reports">↻ Refresh</button>
+    <button class="topbar-btn" id="btn-auto" title="Toggle auto-refresh every 5s">Auto</button>
+    <button class="topbar-btn" id="btn-folder" title="Open reports folder">Open Folder</button>
+  </div>
+
+  <!-- ── Main split layout ─────────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- Left: filter + list -->
+    <div class="list-panel">
+      <div class="filter-bar">
+        <input class="filter-search" id="search" type="search" placeholder="Search subject, message, email…">
+        <div class="filter-row">
+          <select class="filter-select" id="filter-severity">
+            <option value="all">All Severity</option>
+            <option value="blocking">Blocking</option>
+            <option value="high">High</option>
+            <option value="normal">Normal</option>
+            <option value="low">Low</option>
+          </select>
+          <select class="filter-select" id="filter-status">
+            <option value="all">All Status</option>
+            <option value="open">Open</option>
+            <option value="investigating">Investigating</option>
+            <option value="resolved">Resolved</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <select class="filter-select" id="filter-source">
+            <option value="all">All Sources</option>
+            <option value="desktop">Desktop</option>
+            <option value="web">Web</option>
+          </select>
+          <select class="filter-select" id="filter-type">
+            <option value="all">All Types</option>
+            <option value="bug_report">Bug Report</option>
+            <option value="support_request">Support Request</option>
+            <option value="feature_request">Feature Request</option>
+            <option value="billing_help">Billing Help</option>
+          </select>
+        </div>
+      </div>
+      <div class="report-list" id="report-list">
+        <div class="state-empty">Loading reports…</div>
+      </div>
+    </div>
+
+    <!-- Right: detail -->
+    <div class="detail-panel" id="detail-panel">
+      <div class="detail-empty">
+        <div class="detail-empty-icon">📋</div>
+        <div>Select a report to view details</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+const state = {
+  reports: [],
+  filtered: [],
+  selected: null,       // filepath
+  selectedJson: null,   // parsed full JSON
+  loading: false,
+  autoRefresh: false,
+  autoTimer: null,
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function esc(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch { return iso; }
+}
+
+function fmtRelative(iso) {
+  if (!iso) return "";
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)  return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  } catch { return ""; }
+}
+
+function severityClass(s)  { return `badge-${["blocking","high","normal","low"].includes(s) ? s : "normal"}`; }
+function statusClass(s)    { return `badge-${["open","investigating","resolved"].includes(s) ? s : "open"}`; }
+function sourceClass(src)  { return src === "desktop" ? "badge-desktop" : "badge-web"; }
+function typeLabel(t) {
+  return { bug_report: "Bug", support_request: "Support", feature_request: "Feature", billing_help: "Billing" }[t] || t;
+}
+
+function showToast(msg, dur = 2400) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove("show"), dur);
+}
+
+// ── Syntax-highlight JSON ────────────────────────────────────────────────────
+
+function highlightJson(json) {
+  return esc(json).replace(
+    /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^"\\])*"(\s*:)?|\b(true|false|null)\b|-?\d+(\.\d+)?([eE][+\-]?\d+)?)/g,
+    (match) => {
+      if (/^"/.test(match)) {
+        return /:$/.test(match)
+          ? `<span class="json-key">${match}</span>`
+          : `<span class="json-string">${match}</span>`;
+      }
+      if (/true|false/.test(match)) return `<span class="json-bool">${match}</span>`;
+      if (/null/.test(match))       return `<span class="json-null">${match}</span>`;
+      return `<span class="json-number">${match}</span>`;
+    }
+  );
+}
+
+// ── Report loading ───────────────────────────────────────────────────────────
+
+async function loadReports({ silent = false } = {}) {
+  if (!silent) state.loading = true;
+  const listEl = document.getElementById("report-list");
+  if (!silent) listEl.innerHTML = `<div class="state-empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+
+  const result = await window.supportConsole.listReports();
+  state.loading = false;
+
+  if (!result?.ok) {
+    listEl.innerHTML = `<div class="state-error">Error loading reports: ${esc(result?.error || "Unknown error")}</div>`;
+    return;
+  }
+
+  const prev = state.selected;
+  state.reports = result.reports || [];
+  applyFilters();
+
+  // Re-select the previously selected report if still in list
+  if (prev && !state.reports.find((r) => r.filepath === prev)) {
+    state.selected = null;
+    state.selectedJson = null;
+    showEmptyDetail();
+  }
+
+  updateStat();
+}
+
+function applyFilters() {
+  const search   = document.getElementById("search").value.toLowerCase();
+  const severity = document.getElementById("filter-severity").value;
+  const status   = document.getElementById("filter-status").value;
+  const source   = document.getElementById("filter-source").value;
+  const type     = document.getElementById("filter-type").value;
+
+  state.filtered = state.reports.filter((r) => {
+    if (severity !== "all" && r.severity !== severity) return false;
+    if (status !== "all"   && r.status   !== status)   return false;
+    if (source !== "all"   && r.app_source !== source)  return false;
+    if (type !== "all"     && r.type     !== type)     return false;
+    if (search) {
+      const haystack = `${r.subject} ${r.user_email || ""} ${r.screen || ""}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+
+  renderList();
+  updateStat();
+}
+
+function updateStat() {
+  const el = document.getElementById("stat-count");
+  const total = state.reports.length;
+  const open  = state.reports.filter((r) => r.status !== "resolved").length;
+  el.textContent = `${total} report${total !== 1 ? "s" : ""} · ${open} open`;
+}
+
+// ── List rendering ───────────────────────────────────────────────────────────
+
+function renderList() {
+  const listEl = document.getElementById("report-list");
+  if (state.filtered.length === 0) {
+    listEl.innerHTML = `<div class="state-empty">${state.reports.length === 0 ? "No reports yet." : "No reports match the current filters."}</div>`;
+    return;
+  }
+
+  listEl.innerHTML = state.filtered.map((r) => {
+    const sel = r.filepath === state.selected;
+    const res = r.status === "resolved";
+    const emailSentBadge = r.email_sent === true
+      ? `<span class="badge badge-email-ok">✓ emailed</span>`
+      : r.email_sent === false
+        ? `<span class="badge badge-email-fail">✗ no email</span>`
+        : "";
+
+    return `<div class="report-card${sel ? " selected" : ""}${res ? " resolved" : ""}" data-fp="${esc(r.filepath)}">
+      <div class="card-top">
+        <span class="badge ${severityClass(r.severity)}">${esc(r.severity?.toUpperCase() || "NORMAL")}</span>
+        <span class="badge badge-type">${esc(typeLabel(r.type))}</span>
+        <span class="badge ${sourceClass(r.app_source)}">${esc(r.app_source || "?")}</span>
+        <span class="badge ${statusClass(r.status)}">${esc(r.status || "open")}</span>
+        ${emailSentBadge}
+      </div>
+      <div class="card-subject">${esc(r.subject || "(no subject)")}</div>
+      <div class="card-meta">
+        <span class="card-email">${esc(r.user_email || "unknown user")}</span>
+        ${r.screen ? `<span class="card-dot">·</span><span>${esc(r.screen)}</span>` : ""}
+        <span class="card-dot">·</span>
+        <span title="${esc(r.received_at)}">${fmtRelative(r.received_at)}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  // Attach click events
+  listEl.querySelectorAll(".report-card").forEach((el) => {
+    el.addEventListener("click", () => selectReport(el.dataset.fp));
+  });
+}
+
+// ── Report detail ────────────────────────────────────────────────────────────
+
+async function selectReport(filepath) {
+  if (state.selected === filepath) return;
+  state.selected = filepath;
+  renderList(); // highlight selected
+
+  const detailEl = document.getElementById("detail-panel");
+  detailEl.innerHTML = `<div class="detail-empty"><div class="spinner"></div></div>`;
+
+  const result = await window.supportConsole.readReport(filepath);
+  if (!result?.ok) {
+    detailEl.innerHTML = `<div class="detail-scroll"><div class="state-error">Could not read report: ${esc(result?.error)}</div></div>`;
+    return;
+  }
+
+  try {
+    state.selectedJson = JSON.parse(result.json);
+  } catch (e) {
+    detailEl.innerHTML = `<div class="detail-scroll"><div class="state-error">Malformed JSON: ${esc(e.message)}</div></div>`;
+    return;
+  }
+
+  renderDetail(state.selectedJson, filepath, result.json);
+}
+
+function renderDetail(r, filepath, rawJson) {
+  const user    = r.user    || {};
+  const ctx     = r.context || {};
+  const diag    = r.diagnostics || {};
+  const dash    = r.dashboard || {};
+  const notif   = r.notification || {};
+
+  const emailStatus = notif.email_sent === true
+    ? `<span class="badge badge-email-ok">✓ email sent to ${esc(notif.notify_email || "?")}</span>`
+    : notif.email_attempted
+      ? `<span class="badge badge-email-fail">✗ email failed: ${esc(notif.email_error || "?")}</span>`
+      : notif.email_enabled === false
+        ? `<span class="badge badge-email-off">email not configured</span>`
+        : "";
+
+  const helperLogs  = diag.recentHelperLogs  || diag.helperLogs  || [];
+  const consolErrs  = diag.recentConsoleErrors || diag.consoleErrors || [];
+  const apiFaults   = diag.recentApiFailures  || diag.apiFailures  || [];
+  const promRejects = diag.recentPromiseRejections || [];
+
+  document.getElementById("detail-panel").innerHTML = `
+<div class="detail-scroll">
+
+  <!-- Header -->
+  <div class="detail-header">
+    <div class="detail-badges">
+      <span class="badge ${severityClass(r.severity)}">${esc(r.severity?.toUpperCase() || "NORMAL")}</span>
+      <span class="badge badge-type">${esc(typeLabel(r.type))}</span>
+      <span class="badge ${sourceClass(r.app_source)}">${esc(r.app_source || "?")}</span>
+      <span class="badge ${statusClass(dash.status)}" id="status-badge">${esc(dash.status || "open")}</span>
+      ${emailStatus}
+    </div>
+    <div class="detail-subject">${esc(r.subject || "(no subject)")}</div>
+    <div class="detail-meta">
+      <span>🕒 ${fmtDate(r.received_at)}</span>
+      <span>🆔 ${esc((r.report_id || "").slice(0, 8))}</span>
+      ${ctx.screen ? `<span>📍 ${esc(ctx.screen)}</span>` : ""}
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="action-bar">
+    ${dash.status !== "investigating" ? `<button class="action-btn warn" onclick="setStatus('${esc(filepath)}', 'investigating')">🔍 Investigating</button>` : ""}
+    ${dash.status !== "resolved" ? `<button class="action-btn success" onclick="setStatus('${esc(filepath)}', 'resolved')">✓ Resolve</button>` : ""}
+    ${dash.status === "resolved" ? `<button class="action-btn" onclick="setStatus('${esc(filepath)}', 'open')">↩ Reopen</button>` : ""}
+    <button class="action-btn primary" onclick="copyJson()">⎘ Copy JSON</button>
+    <button class="action-btn" onclick="openFile('${esc(filepath)}')">⊞ Open JSON File</button>
+    <button class="action-btn" onclick="window.supportConsole.openFolder()">📂 Open Folder</button>
+  </div>
+
+  <!-- Message -->
+  <div class="section">
+    <div class="section-title">Message</div>
+    <div class="content-block">${esc(r.message || "(none)")}</div>
+  </div>
+
+  ${r.steps_to_reproduce ? `
+  <div class="section">
+    <div class="section-title">Steps to Reproduce</div>
+    <div class="content-block">${esc(r.steps_to_reproduce)}</div>
+  </div>` : ""}
+
+  <!-- User & account -->
+  <div class="section">
+    <div class="section-title">User &amp; Account</div>
+    <table class="info-table">
+      ${row("Email",        user.email          || r.user_lookup_error ? `${esc(user.email || "—")}${r.user_lookup_error ? ` <span style="color:var(--yellow);font-size:11px"> ⚠ ${esc(r.user_lookup_error)}</span>` : ""}` : "—")}
+      ${row("Account ID",   esc(user.account_id     || "—"))}
+      ${row("Display name", esc(user.display_name   || "—"))}
+      ${row("Subscription", esc(user.subscription_state || "—"))}
+      ${row("Trial active", esc(user.trial_active != null ? String(user.trial_active) : "—"))}
+      ${row("Trial days",   esc(user.trial_days_remaining != null ? String(user.trial_days_remaining) : "—"))}
+      ${row("Entitlement",  esc(user.entitlement_state  || "—"))}
+    </table>
+  </div>
+
+  <!-- Environment -->
+  <div class="section">
+    <div class="section-title">Environment</div>
+    <table class="info-table">
+      ${row("App source",   esc(r.app_source || "—"))}
+      ${row("Route",        esc(ctx.route    || "—"))}
+      ${row("Screen",       esc(ctx.screen   || "—"))}
+      ${row("Environment",  esc(ctx.environment || "—"))}
+      ${row("App version",  esc(ctx.appVersion || ctx.buildVersion || "—"))}
+      ${ctx.platform ? row("Platform", esc(`${ctx.platform || ""} ${ctx.os || ""} ${ctx.arch || ""}`.trim())) : ""}
+      ${ctx.electron  ? row("Electron",  esc(ctx.electron))  : ""}
+      ${ctx.node      ? row("Node",      esc(ctx.node))      : ""}
+      ${ctx.chrome    ? row("Chrome",    esc(ctx.chrome))    : ""}
+      ${ctx.userAgent ? row("User agent", esc(ctx.userAgent)) : ""}
+      ${row("Timestamp", esc(ctx.timestamp || r.received_at || "—"))}
+    </table>
+  </div>
+
+  <!-- Diagnostics -->
+  <div class="section">
+    <div class="section-title">Diagnostics</div>
+
+    ${diag.helperStatus ? `
+    <table class="info-table" style="margin-bottom:10px">
+      ${row("Helper status",    diag.helperStatus    || "—")}
+      ${row("Helper last error",diag.helperLastError || "—")}
+    </table>` : ""}
+
+    ${helperLogs.length ? `
+    <details class="accordion">
+      <summary>Helper Logs <span class="accordion-count">${helperLogs.length}</span></summary>
+      <div class="accordion-body">
+        <ul class="log-list">${helperLogs.map((l) => `
+          <li class="log-item">
+            <span class="log-ts">${esc(fmtDate(l.timestamp))}</span>
+            <span class="log-level-${esc(l.level || "info")}">[${esc(l.level || "info").toUpperCase()}]</span>
+            ${esc(l.message || "")}
+          </li>`).join("")}
+        </ul>
+      </div>
+    </details>` : ""}
+
+    ${consolErrs.length ? `
+    <details class="accordion">
+      <summary>Console Errors <span class="accordion-count">${consolErrs.length}</span></summary>
+      <div class="accordion-body">
+        <ul class="log-list">${consolErrs.map((e) => `
+          <li class="log-item"><span class="log-ts">${esc(fmtDate(e.ts || e.timestamp))}</span><span class="log-level-error">[ERROR]</span> ${esc(e.msg || e.message || String(e))}</li>`).join("")}
+        </ul>
+      </div>
+    </details>` : ""}
+
+    ${apiFaults.length ? `
+    <details class="accordion">
+      <summary>API Failures <span class="accordion-count">${apiFaults.length}</span></summary>
+      <div class="accordion-body">
+        <ul class="log-list">${apiFaults.map((e) => `
+          <li class="log-item"><span class="log-ts">${esc(fmtDate(e.ts))}</span><span class="log-level-error">${esc(e.method || "?")} ${esc(e.url || "?")}</span> → ${esc(e.status || "")} ${esc(e.error || "")}</li>`).join("")}
+        </ul>
+      </div>
+    </details>` : ""}
+
+    ${promRejects.length ? `
+    <details class="accordion">
+      <summary>Promise Rejections <span class="accordion-count">${promRejects.length}</span></summary>
+      <div class="accordion-body">
+        <ul class="log-list">${promRejects.map((e) => `
+          <li class="log-item"><span class="log-ts">${esc(fmtDate(e.ts))}</span><span class="log-level-error">[REJECT]</span> ${esc(e.reason || e.message || String(e))}</li>`).join("")}
+        </ul>
+      </div>
+    </details>` : ""}
+
+    ${!helperLogs.length && !consolErrs.length && !apiFaults.length && !promRejects.length && !diag.helperStatus
+      ? `<div style="color:var(--text3);font-size:12px">No diagnostics captured.</div>` : ""}
+  </div>
+
+  <!-- Email notification -->
+  ${notif.email_enabled != null ? `
+  <div class="section">
+    <div class="section-title">Email Notification</div>
+    <table class="info-table">
+      ${row("Email enabled",   esc(String(notif.email_enabled)))}
+      ${row("Attempted",       esc(String(notif.email_attempted ?? "—")))}
+      ${row("Sent",            esc(String(notif.email_sent ?? "—")))}
+      ${notif.email_error ? row("Error", esc(notif.email_error)) : ""}
+      ${row("Notify address",  esc(notif.notify_email || "—"))}
+    </table>
+  </div>` : ""}
+
+  <!-- Raw JSON -->
+  <div class="section">
+    <details class="accordion">
+      <summary>Raw JSON</summary>
+      <pre class="json-pre accordion-body">${highlightJson(rawJson)}</pre>
+    </details>
+  </div>
+
+</div>`;
+}
+
+// Utility: table row helper
+function row(label, value) {
+  return `<tr><td>${esc(label)}</td><td>${value}</td></tr>`;
+}
+
+function showEmptyDetail() {
+  document.getElementById("detail-panel").innerHTML = `
+    <div class="detail-empty">
+      <div class="detail-empty-icon">📋</div>
+      <div>Select a report to view details</div>
+    </div>`;
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+
+async function setStatus(filepath, newStatus) {
+  const result = await window.supportConsole.updateStatus(filepath, newStatus);
+  if (!result?.ok) {
+    showToast(`Error: ${result?.error || "Update failed"}`);
+    return;
+  }
+  // Update in state and re-render
+  const report = state.reports.find((r) => r.filepath === filepath);
+  if (report) report.status = newStatus;
+  if (state.selectedJson) {
+    state.selectedJson.dashboard = result.dashboard;
+  }
+  // Re-read and re-render detail
+  const readResult = await window.supportConsole.readReport(filepath);
+  if (readResult?.ok) {
+    try {
+      state.selectedJson = JSON.parse(readResult.json);
+      renderDetail(state.selectedJson, filepath, readResult.json);
+    } catch (_) {}
+  }
+  applyFilters();
+  showToast(`Status set to ${newStatus}`);
+}
+
+async function openFile(filepath) {
+  await window.supportConsole.openFile(filepath);
+}
+
+async function copyJson() {
+  if (!state.selectedJson) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(state.selectedJson, null, 2));
+    showToast("JSON copied to clipboard");
+  } catch {
+    showToast("Copy failed");
+  }
+}
+
+// ── Auto-refresh ─────────────────────────────────────────────────────────────
+
+function startAutoRefresh() {
+  if (state.autoTimer) return;
+  state.autoRefresh = true;
+  document.getElementById("btn-auto").classList.add("active");
+  state.autoTimer = setInterval(() => loadReports({ silent: true }), 5000);
+}
+
+function stopAutoRefresh() {
+  state.autoRefresh = false;
+  document.getElementById("btn-auto").classList.remove("active");
+  clearInterval(state.autoTimer);
+  state.autoTimer = null;
+}
+
+// ── Wire UI events ────────────────────────────────────────────────────────────
+
+document.getElementById("btn-refresh").addEventListener("click", () => loadReports());
+
+document.getElementById("btn-auto").addEventListener("click", () => {
+  state.autoRefresh ? stopAutoRefresh() : startAutoRefresh();
+});
+
+document.getElementById("btn-folder").addEventListener("click", () => {
+  window.supportConsole.openFolder();
+});
+
+document.getElementById("search").addEventListener("input", applyFilters);
+document.getElementById("filter-severity").addEventListener("change", applyFilters);
+document.getElementById("filter-status").addEventListener("change", applyFilters);
+document.getElementById("filter-source").addEventListener("change", applyFilters);
+document.getElementById("filter-type").addEventListener("change", applyFilters);
+
+// Live watch — new reports push a refresh
+window.supportConsole.onNewReport(() => {
+  loadReports({ silent: true }).then(() => showToast("New report received"));
+});
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  // Ctrl/Cmd+R = refresh
+  if ((e.ctrlKey || e.metaKey) && e.key === "r") { e.preventDefault(); loadReports(); }
+  // Escape = clear selection
+  if (e.key === "Escape" && !document.activeElement.closest("input, select")) {
+    state.selected = null; state.selectedJson = null; showEmptyDetail(); renderList();
+  }
+});
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+
+(async () => {
+  await window.supportConsole.startWatch();
+  await loadReports();
+  startAutoRefresh(); // default on
+})();
+</script>
+</body>
+</html>

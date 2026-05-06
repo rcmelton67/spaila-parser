@@ -1,26 +1,8 @@
 import React from "react";
-
-const SUPPORT_EMAIL = "support@spaila.com";
+import SupportModal from "./SupportModal.jsx";
 
 export default function SupportPage() {
-  const [description, setDescription] = React.useState("");
-  const [type, setType] = React.useState("bug");
-
-  function openEmail(event) {
-    event.preventDefault();
-    const typeLabel = type === "feature" ? "Feature request" : type === "billing" ? "Billing help" : "Bug report";
-    const subject = encodeURIComponent(`Spaila Support - ${typeLabel}`);
-    const body = encodeURIComponent(
-      [
-        `Support type: ${typeLabel}`,
-        `Timestamp: ${new Date().toISOString()}`,
-        "",
-        "Description:",
-        description.trim() || "(no description provided)",
-      ].join("\n"),
-    );
-    window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, "_blank");
-  }
+  const [modal, setModal] = React.useState(null);
 
   return (
     <section className="orders-page">
@@ -28,40 +10,47 @@ export default function SupportPage() {
         <div>
           <span className="section-eyebrow">Support</span>
           <h2>Spaila Support</h2>
-          <p>Contact support, report issues, or request features. Opens your default email app.</p>
+          <p>Report a bug, request a feature, or contact Spaila directly — no email app required.</p>
         </div>
       </div>
 
       <div className="detail-grid">
         <section className="section-card">
-          <div className="section-eyebrow">Contact Support</div>
-          <form className="account-form" onSubmit={openEmail}>
-            <label>
-              <span>Support type</span>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="bug">Report a bug</option>
-                <option value="feature">Feature request</option>
-                <option value="billing">Billing help</option>
-              </select>
-            </label>
-            <label>
-              <span>Description</span>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Describe what happened, what you expected, and any steps to reproduce."
-                rows={6}
-                style={{ border: "1px solid #cbd5e1", borderRadius: 14, background: "#f8fafc", padding: "11px 12px", fontSize: 14, resize: "vertical", width: "100%", color: "#0f172a", fontFamily: "inherit" }}
-              />
-            </label>
-            <button className="ghost-button" type="submit">
-              Open email app
-            </button>
-          </form>
+          <div className="section-eyebrow">Contact Spaila</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+            <p style={{ margin: 0, fontSize: 13, color: "#475569", lineHeight: 1.65 }}>
+              Use the buttons below to reach the Spaila team. Reports are submitted directly — no email app is required.
+              Diagnostic information (app version, current page, recent errors) can be attached automatically to help us troubleshoot faster.
+              Sensitive keys and tokens are always removed before sending.
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => setModal({ type: "bug_report" })}
+              >
+                Report a Bug
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setModal({ type: "support_request" })}
+              >
+                Contact Support
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setModal({ type: "feature_request" })}
+              >
+                Request a Feature
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="section-card">
-          <div className="section-eyebrow">Safety Boundary</div>
+          <div className="section-eyebrow">Support Scope</div>
           <div className="feature-list">
             <div>
               <strong>Web support covers</strong>
@@ -69,21 +58,19 @@ export default function SupportPage() {
             </div>
             <div>
               <strong>Desktop-side only</strong>
-              <span>Parser, inbox ingestion, helper, backup, restore, and local filesystem troubleshooting.</span>
-            </div>
-            <div>
-              <strong>Direct contact</strong>
-              <span>
-                Email{" "}
-                <a href={`mailto:${SUPPORT_EMAIL}`} style={{ color: "#2563eb", fontWeight: 800 }}>
-                  {SUPPORT_EMAIL}
-                </a>{" "}
-                at any time.
-              </span>
+              <span>Order processor, inbox ingestion, helper, backup, restore, and local filesystem troubleshooting.</span>
             </div>
           </div>
         </section>
       </div>
+
+      {modal && (
+        <SupportModal
+          key={modal.type}
+          initialType={modal.type}
+          onClose={() => setModal(null)}
+        />
+      )}
     </section>
   );
 }

@@ -12,6 +12,8 @@ export default function PasswordResetPage({ onBack }) {
   const [email, setEmail] = React.useState(() => hashParam("email"));
   const [token, setToken] = React.useState(() => hashParam("token"));
   const [password, setPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const [state, setState] = React.useState({ loading: false, error: "", message: "" });
 
   async function requestReset(event) {
@@ -34,11 +36,16 @@ export default function PasswordResetPage({ onBack }) {
 
   async function confirmReset(event) {
     event.preventDefault();
+    if (password !== confirmPassword) {
+      setState({ loading: false, error: "Passwords do not match.", message: "" });
+      return;
+    }
     setState({ loading: true, error: "", message: "" });
     try {
-      await api.post(API_ENDPOINTS.passwordResetConfirm, { token, password });
+      await api.post(API_ENDPOINTS.passwordResetConfirm, { token, password, confirm_password: confirmPassword });
       setPassword("");
-      setState({ loading: false, error: "", message: "Password reset. You can now login with the new password." });
+      setConfirmPassword("");
+      setState({ loading: false, error: "", message: "Password reset complete. You can now login with the new password." });
     } catch (error) {
       setState({ loading: false, error: error?.message || "Could not reset password.", message: "" });
     }
@@ -69,8 +76,15 @@ export default function PasswordResetPage({ onBack }) {
           </label>
           <label>
             <span>New password</span>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" />
+            <input type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" />
           </label>
+          <label>
+            <span>Confirm new password</span>
+            <input type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Re-enter new password" />
+          </label>
+          <button type="button" className="account-link-button" onClick={() => setShowPassword((value) => !value)}>
+            {showPassword ? "Hide password" : "Show password"}
+          </button>
           {state.error ? <div className="error-banner">{state.error}</div> : null}
           {state.message ? <div className="success-banner">{state.message}</div> : null}
           <div className="account-action-row">

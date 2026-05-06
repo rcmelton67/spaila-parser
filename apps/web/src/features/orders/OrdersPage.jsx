@@ -5,6 +5,7 @@ import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig
 import { normalizeDocumentsConfig } from "../../../../../shared/models/documentsConfig.mjs";
 import { api, ordersApi, settingsApi } from "../../api.js";
 import OrdersTable from "./OrdersTable.jsx";
+import NewOrderModal from "./NewOrderModal.jsx";
 import { DATE_FIELD_KEYS, formatDate } from "../../shared/dateConfig.js";
 import { normalizedSearchMatches } from "../../../../../shared/search/dateSearch.mjs";
 
@@ -333,9 +334,8 @@ async function loadRowsForTab(tab) {
   orderRowsInflight.set(cacheKey, fetchPromise);
   try {
     const result = attachOrderItemCounts(await fetchPromise);
-    const nextRows = tab === "inventory" ? result.filter(isInventoryNeededRow) : result;
-    orderRowsCache.set(cacheKey, { rows: nextRows, updatedAt: Date.now() });
-    return nextRows;
+    orderRowsCache.set(cacheKey, { rows: result, updatedAt: Date.now() });
+    return result;
   } finally {
     orderRowsInflight.delete(cacheKey);
   }
@@ -384,6 +384,38 @@ function matchPriceRule(priceStr, pricingRules) {
     const rulePrice = parseFloat(String(rule.price).replace(/[^0-9.]/g, ""));
     return Number.isFinite(rulePrice) && Math.abs(rulePrice - price) < 0.001;
   }) || null;
+}
+
+function getInventoryQuantity(row) {
+  const parsed = parseFloat(String(row?.quantity ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function computeInventoryNeeded(activeRows, pricingRules) {
+  const byKey = new Map();
+  for (const rule of pricingRules || []) {
+    const key = String(rule?.id || rule?.price || rule?.typeValue || "").trim();
+    if (!key) continue;
+    byKey.set(key, {
+      key,
+      price: String(rule?.price || "").trim(),
+      typeValue: String(rule?.typeValue || "").trim() || String(rule?.price || "").trim() || "Untitled type",
+      color: rule?.color || "#e5e7eb",
+      quantity: 0,
+      orderCount: 0,
+    });
+  }
+  for (const row of activeRows || []) {
+    if (row.status === "archived" || isCompletedRow(row)) continue;
+    const rule = matchPriceRule(row.price, pricingRules);
+    if (!rule) continue;
+    const key = String(rule?.id || rule?.price || rule?.typeValue || "").trim();
+    if (!key || !byKey.has(key)) continue;
+    const entry = byKey.get(key);
+    entry.quantity += getInventoryQuantity(row);
+    entry.orderCount += 1;
+  }
+  return [...byKey.values()].filter((entry) => entry.quantity > 0);
 }
 
 function findStatusState(statusConfig, value) {
@@ -512,6 +544,12 @@ export default function OrdersPage({
   const [state, setState] = React.useState({ loading: true, error: "" });
   const [savingStatusIds, setSavingStatusIds] = React.useState(() => new Set());
   const [searchExcludedColumns, setSearchExcludedColumns] = React.useState(() => new Set());
+  const [newOrderOpen, setNewOrderOpen] = React.useState(false);
+
+  const inventoryNeeded = React.useMemo(
+    () => computeInventoryNeeded(rows, pricingRules),
+    [rows, pricingRules],
+  );
   const loadSeqRef = React.useRef(0);
   const retryTimerRef = React.useRef(null);
 
@@ -685,27 +723,34 @@ export default function OrdersPage({
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const [activeRows, completedRows, inventoryRows] = await Promise.all([
+        const tabs = ["active", "completed"];
+        const results = await Promise.allSettled([
           loadRowsForTab("active"),
           loadRowsForTab("completed"),
-          loadRowsForTab("inventory"),
         ]);
         if (cancelled) return;
         const countMatches = (items) => items.filter((row) => matchesSearch(row, query, searchSortConfig, dateConfig, pricingRules, searchExcludedColumns)).length;
-        onSearchCountsChange?.({
-          active: countMatches(activeRows),
-          completed: countMatches(completedRows),
-          inventory: countMatches(inventoryRows),
+        const nextCounts = {};
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            nextCounts[tabs[index]] = countMatches(result.value);
+          }
         });
+        if (currentTab === "active" || currentTab === "completed") {
+          nextCounts[currentTab] = visibleRows.length;
+        }
+        onSearchCountsChange?.(nextCounts);
       } catch {
-        if (!cancelled) onSearchCountsChange?.({});
+        if (!cancelled && (currentTab === "active" || currentTab === "completed")) {
+          onSearchCountsChange?.({ [currentTab]: visibleRows.length });
+        }
       }
     }, 220);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dateConfig, onSearchCountsChange, pricingRules, search, searchExcludedColumns, searchSortConfig]);
+  }, [currentTab, dateConfig, onSearchCountsChange, pricingRules, search, searchExcludedColumns, searchSortConfig, visibleRows.length]);
 
   async function updateItemWorkflowStatus(row, nextStatus) {
     const itemId = String(row?.id || "").trim();
@@ -967,14 +1012,55 @@ export default function OrdersPage({
     return () => onRegisterPrint(null);
   }, [onRegisterPrint, printCurrentSheet]);
 
+  if (currentTab === "inventory") {
+    return (
+      <section className="orders-page">
+        {state.error ? (
+          <div className="error-banner web-recovery-banner">
+            <span>{state.error}</span>
+            <button type="button" className="ghost-button" onClick={() => loadOrders({ force: true })}>
+              Retry orders
+            </button>
+          </div>
+        ) : null}
+        <div className="inventory-view">
+          <div className="inventory-notice">
+            Inventory Needed summarizes active orders only. Completed and archived orders are excluded.
+          </div>
+          {state.loading && rows.length === 0 ? (
+            <div className="inventory-loading">Loading orders…</div>
+          ) : inventoryNeeded.length ? (
+            <div className="inventory-grid">
+              {inventoryNeeded.map((entry) => {
+                const fg = contrastColor(entry.color);
+                return (
+                  <div key={entry.key} className="inventory-card">
+                    <div className="inventory-card-label" style={{ background: entry.color, color: fg }}>
+                      <span className="inventory-card-type">{entry.typeValue}</span>
+                      <span className="inventory-card-meta">
+                        Price {entry.price || "—"} · {entry.orderCount} active order{entry.orderCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="inventory-card-qty">
+                      <div className="inventory-card-qty-label">Quantity</div>
+                      <div className="inventory-card-qty-value">{entry.quantity}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="inventory-empty">
+              No active orders match your pricing types right now.
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="orders-page">
-      {currentTab === "inventory" ? (
-        <div className="info-banner">
-          Inventory Needed summarizes active orders only. Completed and archived orders are excluded.
-        </div>
-      ) : null}
-
       {search.trim() ? (
         <div className="orders-search-banner">
           <span>
@@ -1014,7 +1100,19 @@ export default function OrdersPage({
         searchableColumnKeys={searchableColumnKeys}
         excludedSearchColumns={searchExcludedColumns}
         onExcludeSearchColumn={excludeSearchColumn}
+        onNewOrder={() => setNewOrderOpen(true)}
       />
+      {newOrderOpen ? (
+        <NewOrderModal
+          activeTab={currentTab}
+          layout={layout}
+          onClose={() => setNewOrderOpen(false)}
+          onSaved={() => {
+            setNewOrderOpen(false);
+            loadOrders({ force: true });
+          }}
+        />
+      ) : null}
     </section>
   );
 }

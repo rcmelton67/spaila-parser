@@ -90,7 +90,7 @@ def _helper_settings_path():
     configured = os.environ.get("SPALIA_HELPER_SETTINGS_PATH") or os.environ.get("SPAILA_HELPER_SETTINGS_PATH")
     if configured:
         return configured
-    return str(Path(BASE_PATH) / "helper_settings.json")
+    return str(_WORKSPACE_DIRS["HelperSettings"])
 
 
 def load_helper_settings():
@@ -351,7 +351,7 @@ def create_order_folder(row):
         dt = datetime.now()
 
     year = dt.strftime("%Y")
-    month = dt.strftime("%B").lower()
+    month = dt.strftime("%B")
 
     base = ORDERS_PATH_STR
     path = os.path.normpath(os.path.join(base, year, month, folder_name))

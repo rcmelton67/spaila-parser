@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, safeStorage, shell } = require("electron");
 const fs = require("fs");
 const fsp = fs.promises;
 const os = require("os");
@@ -8,7 +8,7 @@ const { spawn } = require("child_process");
 const nodemailer = require("nodemailer");
 const { ImapFlow } = require("imapflow");
 const { pathToFileURL } = require("url");
-const { ensureWorkspaceLayout } = require("./workspacePaths");
+const { ensureWorkspaceLayout, getConfigPath, readConfig, writeConfig, moveWorkspace } = require("./workspacePaths");
 const {
   buildEmailPreview,
   cleanPreviewText,
@@ -19,7 +19,7 @@ const {
 const ROOT = path.join(__dirname, "..", "..");
 const APP_ICON = path.join(ROOT, "spaila-logo.blue.ico");
 const DEFAULT_APP_NAME = "Parser Viewer";
-const DOCS_FOLDER = "C:\\Spaila\\Docs";
+// DOCS_FOLDER is now derived from the workspace: getWorkspaceDirs().Docs
 const DEFAULT_HELPER_SETTINGS = {
   runInBackground: true,
   runOnStartup: true,
@@ -34,6 +34,84 @@ let helperRestarting = false;
 let helperStopRequested = false;
 let helperStatus = "stopped";
 let helperLastActivityAt = "";
+
+function getAuthSessionPath() {
+  return path.join(app.getPath("userData"), "account-session.bin");
+}
+
+function readStoredAuthSession() {
+  try {
+    const sessionPath = getAuthSessionPath();
+    if (!fs.existsSync(sessionPath)) return { ok: true, session_token: "" };
+    if (!safeStorage?.isEncryptionAvailable?.()) {
+      return { ok: false, session_token: "", error: "Secure session storage is not available on this computer." };
+    }
+    const encrypted = fs.readFileSync(sessionPath);
+    const decrypted = safeStorage.decryptString(encrypted);
+    const parsed = JSON.parse(decrypted || "{}");
+    return { ok: true, session_token: String(parsed.session_token || "") };
+  } catch (error) {
+    return { ok: false, session_token: "", error: error?.message || "Could not read stored account session." };
+  }
+}
+
+function writeStoredAuthSession(sessionToken) {
+  try {
+    const token = String(sessionToken || "").trim();
+    if (!token) {
+      clearStoredAuthSession();
+      return { ok: true };
+    }
+    if (!safeStorage?.isEncryptionAvailable?.()) {
+      return { ok: false, error: "Secure session storage is not available on this computer." };
+    }
+    const sessionPath = getAuthSessionPath();
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    const payload = JSON.stringify({
+      session_token: token,
+      updated_at: new Date().toISOString(),
+    });
+    fs.writeFileSync(sessionPath, safeStorage.encryptString(payload));
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not save account session." };
+  }
+}
+
+function clearStoredAuthSession() {
+  try {
+    const sessionPath = getAuthSessionPath();
+    if (fs.existsSync(sessionPath)) fs.unlinkSync(sessionPath);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not clear stored account session." };
+  }
+}
+
+async function requireAccountFeature(feature) {
+  const session = readStoredAuthSession();
+  const token = String(session?.session_token || "").trim();
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  let entitlements = null;
+  try {
+    const response = await fetch("http://127.0.0.1:8055/account/session", { headers });
+    const payload = await response.json().catch(() => null);
+    entitlements = payload?.entitlements || null;
+  } catch (_) {
+    return;
+  }
+  if (!entitlements?.locked_features?.includes(feature)) return;
+  const messages = {
+    parser: "Trial expired - upgrade required to use the order processor.",
+    imports: "Subscription required - importing orders is disabled until billing is active.",
+    inbox: "Inbox processing disabled - upgrade or fix billing to continue.",
+    helper: "Helper sync disabled - upgrade or fix billing to continue.",
+    manual_order_creation: "Subscription required - new manual order creation is locked.",
+    email_sending: "Subscription required - sending messages is disabled until billing is active.",
+  };
+  throw new Error(messages[feature] || "Subscription required - upgrade to continue using this feature.");
+}
+
 let helperLastError = "";
 const helperLogs = [];
 let cachedWorkspaceDirs = null;
@@ -138,7 +216,7 @@ function safeStat(targetPath) {
 }
 
 function getHelperSettingsPath() {
-  return path.join(getWorkspaceDirs().root, "helper_settings.json");
+  return getWorkspaceDirs().HelperSettings;
 }
 
 function loadHelperSettings() {
@@ -174,7 +252,7 @@ function normalizeHelperSettings(settings = {}) {
 
 function saveHelperSettings(settings = {}) {
   const next = normalizeHelperSettings(settings);
-  fs.mkdirSync(getWorkspaceDirs().root, { recursive: true });
+  fs.mkdirSync(getWorkspaceDirs().Internal, { recursive: true });
   fs.writeFileSync(getHelperSettingsPath(), JSON.stringify(next, null, 2), "utf8");
   return next;
 }
@@ -584,20 +662,19 @@ async function appendMimeToSentFolder(imapConfig, rawMessage, sentAt) {
 }
 
 function getSentEmailFolder(orderFolderPath = "") {
-  const { root } = getWorkspaceDirs();
   const now = new Date();
   const year = String(now.getFullYear());
   const month = now.toLocaleString("en-US", { month: "long" }).toLowerCase();
   const orderFolderName = sanitizeFilenamePart(path.basename(String(orderFolderPath || "").trim()) || "email");
-  return path.join(root, "sent", year, month, orderFolderName);
+  return path.join(getManagedSentRoot(), year, month, orderFolderName);
 }
 
 function getSentMessagesIndexPath() {
-  return path.join(getWorkspaceDirs().root, "sent_messages.json");
+  return getWorkspaceDirs().SentMessages;
 }
 
 function getManagedSentRoot() {
-  return path.join(getWorkspaceDirs().root, "sent");
+  return getWorkspaceDirs().Sent;
 }
 
 function getSentMailRetentionDays() {
@@ -878,7 +955,7 @@ function parseEmailHeaders(headers) {
 }
 
 function getHiddenEmailsPath() {
-  return path.join(getWorkspaceDirs().root, "hidden_emails.json");
+  return getWorkspaceDirs().HiddenEmails;
 }
 
 function loadHiddenEmailIds() {
@@ -905,7 +982,7 @@ function saveHiddenEmailIds(hiddenIds) {
 }
 
 function getWorkspaceInboxHiddenPath() {
-  return path.join(getWorkspaceDirs().root, "workspace_inbox_hidden.json");
+  return getWorkspaceDirs().WorkspaceInboxHidden;
 }
 
 function getInboxSourceStatePath() {
@@ -917,7 +994,7 @@ function getDedupStorePath() {
 }
 
 function getProcessedInboxRefsPath() {
-  return path.join(getWorkspaceDirs().root, ".processedInboxRefs.json");
+  return getWorkspaceDirs().ProcessedInboxRefs;
 }
 
 function getManualImportedInboxRefsPath() {
@@ -1077,7 +1154,7 @@ const ORDER_TOKEN_STOPWORDS = new Set([
 ]);
 
 function getOrderLearningPath() {
-  return path.join(getWorkspaceDirs().root, "order_email_learning.json");
+  return getWorkspaceDirs().OrderEmailLearning;
 }
 
 function createEmptyOrderLearning() {
@@ -1234,7 +1311,7 @@ function setInboxItemLinkedOrderId(item, orderId) {
 
 function loadWorkspaceEmailSettings() {
   try {
-    const settingsPath = path.join(getWorkspaceDirs().root, "email_settings.json");
+    const settingsPath = getWorkspaceDirs().EmailSettings;
     if (!fs.existsSync(settingsPath)) {
       return {};
     }
@@ -2067,6 +2144,94 @@ function createWindow() {
   }
 }
 
+// ── Support Console window ───────────────────────────────────────────────────
+
+let supportConsoleWin = null;
+
+function createSupportConsole() {
+  if (supportConsoleWin && !supportConsoleWin.isDestroyed()) {
+    supportConsoleWin.focus();
+    return;
+  }
+  supportConsoleWin = new BrowserWindow({
+    width: 1400,
+    height: 860,
+    minWidth: 900,
+    minHeight: 600,
+    title: "Spaila Support Console",
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    backgroundColor: "#0d1117",
+    webPreferences: {
+      preload: path.join(__dirname, "support-console-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  supportConsoleWin.removeMenu();
+  supportConsoleWin.loadFile(path.join(__dirname, "support-console.html"));
+  supportConsoleWin.on("closed", () => { supportConsoleWin = null; });
+
+  if (process.env.SPAILA_CONSOLE_DEVTOOLS === "1") {
+    supportConsoleWin.webContents.openDevTools({ mode: "detach" });
+  }
+}
+
+// Push new-report event to the console when it's open (used by fs.watch callback)
+function notifyConsoleNewReport(filepath) {
+  if (supportConsoleWin && !supportConsoleWin.isDestroyed()) {
+    supportConsoleWin.webContents.send("support:new-report", filepath);
+  }
+}
+
+// ── Support console IPC ───────────────────────────────────────────────────────
+
+ipcMain.handle("support:update-status", async (_event, filePath, newStatus) => {
+  const VALID = ["open", "investigating", "resolved"];
+  if (!VALID.includes(newStatus)) return { ok: false, error: `Invalid status: ${newStatus}` };
+  if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const data = JSON.parse(raw);
+    if (!data.dashboard) data.dashboard = {};
+    data.dashboard.status = newStatus;
+    data.dashboard.resolved_at = newStatus === "resolved" ? (data.dashboard.resolved_at || new Date().toISOString()) : null;
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    return { ok: true, dashboard: data.dashboard };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not update status." };
+  }
+});
+
+ipcMain.handle("support:open-file", async (_event, filePath) => {
+  try {
+    if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
+    await shell.openPath(filePath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not open file." };
+  }
+});
+
+ipcMain.handle("support:watch-start", async (_event) => {
+  const reportsBase = getWorkspaceDirs().SupportReports;
+  try {
+    fs.mkdirSync(reportsBase, { recursive: true });
+    // Watch the whole reports tree — debounced to avoid duplicate events
+    let debounce = null;
+    fs.watch(reportsBase, { recursive: true }, (_eventType, filename) => {
+      if (!filename || !filename.endsWith(".json")) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        notifyConsoleNewReport(filename);
+      }, 400);
+    });
+    return { ok: true, folder: reportsBase };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not start watcher." };
+  }
+});
+
 function runBridge(argsObj) {
   return new Promise((resolve, reject) => {
     const child = spawn("py", ["-3", "-m", "parser.ui_bridge", JSON.stringify(argsObj)], {
@@ -2246,6 +2411,7 @@ async function resolveParserPath(payload) {
 }
 
 ipcMain.handle("parser:parse-file", async (_event, { filePath, businessTimezone }) => {
+  await requireAccountFeature("parser");
   if (!filePath) throw new Error("No file path provided.");
   const resolvedPath = await resolveParserPath({ filePath });
   const parsed = await runBridge({ action: "parse", path: resolvedPath, businessTimezone: String(businessTimezone || "").trim() });
@@ -2368,6 +2534,7 @@ ipcMain.handle("app:set-title", (_event, title) => {
 ipcMain.handle("helper:get-state", async () => getHelperState());
 
 ipcMain.handle("helper:save-settings", async (_event, payload = {}) => {
+  await requireAccountFeature("helper");
   const previous = loadHelperSettings();
   const next = saveHelperSettings(payload.settings || payload);
   appendHelperLog("info", "Helper settings saved.");
@@ -2382,6 +2549,7 @@ ipcMain.handle("helper:save-settings", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("helper:restart", async () => {
+  await requireAccountFeature("helper");
   appendHelperLog("info", "Helper restart requested.");
   helperStatus = "restarting";
   killHelper({ intentional: true });
@@ -2446,6 +2614,162 @@ ipcMain.handle("support:get-app-info", async () => {
   return { ok: true, appInfo: getSupportAppInfo() };
 });
 
+ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
+  try {
+    const appInfo = getSupportAppInfo();
+
+    // Fetch account identity from /account/profile (best-effort — never blocks submission)
+    let accountUser = null;
+    let userLookupError = null;
+    try {
+      const sessionResult = readStoredAuthSession();
+      const sessionToken = sessionResult?.session_token || "";
+      if (!sessionToken) {
+        userLookupError = "No active session token stored.";
+      } else {
+        const acctRes = await fetch("http://127.0.0.1:8055/account/profile", {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+        if (acctRes.ok) {
+          const acctData = await acctRes.json().catch(() => null);
+          if (acctData) {
+            // Profile fields: account_id, account_email, shop_name, subscription_state, etc.
+            const subView = acctData.entitlements || {};
+            accountUser = {
+              account_id: acctData.account_id || null,
+              email: acctData.account_email || acctData.email || null,
+              display_name: acctData.shop_name || acctData.owner_name || null,
+              subscription_state: subView.subscription_state || acctData.subscription_state || null,
+              trial_active: subView.trial_active ?? (acctData.subscription_state === "trial" ? true : null),
+              trial_days_remaining: subView.trial_days_remaining ?? null,
+              entitlement_state: subView.account_status || acctData.entitlement_state || null,
+            };
+          } else {
+            userLookupError = "Profile endpoint returned empty data.";
+          }
+        } else {
+          userLookupError = `Profile fetch failed: ${acctRes.status}`;
+        }
+      }
+    } catch (acctErr) {
+      userLookupError = String(acctErr?.message || "Account fetch error");
+    }
+
+    const diagnostics = payload.includeDiagnostics ? {
+      appInfo,
+      helperStatus,
+      helperLastError: helperLastError || null,
+      recentHelperLogs: [...helperLogs].slice(-40),
+      ...(payload.diagnostics || {}),
+    } : {};
+
+    const body = {
+      type: String(payload.type || "bug_report"),
+      severity: String(payload.severity || "normal"),
+      subject: String(payload.subject || "").slice(0, 500),
+      message: String(payload.message || "").slice(0, 10000),
+      steps_to_reproduce: String(payload.steps_to_reproduce || "").slice(0, 5000),
+      app_source: "desktop",
+      user: accountUser,
+      user_lookup_error: userLookupError || undefined,
+      context: {
+        route: String(payload.route || ""),
+        screen: String(payload.screen || ""),
+        appVersion: appInfo.version,
+        platform: appInfo.platform,
+        os: appInfo.release,
+        arch: appInfo.arch,
+        electron: appInfo.electron,
+        chrome: appInfo.chrome,
+        node: appInfo.node,
+        timestamp: new Date().toISOString(),
+        environment: "desktop",
+        ...(payload.context || {}),
+      },
+      diagnostics,
+    };
+    // POST to local backend
+    const res = await fetch("http://127.0.0.1:8055/support/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data?.status === "received") {
+      return { ok: true, reportId: data.report_id, notification: data.notification || null };
+    }
+    return { ok: false, error: data?.error || `Server responded ${res.status}` };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not submit support report." };
+  }
+});
+
+ipcMain.handle("support:list-reports", async () => {
+  try {
+    const reportsBase = getWorkspaceDirs().SupportReports;
+    if (!fs.existsSync(reportsBase)) {
+      return { ok: true, reports: [], folder: reportsBase };
+    }
+    const reports = [];
+    // Walk YYYY/MM/ subfolders + flat root
+    function readDir(dir) {
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            readDir(full);
+          } else if (entry.name.endsWith(".json")) {
+            try {
+              const raw = fs.readFileSync(full, "utf8");
+              const parsed = JSON.parse(raw);
+              reports.push({
+                filename: entry.name,
+                filepath: full,
+                report_id: parsed.report_id || "",
+                received_at: parsed.received_at || "",
+                type: parsed.type || "",
+                severity: parsed.severity || "",
+                subject: parsed.subject || "",
+                app_source: parsed.app_source || "",
+                user_email: parsed.user?.email || null,
+                screen: parsed.context?.screen || parsed.context?.route || "",
+                status: parsed.dashboard?.status || "open",
+                email_sent: parsed.notification?.email_sent ?? null,
+              });
+            } catch (_) { /* skip malformed */ }
+          }
+        }
+      } catch (_) { /* skip unreadable dir */ }
+    }
+    readDir(reportsBase);
+    reports.sort((a, b) => (b.received_at > a.received_at ? 1 : -1));
+    return { ok: true, reports, folder: reportsBase };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not list reports.", reports: [] };
+  }
+});
+
+ipcMain.handle("support:open-reports-folder", async () => {
+  try {
+    const reportsBase = getWorkspaceDirs().SupportReports;
+    fs.mkdirSync(reportsBase, { recursive: true });
+    await shell.openPath(reportsBase);
+    return { ok: true, folder: reportsBase };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not open reports folder." };
+  }
+});
+
+ipcMain.handle("support:read-report", async (_event, filePath) => {
+  try {
+    if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
+    const raw = fs.readFileSync(filePath, "utf8");
+    return { ok: true, json: raw };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Could not read report." };
+  }
+});
+
 ipcMain.handle("support:create-diagnostics", async (_event, payload = {}) => {
   try {
     const supportFolder = path.join(app.getPath("userData"), "support");
@@ -2487,6 +2811,12 @@ ipcMain.handle("open-external", async (_event, url) => {
   await shell.openExternal(targetUrl);
   return { ok: true };
 });
+
+ipcMain.handle("account-auth:get-token", async () => readStoredAuthSession());
+
+ipcMain.handle("account-auth:set-token", async (_event, sessionToken) => writeStoredAuthSession(sessionToken));
+
+ipcMain.handle("account-auth:clear-token", async () => clearStoredAuthSession());
 
 ipcMain.handle("orders:open-print-preview", async (event, payload = {}) => {
   const html = String(payload.html || "");
@@ -4006,16 +4336,17 @@ ipcMain.handle("documents:copy-to-docs", async (_event, payload = {}) => {
       return { ok: false, error: `Only ${allowedExtensions.map((ext) => `.${ext}`).join(", ")} files are supported.` };
     }
 
-    fs.mkdirSync(DOCS_FOLDER, { recursive: true });
+    const docsFolder = getWorkspaceDirs().Docs;
+    fs.mkdirSync(docsFolder, { recursive: true });
     const filename = sanitizeFilenamePart(path.basename(sourcePath), `document.${allowedExtensions[0] || "pdf"}`);
-    const preferredTarget = path.join(DOCS_FOLDER, filename);
+    const preferredTarget = path.join(docsFolder, filename);
     const sameFile = path.resolve(sourcePath).toLowerCase() === path.resolve(preferredTarget).toLowerCase();
     const targetPath = sameFile ? preferredTarget : makeUniqueFilePath(preferredTarget);
     if (!sameFile) {
       fs.copyFileSync(sourcePath, targetPath);
     }
 
-    return { ok: true, path: targetPath, name: path.basename(targetPath), folderPath: DOCS_FOLDER };
+    return { ok: true, path: targetPath, name: path.basename(targetPath), folderPath: docsFolder };
   } catch (err) {
     return { ok: false, error: err.message || "Could not copy document." };
   }
@@ -4111,12 +4442,123 @@ ipcMain.handle("documents:update-config", async (_event, config = {}) => {
   }
 });
 
+// Known system JSON files that must always land in .spaila_internal/
+// regardless of the folderPath the frontend passes (legacy C:\Spaila paths).
+const INTERNAL_JSON_FILES = new Set([
+  "order_archive_settings.json",
+  "email_settings.json",
+  "helper_settings.json",
+  "hidden_emails.json",
+  "workspace_inbox_hidden.json",
+  ".processedInboxRefs.json",
+  "order_email_learning.json",
+  "sent_messages.json",
+]);
+
 ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) => {
   try {
-    fs.mkdirSync(folderPath, { recursive: true });
-    const dest = path.join(folderPath, filename);
+    let targetFolder = folderPath;
+    if (INTERNAL_JSON_FILES.has(filename)) {
+      // Always write system files to .spaila_internal/ regardless of supplied path
+      targetFolder = getWorkspaceDirs().Internal;
+    }
+    fs.mkdirSync(targetFolder, { recursive: true });
+    const dest = path.join(targetFolder, filename);
     fs.writeFileSync(dest, typeof data === "string" ? data : JSON.stringify(data, null, 2), "utf8");
     return { ok: true, path: dest };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle("workspace:get-paths", async () => {
+  try {
+    const dirs = getWorkspaceDirs();
+    return {
+      ok: true,
+      root:           dirs.root,
+      Inbox:          dirs.Inbox,
+      Orders:         dirs.Orders,
+      Archive:        dirs.Archive,
+      Backup:         dirs.Backup,
+      Sent:           dirs.Sent,
+      Docs:           dirs.Docs,
+      Internal:       dirs.Internal,
+      SupportReports: dirs.SupportReports,
+      // Home directory so the UI can propose ~/Spaila as the default workspace
+      homePath: os.homedir(),
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle("workspace:set-root", async (_event, newRoot) => {
+  try {
+    const newRootStr = String(newRoot || "").trim();
+    if (!newRootStr || !path.isAbsolute(newRootStr)) {
+      return { ok: false, error: "Please provide an absolute folder path." };
+    }
+
+    const oldRoot = getWorkspaceDirs().root;
+    const isSameRoot = path.resolve(oldRoot) === path.resolve(newRootStr);
+
+    if (!isSameRoot) {
+      // 1. Move all workspace folders from old location to new location
+      console.log(`[workspace:set-root] moving workspace ${oldRoot} -> ${newRootStr}`);
+      const { ok, errors } = moveWorkspace(oldRoot, newRootStr, console.log);
+      if (!ok) {
+        return {
+          ok: false,
+          error: `${errors} folder(s) could not be moved. Check that the destination is accessible and no files are in use. Original data is still at ${oldRoot}.`,
+        };
+      }
+
+      // 2. Rewrite all absolute paths stored in the database
+      try {
+        const rewriteRes = await fetch("http://127.0.0.1:8055/workspace/rewrite-paths", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_root: oldRoot, new_root: newRootStr }),
+        });
+        const rewriteData = await rewriteRes.json().catch(() => ({}));
+        console.log(`[workspace:set-root] path rewrite: ${rewriteData.updated_paths ?? 0} DB paths updated`);
+        if (rewriteData.errors?.length) {
+          console.warn("[workspace:set-root] path rewrite errors:", rewriteData.errors);
+        }
+      } catch (rewriteErr) {
+        // Non-fatal — files are already moved; user can restart and DB paths will be fixed on next open
+        console.warn("[workspace:set-root] DB path rewrite failed (non-fatal):", rewriteErr.message);
+      }
+    }
+
+    // 3. Write config and invalidate cache
+    writeConfig(newRootStr, "1");
+    cachedWorkspaceDirs = null;
+
+    // 4. Create any missing folders in the new location
+    try { ensureWorkspaceLayout(console.log); } catch (_) {}
+
+    // 5. Hot-reload workspace paths in the Python backend so it immediately
+    //    reads from the new location without requiring a full app restart.
+    try {
+      const reloadRes = await fetch("http://127.0.0.1:8055/workspace/reload", { method: "POST" });
+      const reloadData = await reloadRes.json().catch(() => ({}));
+      console.log(`[workspace:set-root] backend reload: root=${reloadData.root ?? "?"}`);
+    } catch (reloadErr) {
+      console.warn("[workspace:set-root] backend reload failed (non-fatal):", reloadErr.message);
+    }
+
+    // 6. Restart the background helper so it watches the NEW inbox folder.
+    //    The helper is a separate Python process with its own cached paths —
+    //    a restart is the cleanest way to pick up the new workspace root.
+    if (helperProcess) {
+      console.log("[workspace:set-root] restarting helper to pick up new workspace root");
+      killHelper({ intentional: false });
+      setTimeout(startHelper, 1000);
+    }
+
+    return { ok: true, root: newRootStr, moved: !isSameRoot };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -4133,12 +4575,14 @@ ipcMain.handle("dialog:pick-file", async (_event, { title, filters }) => {
   return { path: result.filePaths[0], name: require("path").basename(result.filePaths[0]) };
 });
 
-ipcMain.handle("dialog:pick-folder", async () => {
+ipcMain.handle("dialog:pick-folder", async (_event, opts = {}) => {
   const owner = BrowserWindow.getAllWindows()[0] || undefined;
-  const result = await dialog.showOpenDialog(owner, {
-    title: withBrandTitle("Select Archive Folder"),
+  const dialogOpts = {
+    title: withBrandTitle(opts.title || "Select Folder"),
     properties: ["openDirectory", "createDirectory"],
-  });
+  };
+  if (opts.defaultPath) dialogOpts.defaultPath = opts.defaultPath;
+  const result = await dialog.showOpenDialog(owner, dialogOpts);
   if (result.canceled || !result.filePaths.length) return { canceled: true };
   return { path: result.filePaths[0] };
 });
@@ -4183,6 +4627,7 @@ ipcMain.handle("workspace:get-state", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("workspace:add-to-inbox", async (_event, payload = {}) => {
+  await requireAccountFeature("imports");
   const dirs = getWorkspaceDirs();
   const inboxPath = dirs.InboxModule;
   const incomingPaths = Array.isArray(payload.filePaths) ? payload.filePaths : [];
@@ -4465,6 +4910,7 @@ ipcMain.handle("email:test-imap", async (_event, payload = {}) => {
   }
 });
 ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
+  await requireAccountFeature("email_sending");
   const smtpValidation = validateSmtpConfig(payload.smtp || {});
   if (!smtpValidation.ok) {
     return { ok: false, error: smtpValidation.error };
@@ -4695,9 +5141,45 @@ ipcMain.handle("account:update-print-config", async (_event, config) => {
   }
 });
 
+/**
+ * After startup, detect and silently repair any DB paths that still point to a
+ * previous workspace root (e.g. the user manually moved files before this code existed).
+ * Called once after the backend has had a moment to initialise.
+ */
+async function repairStaleWorkspacePaths() {
+  try {
+    const detect = await fetch("http://127.0.0.1:8055/workspace/detect-stale-paths");
+    const data = await detect.json().catch(() => ({}));
+    if (!data.needs_repair) return;
+
+    const oldRoots = data.detected_old_roots || {};
+    const currentRoot = getWorkspaceDirs().root;
+    console.log(`[startup] detected stale paths (${data.stale_path_count}), old roots:`, oldRoots);
+
+    for (const [oldRoot] of Object.entries(oldRoots)) {
+      const fwdOld = oldRoot.replace(/\\/g, "/");
+      const fwdNew = currentRoot.replace(/\\/g, "/");
+      if (fwdOld === fwdNew) continue;
+      const res = await fetch("http://127.0.0.1:8055/workspace/rewrite-paths", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_root: oldRoot, new_root: currentRoot }),
+      });
+      const result = await res.json().catch(() => ({}));
+      console.log(`[startup] repaired ${result.updated_paths ?? 0} paths (${oldRoot} -> ${currentRoot})`);
+    }
+  } catch (_) {
+    // Non-fatal — backend may not be ready yet; will self-heal on next startup
+  }
+}
+
 app.whenReady().then(() => {
   getWorkspaceDirs();
   try { app.setName(getBrandName()); } catch (_) {}
+
+  // Internal support console — Ctrl+Shift+U (not exposed to customers)
+  globalShortcut.register("CommandOrControl+Shift+U", () => createSupportConsole());
+
   // Set app icon for taskbar, dock, and native dialogs on all platforms
   if (process.platform === "win32") {
     app.setAppUserModelId("spaila-parser-ui");
@@ -4711,6 +5193,10 @@ app.whenReady().then(() => {
     helperStatus = "stopped";
     appendHelperLog("info", "Helper startup disabled by settings.");
   }
+
+  // Silently repair any DB paths left over from a manual workspace move.
+  // Delay 8 s to give the FastAPI backend time to finish startup before we query it.
+  setTimeout(repairStaleWorkspacePaths, 8000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -4752,7 +5238,10 @@ function killHelper(options = {}) {
   if (!options.silent) appendHelperLog("info", "Helper stopped.");
 }
 
-app.on("before-quit", killHelper);
+app.on("before-quit", () => {
+  globalShortcut.unregisterAll();
+  killHelper();
+});
 
 // Ensure Ctrl+C in the terminal (SIGINT forwarded by concurrently) also cleans up
 process.on("SIGINT",  () => { killHelper(); app.quit(); });

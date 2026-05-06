@@ -25,8 +25,8 @@ from .email_archive import archive_raw_email, sync_active_inbox_lifecycle, updat
 
 _WORKSPACE_DIRS = ensure_workspace_layout()
 _INBOX_DIR = _WORKSPACE_DIRS["InboxModule"]
-_HIDDEN_EMAILS_PATH = _WORKSPACE_DIRS["root"] / "hidden_emails.json"
-_INTERNAL_DIR = _WORKSPACE_DIRS["root"] / ".spaila_internal"
+_HIDDEN_EMAILS_PATH = _WORKSPACE_DIRS["HiddenEmails"]
+_INTERNAL_DIR = _WORKSPACE_DIRS["Internal"]
 _DEDUP_STORE_PATH = _INTERNAL_DIR / "dedup_store.json"
 _FETCH_STATE_PATH = _INTERNAL_DIR / "inbox_fetch_state.json"
 _SOURCE_STATE_PATH = _INTERNAL_DIR / "inbox_source_state.json"

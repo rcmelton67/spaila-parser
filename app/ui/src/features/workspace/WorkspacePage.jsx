@@ -2336,7 +2336,7 @@ export default function WorkspacePage({
   const mailServiceRunning = !!mailServiceState?.running;
   const mailServiceBusy = !!mailServiceState?.in_flight || refreshingInbox;
   const showInboxEmptyState = !loading && inboxItems.length === 0 && sentMessages.length === 0;
-  const displayInboxPath = inboxPath || "C:\\Spaila\\Inbox";
+  const displayInboxPath = inboxPath || "Spaila/Inbox";
   const inboxModeItems = selectableInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
   const sentItems = sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound");
   const checkedInboxItems = selectableInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));

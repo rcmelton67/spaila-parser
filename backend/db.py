@@ -175,6 +175,18 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS trial_install_history (
+        install_hash TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        first_email TEXT,
+        trial_started_at TEXT,
+        trial_ends_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS web_settings (
         account_id TEXT PRIMARY KEY,
         default_order_scope TEXT DEFAULT 'active',
@@ -256,6 +268,11 @@ def init_db():
         ("multi_shop_ready", "INTEGER DEFAULT 0"),
         ("trial_started_at", "TEXT"),
         ("trial_ends_at", "TEXT"),
+        ("trial_device_id", "TEXT"),
+        ("trial_claimed_at", "TEXT"),
+        ("entitlement_last_verified_at", "TEXT"),
+        ("entitlement_last_server_time", "TEXT"),
+        ("clock_tamper_detected", "INTEGER DEFAULT 0"),
         ("stripe_customer_id", "TEXT"),
         ("stripe_subscription_id", "TEXT"),
         ("subscription_status", "TEXT"),
@@ -298,6 +315,14 @@ def init_db():
         ("payload_json", "TEXT"),
         ("received_at", "TEXT"),
     ])
+    _ensure_columns(cur, "trial_install_history", [
+        ("account_id", "TEXT"),
+        ("first_email", "TEXT"),
+        ("trial_started_at", "TEXT"),
+        ("trial_ends_at", "TEXT"),
+        ("created_at", "TEXT"),
+        ("updated_at", "TEXT"),
+    ])
     _ensure_columns(cur, "web_settings", [
         ("default_order_scope", "TEXT DEFAULT 'active'"),
         ("default_order_sort", "TEXT DEFAULT 'newest'"),
@@ -329,6 +354,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_account_users_account_id ON account_users(account_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_account_id ON auth_sessions(account_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_trial_install_history_account_id ON trial_install_history(account_id)")
 
     cur.execute(
         "UPDATE orders SET last_activity_at = created_at "
@@ -338,6 +364,105 @@ def init_db():
         "UPDATE orders SET updated_at = created_at "
         "WHERE updated_at IS NULL OR TRIM(updated_at) = ''"
     )
+
+    # ── Path casing normalisation ─────────────────────────────────────────────
+    # Ensure all stored paths use Title-Case month names (April not april) and
+    # capital Inbox (not inbox).  Safe to run on every startup — SQLite's
+    # replace() is a no-op when the substring is not present.
+    _MONTH_NAMES = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+    path_cols = [
+        ("orders",         "order_folder_path"),
+        ("orders",         "source_eml_path"),
+        ("orders",         "eml_path"),
+        ("orders",         "source_original_path"),
+        ("archive_orders", "folder_path"),
+        ("archive_orders", "manifest_path"),
+        ("archive_orders", "conversation_path"),
+    ]
+    for table, col in path_cols:
+        # Fix month casing (both / and \ separators)
+        for month in _MONTH_NAMES:
+            for old_frag, new_frag in (
+                (f"/{month.lower()}/",         f"/{month}/"),
+                ("\\" + month.lower() + "\\",  "\\" + month + "\\"),
+            ):
+                try:
+                    cur.execute(
+                        f"UPDATE {table} SET {col} = replace({col}, ?, ?) "  # noqa: S608
+                        f"WHERE {col} LIKE ?",
+                        (old_frag, new_frag, f"%{old_frag}%"),
+                    )
+                except Exception:
+                    pass
+        # Fix inbox casing: /inbox/ or \inbox\ → /Inbox/ or \Inbox\
+        for old_frag, new_frag in (
+            ("/inbox/",    "/Inbox/"),
+            ("\\inbox\\",  "\\Inbox\\"),
+        ):
+            try:
+                cur.execute(
+                    f"UPDATE {table} SET {col} = replace({col}, ?, ?) "  # noqa: S608
+                    f"WHERE {col} LIKE ?",
+                    (old_frag, new_frag, f"%{old_frag}%"),
+                )
+            except Exception:
+                pass
+
+    # Also fix the messages JSON column for inline attachment paths
+    import json as _json
+    try:
+        cur.execute("SELECT id, messages FROM orders WHERE messages IS NOT NULL AND messages != ''")
+        rows = cur.fetchall()
+        for row_id, messages_json in rows:
+            try:
+                msgs = _json.loads(messages_json)
+                if not isinstance(msgs, list):
+                    continue
+                changed = False
+                for msg in msgs:
+                    if not isinstance(msg, dict):
+                        continue
+                    for field in ("original_path", "path", "thumbnail_path"):
+                        val = msg.get(field)
+                        if not val:
+                            continue
+                        new_val = val
+                        for month in _MONTH_NAMES:
+                            new_val = new_val.replace(f"/{month.lower()}/", f"/{month}/")
+                            new_val = new_val.replace("\\" + month.lower() + "\\", "\\" + month + "\\")
+                        new_val = new_val.replace("/inbox/", "/Inbox/")
+                        new_val = new_val.replace("\\inbox\\", "\\Inbox\\")
+                        if new_val != val:
+                            msg[field] = new_val
+                            changed = True
+                    for att in msg.get("attachments", []):
+                        if not isinstance(att, dict):
+                            continue
+                        for field in ("original_path", "path", "thumbnail_path"):
+                            val = att.get(field)
+                            if not val:
+                                continue
+                            new_val = val
+                            for month in _MONTH_NAMES:
+                                new_val = new_val.replace(f"/{month.lower()}/", f"/{month}/")
+                                new_val = new_val.replace("\\" + month.lower() + "\\", "\\" + month + "\\")
+                            new_val = new_val.replace("/inbox/", "/Inbox/")
+                            new_val = new_val.replace("\\inbox\\", "\\Inbox\\")
+                            if new_val != val:
+                                att[field] = new_val
+                                changed = True
+                if changed:
+                    cur.execute(
+                        "UPDATE orders SET messages = ? WHERE id = ?",
+                        (_json.dumps(msgs, ensure_ascii=False), row_id),
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()

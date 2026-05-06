@@ -499,8 +499,10 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       if (!res.ok) {
         let detail = `Server error ${res.status}`;
         try {
-          const payload = await res.json();
-          detail = payload?.detail || payload?.error || detail;
+          const body = await res.json();
+          const raw = body?.detail || body?.error;
+          if (typeof raw === "string") detail = raw;
+          else if (raw && typeof raw === "object") detail = raw.message || raw.detail || raw.error || detail;
         } catch (_) {}
         throw new Error(detail);
       }

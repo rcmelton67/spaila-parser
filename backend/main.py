@@ -13,6 +13,7 @@ from .orders import router as orders_router
 from .db import init_db
 from .api.routes.account import router as account_router
 from server.inbox.inbox_routes import router as inbox_router
+from .support import router as support_router
 from server.inbox.mail_service import mail_service
 from workspace_paths import ensure_workspace_layout
 import json as _json
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(orders_router)
 app.include_router(inbox_router)
 app.include_router(account_router)
+app.include_router(support_router)
 
 
 @app.on_event("startup")

@@ -2227,12 +2227,16 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const tabCounts = React.useMemo(() => {
     if (!searchQuery.trim()) return null;
     const normalizedQuery = searchQuery.trim().toLowerCase();
-    const matches = (row) => getRowSearchValues(row).some((value) => value.includes(normalizedQuery));
-    return {
+    const matches = (row) => normalizedSearchMatches(normalizedQuery, getRowSearchValues(row), viewConfig.searchMode);
+    const nextCounts = {
       active: safeOrders.filter((row) => !isArchivedOrder(row) && !isCompletedOrder(row) && matches(row)).length,
       completed: safeOrders.filter((row) => !isArchivedOrder(row) && isCompletedOrder(row) && matches(row)).length,
     };
-  }, [getRowSearchValues, safeOrders, searchQuery]);
+    if (activeTab === "active" || activeTab === "completed") {
+      nextCounts[activeTab] = filteredOrders.length;
+    }
+    return nextCounts;
+  }, [activeTab, filteredOrders.length, getRowSearchValues, safeOrders, searchQuery, viewConfig.searchMode]);
 
   const safeDisplayOrders = displayOrders || [];
   const rowH = Math.round(tableFontSize * 1.6 * 3); // 3 lines tall

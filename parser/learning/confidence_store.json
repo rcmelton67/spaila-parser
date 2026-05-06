@@ -1454,16 +1454,16 @@
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|none",
     "source": "",
-    "last_value": "April 27, 2026",
-    "streak_count": 2
+    "last_value": "May 4, 2026",
+    "streak_count": 3
   },
   "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_email:email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body": {
     "field": "buyer_email",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body",
     "source": "",
-    "last_value": "ccm7ccm@gmail.com",
-    "streak_count": 3
+    "last_value": "livenow66@gmail.com",
+    "streak_count": 4
   },
   "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
     "field": "buyer_name",
@@ -1478,8 +1478,8 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
     "source": "",
-    "last_value": "May 1, 2026",
-    "streak_count": 15
+    "last_value": "May 5, 2026",
+    "streak_count": 50
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body": {
     "field": "buyer_email",
@@ -1518,8 +1518,8 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body",
     "source": "",
-    "last_value": "pxdqgmy892@privaterelay.appleid.com",
-    "streak_count": 2
+    "last_value": "kaunkel@sbcglobal.net",
+    "streak_count": 3
   },
   "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_date:date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|generic_unlabeled_date": {
     "field": "order_date",
@@ -1558,24 +1558,24 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body",
     "source": "",
-    "last_value": "gunner726@verizon.net",
-    "streak_count": 1
+    "last_value": "diannalyons@comcast.net",
+    "streak_count": 4
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body": {
     "field": "buyer_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body",
     "source": "",
-    "last_value": "aletapia.designer@gmail.com",
-    "streak_count": 2
+    "last_value": "howev54@gmail.com",
+    "streak_count": 4
   },
   "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:shipping_address_block_street_forward|shipping|shipping_address_block|street-city_state_zip-country|selected:street-city_state_zip|excluded:country|shipping_address_label|company_excluded|country_excluded|early_body": {
     "field": "shipping_address",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "shipping_address_block_street_forward|shipping|shipping_address_block|street-city_state_zip-country|selected:street-city_state_zip|excluded:country|shipping_address_label|company_excluded|country_excluded|early_body",
     "source": "",
-    "last_value": "36 Elderwood Lane\nMELVILLE , NY 11747\nUnited States",
-    "streak_count": 1
+    "last_value": "3618 High Creek RD\nBISMARCK , ND 58503\nUnited States",
+    "streak_count": 2
   },
   "2b115480abb30abd0616551ff19bd3d13e0ad32ff9330ae3d183b8b9d7570378:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none": {
     "field": "order_date",
@@ -1583,6 +1583,30 @@
     "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
     "source": "",
     "last_value": "March 31, 2026",
+    "streak_count": 5
+  },
+  "0304383f82fffd11e1fd40f0b7e771b3a8071aaeac69c92f0ec0f65753f40991:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none": {
+    "field": "order_date",
+    "template_id": "0304383f82fffd11e1fd40f0b7e771b3a8071aaeac69c92f0ec0f65753f40991",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
+    "source": "",
+    "last_value": "April 29, 2026",
+    "streak_count": 1
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:normalized_variant|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|normalized_variant|mid_body": {
+    "field": "buyer_name",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "normalized_variant|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|normalized_variant|mid_body",
+    "source": "",
+    "last_value": "James Russel",
+    "streak_count": 1
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:shipping_address:shipping_address_block_with_recipient|shipping|shipping_address_block|name-street-city_state_zip-country|selected:street-city_state_zip|excluded:name-country|shipping_address_label|company_excluded|country_excluded|early_body": {
+    "field": "shipping_address",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "shipping_address_block_with_recipient|shipping|shipping_address_block|name-street-city_state_zip-country|selected:street-city_state_zip|excluded:name-country|shipping_address_label|company_excluded|country_excluded|early_body",
+    "source": "",
+    "last_value": "5815 Grand River Dr\nGRAND LEDGE , MI 48837-8959\nUnited States",
     "streak_count": 2
   }
 }

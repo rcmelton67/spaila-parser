@@ -529,7 +529,8 @@ export function saveDocumentsConfig(config) {
 // ── Shop / identity config ─────────────────────────────────────────────────
 
 const SHOP_CONFIG_KEY = "spaila_shop_config";
-export const DEFAULT_SAVE_FOLDER = "C:\\Spaila\\Backup";
+// Empty = use workspace Backup folder (resolved dynamically by the backend/IPC)
+export const DEFAULT_SAVE_FOLDER = "";
 
 export const DEFAULT_SHOP_CONFIG = {
   shopName:      "",
@@ -538,7 +539,7 @@ export const DEFAULT_SHOP_CONFIG = {
   shopLogoName:  "",
   /** @type {number | null} Days after last activity before auto-archiving; null = off */
   autoArchiveDays: null,
-  /** Absolute path for archived order folders; empty = backend default (e.g. C:\\Spaila\\archive) */
+  /** Absolute path for archived order folders; empty = backend default (workspace Archive folder) */
   orderArchiveRoot: "",
   saveFolder:    DEFAULT_SAVE_FOLDER,
   showEmailIcon: true, // show ✉ icon in buyer_name cells
@@ -572,7 +573,7 @@ function persistOrderArchiveSettings(config) {
     }
     const root = String(config?.orderArchiveRoot ?? "").trim();
     window.parserApp.saveJson({
-      folderPath: "C:\\Spaila",
+      folderPath: "",
       filename: "order_archive_settings.json",
       data: { archive_root: root },
     }).catch(() => {});
@@ -610,7 +611,7 @@ function persistEmailSettings(config) {
       appendSentToProvider: config?.appendSentToProvider !== false,
     };
     window.parserApp.saveJson({
-      folderPath: "C:\\Spaila",
+      folderPath: "",
       filename: "email_settings.json",
       data: payload,
     }).catch(() => {});

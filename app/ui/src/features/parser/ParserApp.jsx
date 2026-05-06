@@ -1808,7 +1808,9 @@ export default function App({
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data?.error || data?.detail || "Failed to create order");
+        const raw = data?.error || data?.detail;
+        const msg = typeof raw === "string" ? raw : (raw?.message || raw?.detail || raw?.error || `Server error ${res.status}`);
+        throw new Error(msg);
       }
       console.log("ORDER CREATED:", data);
       setCreateToast("Order created");
@@ -1817,8 +1819,8 @@ export default function App({
       if (onCreated) onCreated();
     } catch (err) {
       console.error("CREATE ORDER FAILED:", err);
-      setState((current) => ({ ...current, loading: false }));
-      alert("Failed to create order");
+      setState((current) => ({ ...current, loading: false, error: err.message || "Could not create order." }));
+      alert(err.message || "Could not create order.");
     }
   }
 
