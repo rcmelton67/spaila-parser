@@ -67,7 +67,27 @@ function buildUserBlock(sessionUser, profile) {
     trial_active:         trialActive,
     trial_days_remaining: ent.trial_days_remaining ?? null,
     entitlement_state:    ent.account_status || null,
+    billing_state:        ent.billing_state || rawSubState,
+    payment_failed:       Boolean(ent.payment_failed || ent.past_due || rawSubState === "past_due"),
+    trial_expired:        Boolean(trialExpired),
+    canceled:             Boolean(ent.canceled || ent.cancelled || rawSubState === "canceled"),
+    billing_retry:        Boolean(ent.billing_retry || ent.retrying_payment),
+    subscription_locked:  Boolean(ent.subscription_locked || (Array.isArray(ent.locked_features) && ent.locked_features.length > 0)),
   };
+}
+
+function fileToScreenshotPayload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      name: file.name,
+      mime: file.type || "image/png",
+      size: file.size,
+      data: String(reader.result || ""),
+    });
+    reader.onerror = () => reject(reader.error || new Error("Could not read screenshot."));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function SupportModal({ initialType = "bug_report", account = null, screenName = "", ordersTab = "", onClose }) {
@@ -75,6 +95,7 @@ export default function SupportModal({ initialType = "bug_report", account = nul
   const [subject, setSubject] = React.useState("");
   const [message, setMessage] = React.useState("");
   const [steps, setSteps] = React.useState("");
+  const [screenshots, setScreenshots] = React.useState([]);
   const [severity, setSeverity] = React.useState("normal");
   const [includeDiagnostics, setIncludeDiagnostics] = React.useState(true);
   const [state, setState] = React.useState({ saving: false, done: false, error: "", reportId: "", notification: null });
@@ -174,14 +195,25 @@ export default function SupportModal({ initialType = "bug_report", account = nul
         app_source: "web",
         user,
         user_lookup_error: userLookupError || undefined,
+        billing: {
+          state: user.billing_state || user.subscription_state || "unknown",
+          active: user.subscription_state === "active" || user.trial_active,
+          trial_active: Boolean(user.trial_active),
+          trial_expired: Boolean(user.trial_expired),
+          payment_failed: Boolean(user.payment_failed),
+          canceled: Boolean(user.canceled),
+          billing_retry: Boolean(user.billing_retry),
+          subscription_locked: Boolean(user.subscription_locked),
+        },
         context,
         diagnostics,
+        screenshots: await Promise.all(screenshots.map(fileToScreenshotPayload)),
       };
 
       const result = await api.post("/support/report", payload);
 
       if (result?.status === "received") {
-        setState({ saving: false, done: true, error: "", reportId: result.report_id || "", notification: result.notification || null });
+        setState({ saving: false, done: true, error: "", reportId: result.ticket_id || result.report_id || "", notification: result.notification || null });
       } else {
         setState({ saving: false, done: false, error: "Unexpected response. Please try again.", reportId: "", notification: null });
         submitRef.current = false;
@@ -195,9 +227,16 @@ export default function SupportModal({ initialType = "bug_report", account = nul
 
   const typeLabel = TYPE_OPTIONS.find((o) => o.value === type)?.label || "Support";
   const isBug = type === "bug_report";
+  const addScreenshotFiles = React.useCallback((files) => {
+    setScreenshots((prev) => [...prev, ...Array.from(files || [])].slice(0, 5));
+  }, []);
 
   return (
-    <div className="support-modal-backdrop">
+    <div
+      className="support-modal-backdrop"
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); addScreenshotFiles(e.dataTransfer?.files || []); }}
+    >
       <div className="support-modal-dialog">
         {/* Header */}
         <div className="support-modal-header">
@@ -223,7 +262,7 @@ export default function SupportModal({ initialType = "bug_report", account = nul
               </div>
               {state.reportId && (
                 <div className="support-modal-done-msg" style={{ marginTop: 4 }}>
-                  Report ID: <code style={{ background: "#e0f2fe", padding: "1px 6px", borderRadius: 4 }}>{state.reportId.slice(0, 8)}</code>
+                  Ticket ID: <code style={{ background: "#e0f2fe", padding: "1px 6px", borderRadius: 4 }}>{state.reportId}</code>
                 </div>
               )}
               {state.notification ? (
@@ -234,10 +273,8 @@ export default function SupportModal({ initialType = "bug_report", account = nul
                   color: state.notification.email_sent ? "#166534" : "#92400e",
                 }}>
                   {state.notification.email_sent
-                    ? "✓ Notification emailed to support."
-                    : state.notification.email_enabled
-                      ? `Email attempted but failed: ${state.notification.email_error || "Unknown error."}`
-                      : `Report saved. ${state.notification.email_error || "Email notification not configured."}`
+                    ? "Report saved successfully. Support notified."
+                    : "Report saved successfully."
                   }
                 </div>
               ) : null}
@@ -310,6 +347,24 @@ export default function SupportModal({ initialType = "bug_report", account = nul
                   />
                 </div>
               )}
+
+              <div className="support-modal-field">
+                <label className="support-modal-label">
+                  Screenshots <span className="support-modal-optional">(optional, up to 5)</span>
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => addScreenshotFiles(e.target.files || [])}
+                  className="support-modal-input"
+                />
+                {screenshots.length ? (
+                  <div className="support-modal-optional" style={{ marginTop: 6 }}>
+                    {screenshots.length} screenshot{screenshots.length === 1 ? "" : "s"} selected
+                  </div>
+                ) : null}
+              </div>
 
               <div className="support-modal-diagnostics">
                 <label className="support-modal-diag-label">

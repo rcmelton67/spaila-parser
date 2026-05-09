@@ -229,6 +229,43 @@ def _migrate_root_json_files(dirs: WorkspaceMap, logger: Logger) -> None:
             logger(f"[WORKSPACE] {filename} already exists in .spaila_internal/, leaving root copy")
 
 
+def _migrate_legacy_support_reports(root: Path, internal_reports: Path, logger: Logger) -> None:
+    """Move support_reports/ from workspace root into .spaila_internal/support_reports/.
+
+    Preserves the YYYY/MM/report.json hierarchy, skips duplicates (same filename), and
+    removes the now-empty legacy tree so it doesn't clutter the user-visible workspace.
+    """
+    legacy = root / "support_reports"
+    if not legacy.exists() or legacy.resolve() == internal_reports.resolve():
+        return
+    migrated = 0
+    try:
+        internal_reports.mkdir(parents=True, exist_ok=True)
+        for item in sorted(legacy.rglob("*")):
+            if item.is_file():
+                rel = item.relative_to(legacy)
+                dest = internal_reports / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if not dest.exists():
+                    item.rename(dest)
+                    migrated += 1
+        if migrated:
+            logger(f"[WORKSPACE] migrated {migrated} support report(s) {legacy} -> {internal_reports}")
+        # Remove now-empty dirs (deepest first)
+        for d in sorted(legacy.rglob("*"), reverse=True):
+            try:
+                if d.is_dir():
+                    d.rmdir()
+            except OSError:
+                pass
+        try:
+            legacy.rmdir()
+        except OSError:
+            pass
+    except OSError as error:
+        logger(f"[WORKSPACE] could not migrate support_reports: {error}")
+
+
 def _move_folder_contents(src: Path, dst: Path, logger: Logger, log_lines: list) -> int:
     """Move every item inside src into dst, merging if dst already exists.
     Returns number of errors."""
@@ -269,7 +306,7 @@ def move_workspace(old_root: Path, new_root: Path, logger: Logger) -> dict:
     Never deletes source until destination is verified.
     Returns {"ok": bool, "errors": int}.
     """
-    folders = ["Inbox", "inbox", "Orders", "Archive", "Backup", "Sent", "sent", "Docs", ".spaila_internal"]
+    folders = ["Inbox", "inbox", "Orders", "Archive", "archive", "Archived", "archived", "Backup", "Sent", "sent", "Docs", ".spaila_internal"]
     log_lines: list[str] = []
     errors = 0
 
@@ -421,11 +458,51 @@ def ensure_workspace_layout(log: Logger | None = None) -> WorkspaceMap:
                     except OSError:
                         pass
 
+    # ── Merge "archived" / "Archived" → Archive (wrong name, not just wrong case) ─
+    # The case-rename block above only handles "archive" -> "Archive".
+    # "archived" is a distinct name that needs its contents merged in.
+    try:
+        archived_variants = [e.name for e in root.iterdir()
+                             if e.is_dir() and e.name.lower() == "archived"]
+    except OSError:
+        archived_variants = []
+    for archived_name in archived_variants:
+        archived_path  = root / archived_name
+        canonical_path = root / "Archive"
+        canonical_path.mkdir(parents=True, exist_ok=True)
+        merged = 0
+        try:
+            for item in list(archived_path.iterdir()):
+                dest = canonical_path / item.name
+                if dest.exists():
+                    if item.is_dir() and dest.is_dir():
+                        log_lines: list[str] = []
+                        _move_folder_contents(item, dest, logger, log_lines)
+                        for line in log_lines:
+                            logger(line)
+                    else:
+                        logger(f"[WORKSPACE] skip merge {item.name}: already in Archive/")
+                else:
+                    item.rename(dest)
+                    merged += 1
+            if merged:
+                logger(f"[WORKSPACE] merged {merged} item(s) from {archived_name}/ -> Archive/")
+            try:
+                archived_path.rmdir()
+                logger(f"[WORKSPACE] removed empty folder: {archived_name}/")
+            except OSError:
+                logger(f"[WORKSPACE] {archived_name}/ not empty after merge — left in place")
+        except OSError as error:
+            logger(f"[WORKSPACE] could not merge {archived_name}/ -> Archive/: {error}")
+
     # ── Recovery folder migration (Duplicates/Unmatched → internal) ──────────
     _migrate_legacy_recovery_folder(root, "Duplicates", dirs["Duplicates"], logger)
     _migrate_legacy_recovery_folder(root, "duplicates", dirs["Duplicates"], logger)
     _migrate_legacy_recovery_folder(root, "Unmatched",  dirs["Unmatched"],  logger)
     _migrate_legacy_recovery_folder(root, "unmatched",  dirs["Unmatched"],  logger)
+
+    # ── Legacy support_reports/ → .spaila_internal/support_reports/ migration ─
+    _migrate_legacy_support_reports(root, dirs["SupportReports"], logger)
 
     deprecated_paths = [root / "Processed", root / "processed"]
     for dep in deprecated_paths:

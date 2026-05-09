@@ -386,8 +386,18 @@ function FieldRow({ label, children }) {
   );
 }
 
+// ── Accordion helpers ────────────────────────────────────────────────────────
+function computeBillingOpen(o) {
+  const platform = String(o?.platform || o?.source || o?.marketplace || "").toLowerCase();
+  const isNonEtsy = !!(platform && !platform.includes("etsy"));
+  return !!(o?.billing_name || o?.buyer_name || o?.billing_address || o?.phone_number || isNonEtsy);
+}
+function computeGiftOpen(o) {
+  return !!(o?.is_gift || o?.gift_wrap || o?.gift_message);
+}
+
 // ── Modal ───────────────────────────────────────────────────────────────────
-export default function EditOrderModal({ order, launchContext = null, onClose, onSaved, onRefresh }) {
+export default function EditOrderModal({ order, launchContext = null, onClose, onSaved, onRefresh, onStatusChanged }) {
   const isNewOrder = !!order.__isNew;
   const orderIdentityKey = React.useMemo(
     () => String(order?.order_id || order?.id || "").trim(),
@@ -404,6 +414,10 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   const [templateLoadedNotice, setTemplateLoadedNotice] = React.useState(false);
   const [replyAttachments, setReplyAttachments] = React.useState([]);
   const [isSendingReply, setIsSendingReply] = React.useState(false);
+  const [replySentFlash, setReplySentFlash] = React.useState(false);
+  const [errorUncertain, setErrorUncertain] = React.useState(false);
+  const replySentTimerRef = React.useRef(null);
+  const [savingStatus, setSavingStatus] = React.useState(false);
   const [shopConfig, setShopConfig] = React.useState(() => loadShopConfig());
   const [statusConfig, setStatusConfig] = React.useState(() => loadStatusConfig());
   const [orderStatuses, setOrderStatuses] = React.useState(() => loadOrderStatuses());
@@ -412,6 +426,8 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   const shouldAutoScrollRef = React.useRef(false);
   const replyFileInputRef = React.useRef(null);
   const draftTextareaRef = React.useRef(null);
+  const [billingOpen, setBillingOpen] = React.useState(() => computeBillingOpen(order));
+  const [giftOpen, setGiftOpen] = React.useState(() => computeGiftOpen(order));
 
   React.useEffect(() => {
     function onStatusConfigChange() {
@@ -427,13 +443,15 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     setForm(applyPricingTypeFallback({ ...order }));
     setSaving(false);
     setError("");
+    setBillingOpen(computeBillingOpen(order));
+    setGiftOpen(computeGiftOpen(order));
     if (launchContext?.action === "email") {
       const nextBody = String(launchContext?.draftBody || "").trim();
       const nextSubject = String(launchContext?.draftSubject || "").trim();
       const nextAttachments = attachmentsFromPaths(launchContext?.attachmentPaths || []);
       setDraftReply("");
       setPreviewCompose({
-        to: String(order?.buyer_email || "").trim(),
+        to: String(order?.billing_email || order?.buyer_email || "").trim(),
         subject: nextSubject,
         body: nextBody,
         originalSubject: nextSubject,
@@ -459,6 +477,17 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   }, [orderIdentityKey, launchContext]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
+    if (!order || isNewOrder) return;
+    const nextStatus = String(order?.item_status || "");
+    setForm((current) => (
+      current && String(current.id || "") === String(order.id || "")
+        ? { ...current, item_status: nextStatus }
+        : current
+    ));
+    setOrderStatuses(loadOrderStatuses());
+  }, [isNewOrder, order?.id, order?.item_status]);
+
+  React.useEffect(() => {
     if (!templateLoadedNotice) return undefined;
     const timer = window.setTimeout(() => setTemplateLoadedNotice(false), 1200);
     return () => window.clearTimeout(timer);
@@ -481,6 +510,33 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   const L = (key, fallback) => labels[key] || fallback;
 
   const set = (key, val) => setForm((p) => ({ ...p, [key]: val }));
+
+  async function handleStatusChange(statusId, nextValue) {
+    const nextStatus = nextValue || null;
+    const previousStatus = String(form?.item_status || order?.item_status || orderStatuses[statusId] || "");
+    setSavingStatus(true);
+    setError("");
+    setForm((current) => (current ? { ...current, item_status: nextStatus || "" } : current));
+    setOrderStatus(statusId, nextStatus);
+    setOrderStatuses(loadOrderStatuses());
+    onStatusChanged?.(statusId, nextStatus || "");
+    try {
+      const res = await fetch(`${API}/items/${statusId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_status: nextStatus }),
+      });
+      if (!res.ok) throw new Error(`Could not update status (${res.status}).`);
+    } catch (err) {
+      setForm((current) => (current ? { ...current, item_status: previousStatus } : current));
+      setOrderStatus(statusId, previousStatus || null);
+      setOrderStatuses(loadOrderStatuses());
+      onStatusChanged?.(statusId, previousStatus);
+      setError(err?.message || "Could not update status.");
+    } finally {
+      setSavingStatus(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -657,7 +713,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
 
   async function handleSendReply() {
     if (isSendingReply) return;
-    const to = String(form.buyer_email || "").trim();
+    const to = String(form.billing_email || form.buyer_email || "").trim();
     const body = draftReply;
     const attachmentPaths = replyAttachments.map((attachment) => String(attachment.path || "").trim()).filter(Boolean);
     if (!to) {
@@ -708,6 +764,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
     shouldAutoScrollRef.current = true;
     setIsSendingReply(true);
     setError("");
+    setErrorUncertain(false);
     try {
       const sendResult = await window.parserApp?.sendDockEmail?.({
         from,
@@ -732,10 +789,16 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
         attachmentPaths,
         orderFolderPath: form.order_folder_path || "",
         orderNumber: form.order_number || "",
-        buyerName: form.buyer_name || "",
+        buyerName: form.billing_name || form.buyer_name || "",
         buyerEmail: to,
       });
       if (!sendResult?.ok) {
+        if (sendResult?.uncertain) {
+          setErrorUncertain(true);
+          setError(sendResult.error);
+          // Don't clear draft — let user decide whether to resend.
+          return;
+        }
         throw new Error(sendResult?.error || "Could not send reply.");
       }
       const sentMessage = {
@@ -758,6 +821,9 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
       shouldAutoScrollRef.current = true;
       setDraftReply("");
       setReplyAttachments([]);
+      if (replySentTimerRef.current) window.clearTimeout(replySentTimerRef.current);
+      setReplySentFlash(true);
+      replySentTimerRef.current = window.setTimeout(() => setReplySentFlash(false), 2500);
       if (modalOrderId) {
         fetch(`${API}/orders/${encodeURIComponent(modalOrderId)}/messages`, {
           method: "POST",
@@ -836,7 +902,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
         attachmentPaths,
         orderFolderPath: form.order_folder_path || "",
         orderNumber: form.order_number || "",
-        buyerName: form.buyer_name || "",
+        buyerName: form.billing_name || form.buyer_name || "",
         buyerEmail: to,
       });
       if (!sendResult?.ok) {
@@ -877,7 +943,7 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
   const conversationSubject = String(form.order_number || "").trim()
     ? `Order ${form.order_number}`
     : "Order conversation";
-  const customerLabel = String(form.buyer_name || form.buyer_email || "Customer").trim();
+  const customerLabel = String(form.billing_name || form.buyer_name || form.billing_email || form.buyer_email || "Customer").trim();
   const isThreadScrolledNearBottom = React.useCallback(() => {
     const node = threadScrollRef.current;
     if (!node) return true;
@@ -986,21 +1052,6 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
           {/* scrollable fields */}
           <div style={{ flex: 1, overflowY: "auto", padding: 14, boxSizing: "border-box" }}>
             <div style={{ marginBottom: 9 }}>
-              <input style={input} placeholder={L("buyer_name", "Name")} value={form.buyer_name || ""} onChange={(e) => set("buyer_name", e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 9 }}>
-              <input style={input} placeholder={L("shipping_name", "Shipping Name")} value={form.shipping_name || ""} onChange={(e) => set("shipping_name", e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 9 }}>
-              <input style={input} placeholder={L("buyer_email", "Buyer Email")} value={form.buyer_email || ""} onChange={(e) => set("buyer_email", e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 9 }}>
-              <textarea style={{ ...textarea, minHeight: 64 }} placeholder={L("shipping_address", "Address")} value={form.shipping_address || ""} onChange={(e) => set("shipping_address", e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 9 }}>
-              <input style={input} placeholder={L("phone_number", "Phone Number")} value={form.phone_number || ""} onChange={(e) => set("phone_number", e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 9 }}>
               <input autoFocus={isNewOrder} style={input} placeholder={L("order_number", "Order Number")} value={form.order_number || ""} onChange={(e) => set("order_number", e.target.value)} />
             </div>
             <div style={{ marginBottom: 9 }}>
@@ -1009,9 +1060,101 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
             <div style={{ marginBottom: 9 }}>
               <input style={input} placeholder={L("ship_by", "Ship By")} value={form.ship_by || ""} onChange={(e) => set("ship_by", e.target.value)} />
             </div>
+
+            <div style={{ margin: "7px 0", borderTop: "1px solid rgba(148, 163, 184, 0.35)" }} />
+
+            {/* ── Billing accordion ── */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setBillingOpen((o) => !o)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setBillingOpen((o) => !o); } }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", padding: "3px 1px", marginBottom: 4, userSelect: "none" }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Billing Details
+                <span style={{ fontWeight: 400, color: "#94a3b8", textTransform: "none", letterSpacing: 0, marginLeft: 5 }}>(optional)</span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {!billingOpen && (form.billing_name || form.buyer_name) ? (
+                  <span style={{ fontSize: 11, color: "#94a3b8", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {form.billing_name || form.buyer_name}
+                  </span>
+                ) : null}
+                <span style={{ fontSize: 11, color: "#94a3b8", display: "inline-block", transition: "transform 0.18s", transform: billingOpen ? "rotate(90deg)" : "none" }}>▶</span>
+              </span>
+            </div>
+            {billingOpen ? (
+              <>
+                <div style={{ marginBottom: 9 }}>
+                  <input style={input} placeholder={L("billing_name", "Billing Name")} value={form.billing_name || form.buyer_name || ""} onChange={(e) => { set("billing_name", e.target.value); set("buyer_name", e.target.value); }} />
+                </div>
+                <div style={{ marginBottom: 9 }}>
+                  <textarea style={{ ...textarea, minHeight: 72, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }} placeholder={L("billing_address", "Billing Address")} value={form.billing_address || ""} onChange={(e) => set("billing_address", e.target.value)} />
+                </div>
+                <div style={{ marginBottom: 9 }}>
+                  <input style={input} placeholder={L("billing_email", "Email")} value={form.billing_email || form.buyer_email || ""} onChange={(e) => { set("billing_email", e.target.value); set("buyer_email", e.target.value); }} />
+                </div>
+                <div style={{ marginBottom: 9 }}>
+                  <input style={input} placeholder={L("phone_number", "Phone Number")} value={form.phone_number || ""} onChange={(e) => set("phone_number", e.target.value)} />
+                </div>
+              </>
+            ) : null}
+
+            <div style={{ margin: "7px 0", borderTop: "1px solid rgba(148, 163, 184, 0.35)" }} />
+
+            <div style={{ marginBottom: 9 }}>
+              <input style={input} placeholder={L("recipient_name", "Shipping Name")} value={form.recipient_name || form.shipping_name || ""} onChange={(e) => { set("recipient_name", e.target.value); set("shipping_name", e.target.value); }} />
+            </div>
+            <div style={{ marginBottom: 9 }}>
+              <textarea style={{ ...textarea, minHeight: 72, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }} placeholder={L("shipping_address", "Shipping Address")} value={form.shipping_address || ""} onChange={(e) => set("shipping_address", e.target.value)} />
+            </div>
+
+            <div style={{ margin: "7px 0", borderTop: "1px solid rgba(148, 163, 184, 0.35)" }} />
+
+            {/* ── Gift accordion ── */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setGiftOpen((o) => !o)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setGiftOpen((o) => !o); } }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", padding: "3px 1px", marginBottom: 4, userSelect: "none" }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Gift</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {!giftOpen ? (
+                  <>
+                    {form.is_gift ? <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 999, fontWeight: 600 }}>Gift</span> : null}
+                    {form.gift_wrap ? <span style={{ fontSize: 10, background: "#faf5ff", color: "#6b21a8", padding: "1px 6px", borderRadius: 999, fontWeight: 600 }}>Wrapped</span> : null}
+                    {(form.gift_message || form.message) ? <span style={{ fontSize: 10, background: "#f0fdf4", color: "#166534", padding: "1px 6px", borderRadius: 999, fontWeight: 600 }}>Message</span> : null}
+                  </>
+                ) : null}
+                <span style={{ fontSize: 11, color: "#94a3b8", display: "inline-block", transition: "transform 0.18s", transform: giftOpen ? "rotate(90deg)" : "none", marginLeft: 2 }}>▶</span>
+              </span>
+            </div>
+            {giftOpen ? (
+              <>
+                <div style={{ marginBottom: 9, display: "flex", gap: 16 }}>
+                  <label style={checkboxLabel}>
+                    <input type="checkbox" checked={!!form.is_gift} onChange={(e) => set("is_gift", e.target.checked)} style={{ width: 15, height: 15, accentColor: "#2563eb" }} />
+                    <span>Gift</span>
+                  </label>
+                  <label style={checkboxLabel}>
+                    <input type="checkbox" checked={!!form.gift_wrap} onChange={(e) => set("gift_wrap", e.target.checked)} style={{ width: 15, height: 15, accentColor: "#2563eb" }} />
+                    <span>Gift wrap</span>
+                  </label>
+                </div>
+                <div style={{ marginBottom: 9 }}>
+                  <textarea style={{ ...textarea, minHeight: 68 }} placeholder={L("gift_message", "Gift Message")} value={form.gift_message || form.message || ""} onChange={(e) => set("gift_message", e.target.value)} />
+                </div>
+              </>
+            ) : null}
+
+            <div style={{ margin: "7px 0", borderTop: "1px solid rgba(148, 163, 184, 0.35)" }} />
+
             <div style={{ marginBottom: 9, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <input style={input} placeholder={L("price", "Price")} value={form.price || ""} onChange={(e) => set("price", e.target.value)} />
               <input style={input} placeholder={L("quantity", "Quantity")} value={form.quantity || ""} onChange={(e) => set("quantity", e.target.value)} />
+              <input style={input} placeholder={L("price", "Price")} value={form.price || ""} onChange={(e) => set("price", e.target.value)} />
             </div>
 
             {CUSTOM_KEYS.map((key) => (
@@ -1023,35 +1166,11 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
             <div style={{ marginBottom: 9 }}>
               <textarea style={{ ...textarea, minHeight: 68 }} placeholder={L("order_notes", "Order Notes")} value={form.order_notes || form.notes || ""} onChange={(e) => set("order_notes", e.target.value)} />
             </div>
-            <div style={{ marginBottom: 0 }}>
-              <textarea style={{ ...textarea, minHeight: 68 }} placeholder={L("gift_message", "Gift Message")} value={form.gift_message || form.message || ""} onChange={(e) => set("gift_message", e.target.value)} />
-            </div>
           </div>
 
           {/* fixed footer */}
           <div style={{ flexShrink: 0, borderTop: "1px solid #e5e7eb", padding: "10px 14px", background: "#f9fafb", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", gap: 16 }}>
-              <label style={checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={!!form.is_gift}
-                  onChange={(e) => set("is_gift", e.target.checked)}
-                  style={{ width: 15, height: 15, accentColor: "#2563eb" }}
-                />
-                <span>Mark as gift</span>
-              </label>
-              <label style={checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={!!form.gift_wrap}
-                  onChange={(e) => set("gift_wrap", e.target.checked)}
-                  style={{ width: 15, height: 15, accentColor: "#2563eb" }}
-                />
-                <span>Gift wrap</span>
-              </label>
-            </div>
-
-            {error ? <div style={{ fontSize: 12, color: "#991b1b" }}>{error}</div> : null}
+            {error ? <div style={{ fontSize: 12, color: errorUncertain ? "#92400e" : "#991b1b", background: errorUncertain ? "#fffbeb" : undefined, border: errorUncertain ? "1px solid #fcd34d" : undefined, borderRadius: errorUncertain ? 6 : undefined, padding: errorUncertain ? "6px 8px" : undefined }}>{errorUncertain ? "⚠️ " : ""}{error}</div> : null}
 
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -1112,18 +1231,15 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               {statusConfig.enabled && !isNewOrder && (() => {
                 const statusId = String(order?.id || "");
-                const currentKey = orderStatuses[statusId] ?? "";
+                const currentKey = String(form?.item_status || order?.item_status || orderStatuses[statusId] || "");
                 const currentState = statusConfig.states.find((s) => s.key === currentKey);
                 const pillBg = currentState?.color || "#f1f5f9";
                 const pillTc = contrastColor(pillBg);
                 return (
                   <select
                     value={currentKey}
-                    onChange={(e) => {
-                      const next = e.target.value || null;
-                      setOrderStatus(statusId, next);
-                      setOrderStatuses(loadOrderStatuses());
-                    }}
+                    onChange={(e) => handleStatusChange(statusId, e.target.value)}
+                    disabled={savingStatus}
                     style={{
                       background: pillBg,
                       color: pillTc,
@@ -1377,9 +1493,19 @@ export default function EditOrderModal({ order, launchContext = null, onClose, o
               <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Draft Reply</div>
-                  <div style={{ fontSize: 11, color: "#6b7280", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ color: "#2563eb", fontSize: 10 }}>●</span> Draft (unsent)
-                  </div>
+                  {isSendingReply ? (
+                    <div style={{ fontSize: 11, color: "#6b7280", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ color: "#f59e0b", fontSize: 10 }}>●</span> Sending…
+                    </div>
+                  ) : replySentFlash ? (
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ fontSize: 12 }}>✓</span> Sent
+                    </div>
+                  ) : (draftReply.trim() || replyAttachments.length) ? (
+                    <div style={{ fontSize: 11, color: "#6b7280", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: "#2563eb", fontSize: 10 }}>●</span> Draft (unsent)
+                    </div>
+                  ) : null}
                 </div>
                 {replyAttachments.length ? (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>

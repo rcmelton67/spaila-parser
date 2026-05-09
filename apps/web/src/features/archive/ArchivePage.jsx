@@ -66,7 +66,7 @@ export default function ArchivePage() {
               onClick={() => setSelected(row)}
             >
               <strong>#{row.order_number || "Unnumbered"}</strong>
-              <span>{row.buyer_name || row.buyer_email || "Unknown buyer"}</span>
+              <span>{row.billing_name || row.recipient_name || row.billing_email || "Unknown purchaser"}</span>
               <em>{row.archived_at || "Archived"} · {row.archive_status}</em>
             </button>
           )) : (
@@ -84,8 +84,10 @@ export default function ArchivePage() {
               <h2>#{selected.order_number || "Unnumbered"}</h2>
               <div className="status-badge status-badge-slate">Archived</div>
               <dl className="detail-list">
-                <div className="detail-field"><dt>Buyer</dt><dd>{selected.buyer_name || "Not set"}</dd></div>
-                <div className="detail-field"><dt>Email</dt><dd>{selected.buyer_email || "Not set"}</dd></div>
+                <div className="detail-field"><dt>Billing Name</dt><dd>{selected.billing_name || "Not set"}</dd></div>
+                <div className="detail-field"><dt>Email</dt><dd>{selected.billing_email || selected.buyer_email || "Not set"}</dd></div>
+                <div className="detail-field"><dt>Billing Address</dt><dd>{selected.billing_address || "Not set"}</dd></div>
+                <div className="detail-field"><dt>Shipping Name</dt><dd>{selected.recipient_name || "Not set"}</dd></div>
                 <div className="detail-field"><dt>Pet</dt><dd>{selected.pet_name || "Not set"}</dd></div>
                 <div className="detail-field"><dt>Order date</dt><dd>{selected.order_date || "Not set"}</dd></div>
                 <div className="detail-field"><dt>Shipping</dt><dd>{selected.shipping_address || "Not set"}</dd></div>

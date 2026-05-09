@@ -1114,7 +1114,7 @@ function ViewTab({ config, setConfig, fields }) {
   };
   const divider = { borderTop: "1px solid #f3f4f6", margin: "20px 0" };
 
-  const sortableFields = FIELD_DEFS.filter((d) => d.defaultVisibleInOrders || ["order_date", "ship_by", "buyer_name", "order_number", "price"].includes(d.key));
+  const sortableFields = FIELD_DEFS.filter((d) => d.defaultVisibleInOrders || ["order_date", "ship_by", "billing_name", "recipient_name", "order_number", "price"].includes(d.key));
 
   return (
     <div>
@@ -1374,7 +1374,7 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
         id,
         name: "New Template",
         subject_template: "Order {order_number}",
-        body_template: "Hi {buyer_name},\n\n",
+        body_template: "Hi {billing_first_name},\n\n",
         condition: null,
         attachment_mode: "none",
         attachment_extensions: [],
@@ -1449,10 +1449,10 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
     const type = condition?.type || "none";
     function setType(t) {
       if (t === "none") { onChange(null); return; }
-      onChange({ type: t, field: "buyer_name", operator: ">", value: "" });
+      onChange({ type: t, field: "billing_name", operator: ">", value: "" });
     }
     function patch(p) { onChange({ ...condition, ...p }); }
-    const field = condition?.field || "buyer_name";
+    const field = condition?.field || "billing_name";
     const fieldOptions = EMAIL_VARIABLE_KEYS.map((k) => (
       <option key={k} value={k}>{labelMap[k] || k}</option>
     ));
@@ -2034,37 +2034,6 @@ function EmailsTab({ templates, setTemplates, labelMap, shopConfig, setShopConfi
 
       {activeEmailSubtab === "templates" ? (
       <>
-      {/* ── Email icon visibility ── */}
-      <div style={{
-        background: "#f9fafb", border: "1px solid #e5e7eb",
-        borderRadius: "10px", padding: "14px 18px", marginBottom: "16px",
-        display: "flex", alignItems: "center", gap: "12px",
-      }}>
-        <label style={{ position: "relative", display: "inline-block", width: 36, height: 20, flexShrink: 0 }}>
-          <input
-            type="checkbox"
-            checked={shopConfig?.showEmailIcon !== false}
-            onChange={(e) => setShopConfig?.((prev) => ({ ...prev, showEmailIcon: e.target.checked }))}
-            style={{ opacity: 0, width: 0, height: 0, position: "absolute" }}
-          />
-          <span style={{
-            position: "absolute", inset: 0, borderRadius: 999, cursor: "pointer",
-            background: shopConfig?.showEmailIcon !== false ? "#2563eb" : "#d1d5db",
-            transition: "background 0.2s",
-          }}>
-            <span style={{
-              position: "absolute", top: 3,
-              left: shopConfig?.showEmailIcon !== false ? 19 : 3,
-              width: 14, height: 14, borderRadius: "50%", background: "#fff",
-              transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-            }} />
-          </span>
-        </label>
-        <span style={{ fontSize: "13px", color: "#374151" }}>
-          Show ✉ email icon on buyer name cells
-        </span>
-      </div>
-
       {/* ── How it works ── */}
       <div style={{
         background: "#f0f9ff", border: "1px solid #bae6fd",
@@ -2819,6 +2788,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     }
     setAuthState({ loading: true, error: "", message: "" });
     try {
+      const installIdentity = mode === "signup" ? await getOrCreateInstallId() : {};
       const endpoint = mode === "signup" ? API_ENDPOINTS.authSignup : API_ENDPOINTS.authLogin;
       const payload = mode === "signup"
         ? {
@@ -2826,7 +2796,7 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
             email: authForm.email.trim(),
             name: accountName || authForm.name,
             shop_name: shopConfig?.shopName || authForm.shop_name,
-            install_id: getOrCreateInstallId(),
+            install_id: installIdentity.install_id || installIdentity,
           }
         : { email: authForm.email.trim(), password: authForm.password };
       const result = await accountRequest(endpoint, {
@@ -2927,8 +2897,10 @@ function AccountTab({ shopConfig, setShopConfig, onOpenSupport, onOpenDocumentat
     }
   }
 
-  function getOrCreateInstallId() {
+  async function getOrCreateInstallId() {
     try {
+      const identity = await window.parserApp?.getInstallIdentity?.();
+      if (identity?.install_id) return identity;
       const key = "spaila_install_id";
       const existing = window.localStorage?.getItem(key);
       if (existing) return existing;
@@ -4191,9 +4163,11 @@ function DocumentsTab({ config, setConfig }) {
 }
 
 const LEARNING_FIELDS = [
+  { key: "billing_name", label: "Billing Name" },
+  { key: "billing_email", label: "Email" },
+  { key: "billing_address", label: "Billing Address" },
+  { key: "recipient_name", label: "Shipping Name" },
   { key: "shipping_address", label: "Shipping Address" },
-  { key: "buyer_name", label: "Buyer Name" },
-  { key: "buyer_email", label: "Buyer Email" },
   { key: "price", label: "Price" },
   { key: "quantity", label: "Quantity" },
   { key: "order_date", label: "Order Date" },
@@ -4412,8 +4386,17 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
         }));
       }
       if (Array.isArray(layout.order) && layout.order.length) {
-        setLocalOrder(layout.order);
-        onColumnOrderChange?.(layout.order);
+        // Merge: keep the saved order, then append any canonical keys that the
+        // stored layout pre-dates (e.g. billing_name, recipient_name added later).
+        // Without this, new fields land outside localOrder and their ↑/↓ buttons
+        // silently do nothing (indexOf returns -1).
+        const _allKeys = defaultColumnOrder();
+        const _merged = [
+          ...layout.order.filter((k) => _allKeys.includes(k)),
+          ..._allKeys.filter((k) => !layout.order.includes(k)),
+        ];
+        setLocalOrder(_merged);
+        onColumnOrderChange?.(_merged);
       }
       if (layout.status && typeof layout.status === "object") {
         setLocalStatusConfig((current) => {
@@ -4957,6 +4940,21 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                     </label>
                     <div style={{ marginLeft: "23px", marginTop: "3px", fontSize: "11px", color: "#9ca3af", lineHeight: 1.4 }}>
                       Show the header button that opens the saved thank-you letter for printing.
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: "12px" }}>
+                    <label htmlFor="general_showEmailIcon" style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                      <input
+                        id="general_showEmailIcon"
+                        type="checkbox"
+                        checked={localShopConfig.showEmailIcon !== false}
+                        onChange={(e) => setLocalShopConfig((prev) => ({ ...prev, showEmailIcon: e.target.checked }))}
+                        style={{ width: "15px", height: "15px", cursor: "pointer", accentColor: "#2563eb" }}
+                      />
+                      <span style={{ fontSize: "13px", color: "#374151" }}>Show ✉ email icon in status column</span>
+                    </label>
+                    <div style={{ marginLeft: "23px", marginTop: "3px", fontSize: "11px", color: "#9ca3af", lineHeight: 1.4 }}>
+                      Show a quick-compose button on each order row to send an email preview to the customer.
                     </div>
                   </div>
                 </div>
@@ -5674,7 +5672,7 @@ export default function SettingsPage({ onOrders, onWorkspace, onSettings, initia
                             Field-by-field learning
                           </div>
                           <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.65 }}>
-                            Each row is tracked separately. Resetting Buyer Name learning, for example, does not reset price, quantity, address, or date learning.
+                            Each row is tracked separately. Resetting Billing Name learning, for example, does not reset price, quantity, address, or date learning.
                           </div>
                         </div>
                         <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #e5e7eb" }}>

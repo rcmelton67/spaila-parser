@@ -53,8 +53,8 @@
     "last_value": "April 9, 2026",
     "streak_count": 37
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|email|body": {
-    "field": "buyer_email",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_email:email_regex|email|body": {
+    "field": "billing_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|email|body",
     "source": "",
@@ -69,8 +69,8 @@
     "last_value": "Apr 16",
     "streak_count": 40
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -133,16 +133,16 @@
     "last_value": "April 10, 2026",
     "streak_count": 5
   },
-  "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jenna_lowry@comcast.net",
     "streak_count": 5
   },
-  "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "b89b3ad0f919485b9f78ffe7b0c966019cdf753ee0ec8c697f1231bd5e6ee459",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -187,16 +187,16 @@
     "last_value": "January 27, 2026",
     "streak_count": 1
   },
-  "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "pete.marthamartinez@gmail.com",
     "streak_count": 1
   },
-  "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "3c4d09f672d75f937c4217c90e3010e6e54f01fd631f00e5488a4c2158c5b277",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -233,16 +233,16 @@
     "last_value": "January 27, 2026",
     "streak_count": 1
   },
-  "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "pearson9342@bellsouth.net",
     "streak_count": 1
   },
-  "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "2ecccc08489e9f5cd5357521fff0dd9e730439cda70d02f8a76b1316806f533a",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -279,16 +279,16 @@
     "last_value": "January 24, 2026",
     "streak_count": 1
   },
-  "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jlmundy@hotmail.com",
     "streak_count": 1
   },
-  "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "7fe2bcf0205ab1d83a1343a2f08e8139b02bade1569f8174c216be92d5c68e07",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -325,16 +325,16 @@
     "last_value": "January 20, 2026",
     "streak_count": 1
   },
-  "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "htadogs@hotmail.com",
     "streak_count": 1
   },
-  "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "ddba0ea1048dfa94bbdaf3b3ad66af9be1ea946ed7839ac40e7167f47d5d3fab",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -371,16 +371,16 @@
     "last_value": "January 18, 2026",
     "streak_count": 1
   },
-  "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "crchamizo@gmail.com",
     "streak_count": 1
   },
-  "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "2846737a0f3c8f63ef6bf6a73b376f27fab56b0f7b6fcf001c329546180611c8",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -417,16 +417,16 @@
     "last_value": "January 1, 2026",
     "streak_count": 1
   },
-  "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "wcsnipes@gmail.com",
     "streak_count": 1
   },
-  "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "b41d44347505874bd96aafc503a18c8d541d9c8cf5d760fc927ac696e1f2acfb",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -487,16 +487,16 @@
     "last_value": "February 15, 2026",
     "streak_count": 1
   },
-  "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jjewalker59@gmail.com",
     "streak_count": 1
   },
-  "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "a13abb825401fd7a2d3c3b5633e6304022cdfc37cec733e5f4f3cff8a1ffae70",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -533,16 +533,16 @@
     "last_value": "February 15, 2026",
     "streak_count": 1
   },
-  "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jjewalker59@gmail.com",
     "streak_count": 1
   },
-  "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "caa06cdae03dd6c9cb4f5094ab6f2ec47c24a779bc4e58273408f26dc1cb6231",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -579,16 +579,16 @@
     "last_value": "February 13, 2026",
     "streak_count": 1
   },
-  "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jovitz@agrbreeding.com",
     "streak_count": 1
   },
-  "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "b1e24e9721961fe199ad276e4044a6dfea5ac608e9507cebc0486e144df76e78",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -625,16 +625,16 @@
     "last_value": "February 14, 2026",
     "streak_count": 1
   },
-  "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "rotundawv@gmail.com",
     "streak_count": 1
   },
-  "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "624babd58543b9e18e51c1a05be5f679d820c1aa3e42dd1b9d2d407268c013a6",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -671,16 +671,16 @@
     "last_value": "February 13, 2026",
     "streak_count": 1
   },
-  "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "daveslack10@gmail.com",
     "streak_count": 1
   },
-  "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "09aa7113e995d84374cd19b42e46434bfed37adf01a497b2ce3aebe6a6d78d0c",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -717,16 +717,16 @@
     "last_value": "February 9, 2026",
     "streak_count": 1
   },
-  "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "ldanyluk50@gmail.com",
     "streak_count": 1
   },
-  "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "4cfba83f37ce65295b311cb4b679a1d39b9c8e7cd5fa72040b708392716ba9b0",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -763,16 +763,16 @@
     "last_value": "February 28, 2026",
     "streak_count": 1
   },
-  "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad:buyer_email:email_regex|email|body": {
-    "field": "buyer_email",
+  "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad:billing_email:email_regex|email|body": {
+    "field": "billing_email",
     "template_id": "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad",
     "extraction_signature": "email_regex|email|body",
     "source": "",
     "last_value": "-ccampwell@mac.com",
     "streak_count": 1
   },
-  "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "17aadda753ac3cf88f5d74228498005adfcf5486e8508fad84d2024059622aad",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -809,16 +809,16 @@
     "last_value": "February 22, 2026",
     "streak_count": 1
   },
-  "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "gjmatro@gmail.com",
     "streak_count": 1
   },
-  "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "25605a4e78f32fd5c1b6b2e3c523b6483c540e2872a37efd4d5a7ef93d9cd698",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -855,16 +855,16 @@
     "last_value": "February 22, 2026",
     "streak_count": 1
   },
-  "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "chuckpugh65@gmail.com",
     "streak_count": 1
   },
-  "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "0c66b74645dc6b7f2fec4e64ba4c9ad30d33f02701110f4571cc42eee6302f0f",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -901,16 +901,16 @@
     "last_value": "February 21, 2026",
     "streak_count": 2
   },
-  "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "kaymit@comcast.net",
     "streak_count": 2
   },
-  "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "c8c035b333e0de23f177f9513c1c4b95416d51af70b1a9ecbee8f3009f0ac49b",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -955,16 +955,16 @@
     "last_value": "February 21, 2026",
     "streak_count": 1
   },
-  "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "hslepak@gmail.com",
     "streak_count": 1
   },
-  "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "0f4a82bd8bb89ba778fa0acf4b877c814893933d0bdb386aeaa6c9e7046b1b2c",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1001,16 +1001,16 @@
     "last_value": "February 18, 2026",
     "streak_count": 1
   },
-  "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "sfreeemn@gmail.com",
     "streak_count": 1
   },
-  "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "c99e73379fdab117e15d5c69de6b05bc050873d4cbd18b727a84fa8ddf8eca46",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1047,16 +1047,16 @@
     "last_value": "April 28, 2026",
     "streak_count": 2
   },
-  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "tonyarenee11@yahoo.com",
     "streak_count": 2
   },
-  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "3020a5bafafc921d66739b1edc148ba4e6d69ef75ea81e446c66b8bbe1ac995d",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1093,16 +1093,16 @@
     "last_value": "December 1, 2025",
     "streak_count": 1
   },
-  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "wcsnipes@gmail.com",
     "streak_count": 1
   },
-  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "006e3246e90ec7958eadcb60a192f6886a7389217f34eb74a90e3b3dd8add49d",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1139,16 +1139,16 @@
     "last_value": "December 1, 2025",
     "streak_count": 1
   },
-  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "Brenda_pineda75@hotmail.com",
     "streak_count": 1
   },
-  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "1db2bbad2cf707a023ab95b41169c954d641310d6bd0f6774591df04b4213f40",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1185,16 +1185,16 @@
     "last_value": "December 5, 2025",
     "streak_count": 1
   },
-  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "fdss@mac.com",
     "streak_count": 1
   },
-  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "d7d1dffb837b10a850297b7245a5cef2e7c375b5c06b98bb37098ea5d06db59e",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1231,16 +1231,16 @@
     "last_value": "December 7, 2025",
     "streak_count": 1
   },
-  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "ninjac430@gmail.com",
     "streak_count": 1
   },
-  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "7970cdd4a8e3da7ee4b1c9a95b8106bd03b2da46ad8b2dcc9b4a345849fd7173",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1277,16 +1277,16 @@
     "last_value": "December 8, 2025",
     "streak_count": 1
   },
-  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jwolff2552@gmail.com",
     "streak_count": 1
   },
-  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "e64bbb3e70b9ea04daa4f7d62802ee29436fe9409fb424661d465ec0ff8f972d",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1323,16 +1323,16 @@
     "last_value": "December 15, 2025",
     "streak_count": 1
   },
-  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "cgovero1@msn.com",
     "streak_count": 1
   },
-  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "5af0340774c9997a06032c357a3b489c271d56cc3ae15b85d9beb0593efb024c",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1369,16 +1369,16 @@
     "last_value": "December 15, 2025",
     "streak_count": 1
   },
-  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "julieamerring@gmail.com",
     "streak_count": 1
   },
-  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "656b8e3f5ffc55d9c989b5ef5eba0b384212c82eaae894607e11836150f50a35",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1409,16 +1409,16 @@
     "last_value": "April 10, 2026",
     "streak_count": 23
   },
-  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_email:email_regex|none|body": {
-    "field": "buyer_email",
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_email:email_regex|none|body": {
+    "field": "billing_email",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "email_regex|none|body",
     "source": "",
     "last_value": "jenna_lowry@comcast.net",
     "streak_count": 23
   },
-  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:address_block_first_line|none|body": {
-    "field": "buyer_name",
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_name:address_block_first_line|none|body": {
+    "field": "billing_name",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "address_block_first_line|none|body",
     "source": "",
@@ -1454,19 +1454,19 @@
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|none",
     "source": "",
-    "last_value": "May 4, 2026",
-    "streak_count": 3
+    "last_value": "May 7, 2026",
+    "streak_count": 4
   },
-  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_email:email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body": {
-    "field": "buyer_email",
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_email:email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body": {
+    "field": "billing_email",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "email_regex|billing_email|billing_email|billing|personal_domain|person_like_local|billing_fallback|body",
     "source": "",
     "last_value": "livenow66@gmail.com",
     "streak_count": 4
   },
-  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
-    "field": "buyer_name",
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
+    "field": "billing_name",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body",
     "source": "",
@@ -1478,11 +1478,11 @@
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|none",
     "source": "",
-    "last_value": "May 5, 2026",
-    "streak_count": 50
+    "last_value": "May 7, 2026",
+    "streak_count": 92
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body": {
-    "field": "buyer_email",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body": {
+    "field": "billing_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|late_body",
     "source": "",
@@ -1497,8 +1497,8 @@
     "last_value": "May 5",
     "streak_count": 4
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body": {
-    "field": "buyer_name",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body": {
+    "field": "billing_name",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body",
     "source": "",
@@ -1513,13 +1513,13 @@
     "last_value": "April 28, 2026",
     "streak_count": 4
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
-    "field": "buyer_email",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
+    "field": "billing_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|body",
     "source": "",
-    "last_value": "kaunkel@sbcglobal.net",
-    "streak_count": 3
+    "last_value": "griffithsej@msn.com",
+    "streak_count": 4
   },
   "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:order_date:date_regex|body|order_summary_date|order|order|same_line|not_metadata|early_body|generic_unlabeled_date": {
     "field": "order_date",
@@ -1537,32 +1537,32 @@
     "last_value": "78451293",
     "streak_count": 1
   },
-  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:buyer_email:email_regex|buyer_email|customer_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
-    "field": "buyer_email",
+  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:billing_email:email_regex|buyer_email|customer_email|customer|business_or_custom_domain|person_like_local|primary_customer|body": {
+    "field": "billing_email",
     "template_id": "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8",
     "extraction_signature": "email_regex|buyer_email|customer_email|customer|business_or_custom_domain|person_like_local|primary_customer|body",
     "source": "",
     "last_value": "amelia.hart92@examplemail.com",
     "streak_count": 1
   },
-  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:buyer_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
-    "field": "buyer_name",
+  "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8:billing_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
+    "field": "billing_name",
     "template_id": "0ef994692aba0d4caafa8b78ebc6d40ab4687d920f523300990e6213f1aaf6e8",
     "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body",
     "source": "",
     "last_value": "Amelia Hart",
     "streak_count": 1
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body": {
-    "field": "buyer_email",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_email:email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body": {
+    "field": "billing_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|business_or_custom_domain|person_like_local|primary_customer|late_body",
     "source": "",
     "last_value": "diannalyons@comcast.net",
     "streak_count": 4
   },
-  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:buyer_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body": {
-    "field": "buyer_email",
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_email:email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body": {
+    "field": "billing_email",
     "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
     "extraction_signature": "email_regex|buyer_email|customer_contact_email|customer|personal_domain|person_like_local|primary_customer|body",
     "source": "",
@@ -1593,8 +1593,8 @@
     "last_value": "April 29, 2026",
     "streak_count": 1
   },
-  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:buyer_name:normalized_variant|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|normalized_variant|mid_body": {
-    "field": "buyer_name",
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_name:normalized_variant|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|normalized_variant|mid_body": {
+    "field": "billing_name",
     "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
     "extraction_signature": "normalized_variant|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|normalized_variant|mid_body",
     "source": "",
@@ -1608,5 +1608,61 @@
     "source": "",
     "last_value": "5815 Grand River Dr\nGRAND LEDGE , MI 48837-8959\nUnited States",
     "streak_count": 2
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:billing_name:replay": {
+    "field": "billing_name",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "replay",
+    "source": "",
+    "last_value": "Ryan Bowen",
+    "streak_count": 1
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:recipient_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body": {
+    "field": "recipient_name",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|early_body",
+    "source": "",
+    "last_value": "Sarah Swanson",
+    "streak_count": 33
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|generic_unlabeled_date": {
+    "field": "order_date",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|generic_unlabeled_date",
+    "source": "",
+    "last_value": "May 6, 2026",
+    "streak_count": 1
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:billing_email:email_regex|billing_email|billing_email|billing|business_or_custom_domain|person_like_local|billing_fallback|body": {
+    "field": "billing_email",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "email_regex|billing_email|billing_email|billing|business_or_custom_domain|person_like_local|billing_fallback|body",
+    "source": "",
+    "last_value": "mikeb@schumacherandbenner.com",
+    "streak_count": 3
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:recipient_name:address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body": {
+    "field": "recipient_name",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body",
+    "source": "",
+    "last_value": "Joshua Fletcher",
+    "streak_count": 2
+  },
+  "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52:phone_number:replay": {
+    "field": "phone_number",
+    "template_id": "ec6d5dda6e358f88b259eccf78df91ddffa127add53900f27f971d81e0766a52",
+    "extraction_signature": "replay",
+    "source": "",
+    "last_value": "484-614-7312",
+    "streak_count": 1
+  },
+  "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de:order_date:date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|generic_unlabeled_date+payment_date": {
+    "field": "order_date",
+    "template_id": "ce6d3d76e0a8ec260ce9e6171e189d9bd3bf545e285f08eb8edc6eeb966670de",
+    "extraction_signature": "date_header|metadata_header|metadata_fallback_date|metadata_date_header|metadata_header|metadata_header|header_only_no_safe_competitor|metadata_header|generic_unlabeled_date+payment_date",
+    "source": "",
+    "last_value": "May 7, 2026",
+    "streak_count": 1
   }
 }

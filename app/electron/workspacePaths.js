@@ -189,6 +189,37 @@ function migrateLegacyRecoveryFolder(root, legacyName, internalPath, log) {
   }
 }
 
+// ── Legacy support_reports/ → .spaila_internal/support_reports/ migration ───
+
+function migrateLegacySupportReports(root, internalReports, log) {
+  const legacy = path.join(root, "support_reports");
+  if (!fs.existsSync(legacy)) return;
+  try {
+    if (path.resolve(legacy) === path.resolve(internalReports)) return;
+    fs.mkdirSync(internalReports, { recursive: true });
+    let migrated = 0;
+    const walkAndMove = (src, dst) => {
+      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        const srcPath = path.join(src, entry.name);
+        const dstPath = path.join(dst, entry.name);
+        if (entry.isDirectory()) {
+          fs.mkdirSync(dstPath, { recursive: true });
+          walkAndMove(srcPath, dstPath);
+          try { fs.rmdirSync(srcPath); } catch (_) {}
+        } else if (!fs.existsSync(dstPath)) {
+          fs.renameSync(srcPath, dstPath);
+          migrated += 1;
+        }
+      }
+    };
+    walkAndMove(legacy, internalReports);
+    if (migrated) log(`[WORKSPACE] migrated ${migrated} support report(s) ${legacy} -> ${internalReports}`);
+    try { fs.rmdirSync(legacy); } catch (_) {}
+  } catch (error) {
+    log(`[WORKSPACE] could not migrate support_reports: ${error.message || error}`);
+  }
+}
+
 // ── Root JSON → .spaila_internal/ migration ──────────────────────────────────
 
 function migrateRootJsonFiles(paths, log) {
@@ -269,7 +300,7 @@ function _moveFolderContents(src, dst, log, logLines) {
 function moveWorkspace(oldRoot, newRoot, log) {
   const folders = [
     "Inbox", "inbox",    // include lowercase legacy so old installs migrate cleanly
-    "Orders", "Archive",
+    "Orders", "Archive", "archive", "Archived", "archived",
     "Backup", "Sent", "sent",
     "Docs", ".spaila_internal",
   ];
@@ -429,11 +460,64 @@ function ensureWorkspaceLayout(log = () => {}) {
     }
   }
 
+  // ── Merge "archived" / "Archived" → Archive (wrong name, not just wrong case) ─
+  // The case-rename block above only handles "archive" -> "Archive".
+  // "archived" is a distinct name that needs its contents merged in.
+  let rootEntriesAll;
+  try { rootEntriesAll = fs.readdirSync(paths.root, { withFileTypes: true }); } catch (_) { rootEntriesAll = []; }
+  const archivedFolders = rootEntriesAll.filter(
+    e => e.isDirectory() && e.name.toLowerCase() === "archived"
+  );
+  for (const archivedEntry of archivedFolders) {
+    const archivedPath  = path.join(paths.root, archivedEntry.name);
+    const canonicalPath = path.join(paths.root, "Archive");
+    fs.mkdirSync(canonicalPath, { recursive: true });
+    let merged = 0;
+    try {
+      for (const item of fs.readdirSync(archivedPath, { withFileTypes: true })) {
+        const src  = path.join(archivedPath, item.name);
+        const dest = path.join(canonicalPath, item.name);
+        if (fs.existsSync(dest)) {
+          if (item.isDirectory()) {
+            // Recurse-merge nested folder
+            const mergeDir = (s, d) => {
+              fs.mkdirSync(d, { recursive: true });
+              for (const child of fs.readdirSync(s, { withFileTypes: true })) {
+                const cs = path.join(s, child.name), cd = path.join(d, child.name);
+                if (!fs.existsSync(cd)) { fs.renameSync(cs, cd); merged += 1; }
+                else if (child.isDirectory()) mergeDir(cs, cd);
+              }
+              try { fs.rmdirSync(s); } catch (_) {}
+            };
+            mergeDir(src, dest);
+          } else {
+            log(`[WORKSPACE] skip merge ${item.name}: already in Archive/`);
+          }
+        } else {
+          fs.renameSync(src, dest);
+          merged += 1;
+        }
+      }
+      if (merged) log(`[WORKSPACE] merged ${merged} item(s) from ${archivedEntry.name}/ -> Archive/`);
+      try {
+        fs.rmdirSync(archivedPath);
+        log(`[WORKSPACE] removed empty folder: ${archivedEntry.name}/`);
+      } catch (_) {
+        log(`[WORKSPACE] ${archivedEntry.name}/ not empty after merge — left in place`);
+      }
+    } catch (error) {
+      log(`[WORKSPACE] could not merge ${archivedEntry.name}/ -> Archive/: ${error.message || error}`);
+    }
+  }
+
   // ── Recovery folder migration (Duplicates/Unmatched → internal) ──────────
   migrateLegacyRecoveryFolder(paths.root, "Duplicates", paths.Duplicates, log);
   migrateLegacyRecoveryFolder(paths.root, "duplicates", paths.Duplicates, log);
   migrateLegacyRecoveryFolder(paths.root, "Unmatched",  paths.Unmatched,  log);
   migrateLegacyRecoveryFolder(paths.root, "unmatched",  paths.Unmatched,  log);
+
+  // ── Legacy support_reports/ → .spaila_internal/support_reports/ migration ─
+  migrateLegacySupportReports(paths.root, paths.SupportReports, log);
 
   for (const legacyName of ["Processed", "processed"]) {
     const legacyPath = path.join(paths.root, legacyName);

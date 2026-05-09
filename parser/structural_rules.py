@@ -100,7 +100,7 @@ def classify_role(field: str, candidate: Any) -> str:
             return "item_price"
         return "unknown_price"
 
-    if field == "buyer_name":
+    if field in {"buyer_name", "billing_name", "recipient_name"}:
         if _LABELISH_NAME_RE.search(context):
             return "label_text"
         if _STORE_NAME_RE.search(value):
@@ -109,7 +109,7 @@ def classify_role(field: str, candidate: Any) -> str:
             return "shipping_method_text"
         return "person_name"
 
-    if field == "buyer_email":
+    if field in {"buyer_email", "billing_email"}:
         lowered = context.lower()
         if "billing" in lowered:
             return "billing_email"
@@ -119,7 +119,7 @@ def classify_role(field: str, candidate: Any) -> str:
             return "buyer_email"
         return "email_address"
 
-    if field == "shipping_address":
+    if field in {"shipping_address", "billing_address"}:
         lowered = context.lower()
         if "shipping address" in lowered or "ship to" in lowered:
             return "shipping_address_block"

@@ -14,21 +14,26 @@
 export const FIELD_DEFS = [
   // key                      label                    fixed   orders   parser   palette   hlEnabled  hlColor
   { key: "order_number",   defaultLabel: "Order #",          fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 100 },
-  { key: "buyer_name",     defaultLabel: "Buyer Name",       fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
-  { key: "price",          defaultLabel: "Price",            fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 75  },
+  { key: "order_date",     defaultLabel: "Order Date",       fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
+  { key: "ship_by",        defaultLabel: "Ship By",          fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
+  { key: "billing_name",   defaultLabel: "Billing Name",     fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
+  { key: "billing_address", defaultLabel: "Billing Address", fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 170 },
+  { key: "billing_email",  defaultLabel: "Email",    fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 150 },
+  { key: "phone_number",   defaultLabel: "Phone Number",     fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 130 },
+  { key: "recipient_name", defaultLabel: "Shipping Name",    fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
+  { key: "shipping_address", defaultLabel: "Shipping Address", fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
   { key: "quantity",       defaultLabel: "Qty",              fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 50  },
+  { key: "price",          defaultLabel: "Price",            fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 75  },
   { key: "custom_1",       defaultLabel: "Line 1",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
   { key: "custom_2",       defaultLabel: "Line 2",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
   { key: "custom_3",       defaultLabel: "Line 3",           fixed: false, defaultVisibleInOrders: true,  defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
   { key: "custom_4",       defaultLabel: "Line 4",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
   { key: "custom_5",       defaultLabel: "Line 5",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
   { key: "custom_6",       defaultLabel: "Line 6",           fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: true,  defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 140 },
-  { key: "shipping_address", defaultLabel: "Shipping Address", fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
-  { key: "order_date",     defaultLabel: "Order Date",       fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
-  { key: "ship_by",        defaultLabel: "Ship By",          fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 90  },
-  { key: "buyer_email",    defaultLabel: "Buyer Email",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 150 },
   { key: "gift_message",   defaultLabel: "Gift Message",     fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: true,  defaultHighlightColor: "#fca5a5"             },
   { key: "order_notes",    defaultLabel: "Order Notes",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: true,  defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null               },
+  { key: "buyer_name",     defaultLabel: "Buyer Name",       fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: false, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 160 },
+  { key: "buyer_email",    defaultLabel: "Buyer Email",      fixed: false, defaultVisibleInOrders: false, defaultVisibleInParser: false, defaultPaletteEnabled: false, defaultHighlightEnabled: false, defaultHighlightColor: null,      defaultWidth: 150 },
 ];
 
 /**
@@ -63,20 +68,21 @@ export function contrastColor(hex) {
 }
 
 const STORAGE_KEY = "spaila_field_config";
+const HIDDEN_LEGACY_FIELD_KEYS = new Set(["buyer_name", "buyer_email"]);
 
 /** Read persisted config from localStorage, merged with defaults. */
 export function loadFieldConfig() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const saved = raw ? JSON.parse(raw) : {};
-    return FIELD_DEFS.map((def) => {
+    return FIELD_DEFS.filter((def) => !HIDDEN_LEGACY_FIELD_KEYS.has(def.key)).map((def) => {
       const s = saved[def.key] ?? {};
       return {
         key:               def.key,
         label:             s.label             ?? def.defaultLabel,
         fixed:             def.fixed,
-        visibleInOrders:   s.visibleInOrders   ?? s.visible ?? def.defaultVisibleInOrders,
-        visibleInParser:   s.visibleInParser   ?? def.defaultVisibleInParser,
+        visibleInOrders:   HIDDEN_LEGACY_FIELD_KEYS.has(def.key) ? false : (s.visibleInOrders   ?? s.visible ?? def.defaultVisibleInOrders),
+        visibleInParser:   HIDDEN_LEGACY_FIELD_KEYS.has(def.key) ? false : (s.visibleInParser   ?? def.defaultVisibleInParser),
         paletteEnabled:    s.paletteEnabled    ?? def.defaultPaletteEnabled,
         highlight: {
           enabled: s.highlight?.enabled ?? def.defaultHighlightEnabled,
@@ -86,10 +92,10 @@ export function loadFieldConfig() {
       };
     });
   } catch {
-    return FIELD_DEFS.map((def) => ({
+    return FIELD_DEFS.filter((def) => !HIDDEN_LEGACY_FIELD_KEYS.has(def.key)).map((def) => ({
       key: def.key, label: def.defaultLabel, fixed: def.fixed,
-      visibleInOrders: def.defaultVisibleInOrders,
-      visibleInParser: def.defaultVisibleInParser,
+      visibleInOrders: HIDDEN_LEGACY_FIELD_KEYS.has(def.key) ? false : def.defaultVisibleInOrders,
+      visibleInParser: HIDDEN_LEGACY_FIELD_KEYS.has(def.key) ? false : def.defaultVisibleInParser,
       paletteEnabled:  def.defaultPaletteEnabled,
       highlight: {
         enabled: def.defaultHighlightEnabled,
@@ -227,7 +233,7 @@ const COL_ORDER_KEY = "spaila_column_order";
  * Default order: status → order_info → … field keys …
  */
 const VIRTUAL_COLUMN_KEYS = ["status", "order_info"];
-const ALL_COLUMN_KEYS = [...VIRTUAL_COLUMN_KEYS, ...FIELD_DEFS.map((d) => d.key)];
+const ALL_COLUMN_KEYS = [...VIRTUAL_COLUMN_KEYS, ...FIELD_DEFS.filter((d) => !HIDDEN_LEGACY_FIELD_KEYS.has(d.key)).map((d) => d.key)];
 
 export function defaultColumnOrder() {
   return [...ALL_COLUMN_KEYS];
@@ -250,7 +256,7 @@ export function loadColumnOrder() {
     }
 
     // Append any new FIELD_DEF keys at the end
-    const missingFields = FIELD_DEFS.map((d) => d.key).filter((k) => !valid.includes(k));
+    const missingFields = FIELD_DEFS.map((d) => d.key).filter((k) => !HIDDEN_LEGACY_FIELD_KEYS.has(k) && !valid.includes(k));
     return [...valid, ...missingFields];
   } catch {
     return defaultColumnOrder();
@@ -343,7 +349,14 @@ export function savePrintConfig(config) {
 // ── Parser field order ────────────────────────────────────────────────────
 const PARSER_FIELD_ORDER_KEY = "spaila_parser_field_order";
 
-const _PARSER_ORDER_SECTION = ["buyer_name", "shipping_address", "order_number", "quantity", "order_date", "ship_by", "buyer_email"];
+const _PARSER_ORDER_SECTION = [
+  "order_number",
+  "order_date",
+  "ship_by",
+  "billing_name", "billing_address", "billing_email", "phone_number",
+  "recipient_name", "shipping_address",
+  "quantity",
+];
 const _PARSER_ITEM_SECTION  = ["price", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "order_notes"];
 const _ALL_PARSER_KEYS = [..._PARSER_ORDER_SECTION, ..._PARSER_ITEM_SECTION];
 
@@ -382,15 +395,15 @@ const VIEW_CONFIG_KEY = "spaila_view_config";
 export const SEARCH_FIELD_GROUPS = [
   {
     label: "Core",
-    keys: ["order_number", "buyer_name", "price", "quantity"],
+    keys: ["order_number", "billing_name", "recipient_name", "quantity", "price"],
   },
   {
     label: "Details",
-    keys: ["custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "order_date", "ship_by"],
+    keys: ["order_date", "ship_by", "billing_address", "billing_email", "phone_number", "shipping_address", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6"],
   },
   {
     label: "System",
-    keys: ["buyer_email", "shipping_address", "gift_message", "order_notes"],
+    keys: ["gift_message", "order_notes"],
   },
 ];
 
@@ -398,7 +411,7 @@ const ALL_SEARCHABLE_KEYS = SEARCH_FIELD_GROUPS.flatMap((g) => g.keys);
 
 /** Defaults: most core + detail fields on, system off. */
 const DEFAULT_SEARCHABLE = Object.fromEntries(
-  ALL_SEARCHABLE_KEYS.map((k) => [k, ["order_number", "buyer_name", "custom_1", "custom_2", "custom_3"].includes(k)])
+  ALL_SEARCHABLE_KEYS.map((k) => [k, ["order_number", "billing_name", "recipient_name", "custom_1", "custom_2", "custom_3"].includes(k)])
 );
 
 export const DEFAULT_VIEW_CONFIG = {
@@ -542,7 +555,7 @@ export const DEFAULT_SHOP_CONFIG = {
   /** Absolute path for archived order folders; empty = backend default (workspace Archive folder) */
   orderArchiveRoot: "",
   saveFolder:    DEFAULT_SAVE_FOLDER,
-  showEmailIcon: true, // show ✉ icon in buyer_name cells
+  showEmailIcon: true, // show email compose icon in status column cells
   sender_name: "",
   smtpEmailAddress: "",
   smtpHost: "",
@@ -671,7 +684,7 @@ export const DEFAULT_EMAIL_TEMPLATES = [
     name: "Default",
     subject_template: "Order {order_number}",
     body_template:
-      "Hi {buyer_name},\n\nThank you for your order!\n\nOrder: {order_number}\nDate: {order_date}\nShip by: {ship_by}\n\nBest regards",
+      "Hi {billing_first_name},\n\nThank you for your order!\n\nOrder: {order_number}\nDate: {order_date}\nShip by: {ship_by}\n\nBest regards",
     condition: null,
     attachment_mode: "none",
     attachment_extensions: [],
@@ -786,9 +799,17 @@ function looksLikeUrl(value) {
     || /^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(normalized);
 }
 
+function firstToken(value) {
+  return normalizeFieldValue(value).split(/\s+/).find(Boolean) || "";
+}
+
 function replaceTemplateVariables(tmpl, row, labelMap, warnings) {
-  return String(tmpl || "").replace(/\{(\w+)\}/g, (_match, key) => {
-    const raw = normalizeFieldValue(row[key]);
+  return String(tmpl || "").replace(/\{\{?(\w+)\}?\}/g, (_match, key) => {
+    const derived = {
+      billing_first_name: firstToken(row.billing_name || row.buyer_name),
+      recipient_first_name: firstToken(row.recipient_name || row.shipping_name),
+    };
+    const raw = normalizeFieldValue(Object.prototype.hasOwnProperty.call(derived, key) ? derived[key] : row[key]);
     if (!raw) {
       const label = labelMap[key] || key;
       warnings.push(`Missing "${label}"`);
@@ -927,8 +948,10 @@ export function renderEmailTemplatePreviewHtml(tmpl, row, labelMap = {}) {
 
 /** All field keys usable as {variables} in templates. */
 export const EMAIL_VARIABLE_KEYS = [
-  "order_number", "buyer_name", "buyer_email", "order_date", "ship_by",
-  "price", "quantity", "shipping_address", "platform",
+  "order_number", "order_date", "ship_by",
+  "billing_name", "billing_first_name", "billing_address", "billing_email", "phone_number",
+  "recipient_name", "recipient_first_name", "shipping_address",
+  "quantity", "price", "platform",
   "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6",
   "order_notes", "gift_message",
 ];

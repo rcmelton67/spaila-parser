@@ -14,9 +14,10 @@ function emptyDraft(activeTab) {
     gift_message: "",
     is_gift: false,
     gift_wrap: false,
-    buyer_name: "",
-    buyer_email: "",
-    shipping_name: "",
+    billing_name: "",
+    billing_email: "",
+    billing_address: "",
+    recipient_name: "",
     shipping_address: "",
     phone_number: "",
     pet_name: "",
@@ -131,32 +132,6 @@ export default function NewOrderModal({ activeTab = "active", layout = null, onC
             <div className="new-order-field">
               <input
                 style={inputStyle}
-                placeholder={L("buyer_name", "Buyer Name")}
-                value={form.buyer_name}
-                onChange={(e) => set("buyer_name", e.target.value)}
-              />
-            </div>
-            <div className="new-order-field">
-              <input
-                style={inputStyle}
-                placeholder={L("shipping_name", "Shipping Name")}
-                value={form.shipping_name}
-                onChange={(e) => set("shipping_name", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="new-order-field">
-            <input
-              style={inputStyle}
-              placeholder={L("buyer_email", "Buyer Email")}
-              value={form.buyer_email}
-              onChange={(e) => set("buyer_email", e.target.value)}
-            />
-          </div>
-          <div className="new-order-row2">
-            <div className="new-order-field">
-              <input
-                style={inputStyle}
                 placeholder={L("order_date", "Order Date")}
                 value={form.order_date}
                 onChange={(e) => set("order_date", e.target.value)}
@@ -171,21 +146,107 @@ export default function NewOrderModal({ activeTab = "active", layout = null, onC
               />
             </div>
           </div>
-          <div className="new-order-row2">
-            <div className="new-order-field">
+
+          <div className="operational-form-divider" aria-hidden="true" />
+
+          <div className="new-order-field">
+            <input
+              style={inputStyle}
+              placeholder={L("billing_name", "Billing Name")}
+              value={form.billing_name}
+              onChange={(e) => set("billing_name", e.target.value)}
+            />
+          </div>
+          <div className="new-order-field">
+            <textarea
+              style={{ ...textareaStyle, minHeight: 72, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              placeholder={L("billing_address", "Billing Address")}
+              value={form.billing_address}
+              onChange={(e) => set("billing_address", e.target.value)}
+            />
+          </div>
+          <div className="new-order-field">
+            <input
+              style={inputStyle}
+              placeholder={L("billing_email", "Email")}
+              value={form.billing_email}
+              onChange={(e) => set("billing_email", e.target.value)}
+            />
+          </div>
+          <div className="new-order-field">
+            <input
+              style={inputStyle}
+              placeholder={L("phone_number", "Phone Number")}
+              value={form.phone_number}
+              onChange={(e) => set("phone_number", e.target.value)}
+            />
+          </div>
+
+          <div className="operational-form-divider" aria-hidden="true" />
+
+          <div className="new-order-field">
+            <input
+              style={inputStyle}
+              placeholder={L("recipient_name", "Shipping Name")}
+              value={form.recipient_name}
+              onChange={(e) => set("recipient_name", e.target.value)}
+            />
+          </div>
+          <div className="new-order-field">
+            <textarea
+              style={{ ...textareaStyle, minHeight: 72, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              placeholder={L("shipping_address", "Shipping Address")}
+              value={form.shipping_address}
+              onChange={(e) => set("shipping_address", e.target.value)}
+            />
+          </div>
+
+          <div className="operational-form-divider" aria-hidden="true" />
+
+          <div className="new-order-checkboxes">
+            <label className="new-order-checkbox-label">
               <input
-                style={inputStyle}
-                placeholder={L("price", "Price")}
-                value={form.price}
-                onChange={(e) => set("price", e.target.value)}
+                type="checkbox"
+                checked={form.is_gift}
+                onChange={(e) => set("is_gift", e.target.checked)}
               />
-            </div>
+              <span>Gift</span>
+            </label>
+            <label className="new-order-checkbox-label">
+              <input
+                type="checkbox"
+                checked={form.gift_wrap}
+                onChange={(e) => set("gift_wrap", e.target.checked)}
+              />
+              <span>Gift wrap</span>
+            </label>
+          </div>
+          <div className="new-order-field">
+            <textarea
+              style={{ ...textareaStyle, minHeight: 56 }}
+              placeholder={L("gift_message", "Gift Message")}
+              value={form.gift_message}
+              onChange={(e) => set("gift_message", e.target.value)}
+            />
+          </div>
+
+          <div className="operational-form-divider" aria-hidden="true" />
+
+          <div className="new-order-row2">
             <div className="new-order-field">
               <input
                 style={inputStyle}
                 placeholder={L("quantity", "Quantity")}
                 value={form.quantity}
                 onChange={(e) => set("quantity", e.target.value)}
+              />
+            </div>
+            <div className="new-order-field">
+              <input
+                style={inputStyle}
+                placeholder={L("price", "Price")}
+                value={form.price}
+                onChange={(e) => set("price", e.target.value)}
               />
             </div>
           </div>
@@ -201,53 +262,11 @@ export default function NewOrderModal({ activeTab = "active", layout = null, onC
           ))}
           <div className="new-order-field">
             <textarea
-              style={{ ...textareaStyle, minHeight: 60 }}
-              placeholder={L("shipping_address", "Shipping Address")}
-              value={form.shipping_address}
-              onChange={(e) => set("shipping_address", e.target.value)}
-            />
-          </div>
-          <div className="new-order-field">
-            <input
-              style={inputStyle}
-              placeholder={L("phone_number", "Phone Number")}
-              value={form.phone_number}
-              onChange={(e) => set("phone_number", e.target.value)}
-            />
-          </div>
-          <div className="new-order-field">
-            <textarea
               style={{ ...textareaStyle, minHeight: 56 }}
               placeholder={L("order_notes", "Order Notes")}
               value={form.order_notes}
               onChange={(e) => set("order_notes", e.target.value)}
             />
-          </div>
-          <div className="new-order-field">
-            <textarea
-              style={{ ...textareaStyle, minHeight: 56 }}
-              placeholder={L("gift_message", "Gift Message")}
-              value={form.gift_message}
-              onChange={(e) => set("gift_message", e.target.value)}
-            />
-          </div>
-          <div className="new-order-checkboxes">
-            <label className="new-order-checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.is_gift}
-                onChange={(e) => set("is_gift", e.target.checked)}
-              />
-              <span>Mark as gift</span>
-            </label>
-            <label className="new-order-checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.gift_wrap}
-                onChange={(e) => set("gift_wrap", e.target.checked)}
-              />
-              <span>Gift wrap</span>
-            </label>
           </div>
         </div>
 

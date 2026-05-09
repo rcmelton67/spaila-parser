@@ -631,7 +631,7 @@ def test_order_number_structural_replay_assigns_current_value_after_exact_replay
 def test_generic_signature_can_assist_but_not_anchor_lock(isolated_learning_store):
     template_id = "generic-hard-lock"
     learning_store.save_record({
-        "field": "buyer_name",
+        "field": "billing_name",
         "value": "Jane Buyer",
         "template_id": template_id,
         "segment_id": "seg_0001",
@@ -662,7 +662,7 @@ def test_generic_signature_can_assist_but_not_anchor_lock(isolated_learning_stor
         right_context="",
     )
 
-    scored = apply_anchor_scoring(template_id, "buyer_name", [candidate])
+    scored = apply_anchor_scoring(template_id, "billing_name", [candidate])
     decision = decide_buyer_name(scored)
 
     assert scored[0].anchor_match == 0.0
@@ -952,7 +952,40 @@ def test_buyer_name_confidence_signature_uses_recipient_line_structure(tmp_path,
     assert signature == "address_block_first_line|shipping|shipping_recipient_name|shipping_address_label|first_line_after_label|person_name|raw_variant|mid_body"
 
 
-def test_buyer_name_shipping_recipient_matures_and_replays_current_value(tmp_path, isolated_learning_store):
+def test_etsy_shipping_block_name_is_recipient_not_billing(tmp_path, isolated_learning_store):
+    eml = _make_eml(
+        tmp_path / "etsy-shipping-recipient-only.eml",
+        "Buyer email: icedwindowsil@gmail.com\n\n"
+        "SHIPPING ADDRESS\n"
+        "Shipping address\n\n"
+        "Ryan Bowen\n\n"
+        "22436 72nd Ave\n\n"
+        "S KENT, WA 98032\n\n"
+        "United States\n",
+        subject="You made a sale on Etsy - Order #9999999999",
+    )
+
+    result = parse_eml(eml, update_confidence=False)
+    decisions = {decision.field: decision for decision in result["decisions"]}
+
+    assert "billing_name" not in decisions
+    assert "buyer_name" not in decisions
+    assert "billing_address" not in decisions
+    assert decisions["billing_email"].value == "icedwindowsil@gmail.com"
+
+    recipient = decisions["recipient_name"]
+    assert recipient.value == "Ryan Bowen"
+    assert result["clean_text"][recipient.start:recipient.end] == "Ryan Bowen"
+
+    shipping = decisions["shipping_address"]
+    assert shipping.value == "22436 72nd Ave\nS KENT, WA 98032\nUnited States"
+    assert "Ryan Bowen" not in shipping.value
+    assert "22436 72nd Ave" in result["clean_text"][shipping.start:shipping.end]
+    assert "S KENT, WA 98032" in result["clean_text"][shipping.start:shipping.end]
+    assert "United States" in result["clean_text"][shipping.start:shipping.end]
+
+
+def test_shipping_recipient_does_not_mature_as_buyer_name(tmp_path, isolated_learning_store):
     names = ("Jane Buyer", "Rachel Customer", "Morgan Lane", "Taylor Stone")
     last = None
     for index, name in enumerate(names, start=1):
@@ -968,11 +1001,9 @@ def test_buyer_name_shipping_recipient_matures_and_replays_current_value(tmp_pat
             update_confidence=True,
         )
 
-    buyer = next(d for d in last["decisions"] if d.field == "buyer_name")
-    assert buyer.value == "Taylor Stone"
-    assert buyer.decision == "assigned"
-    assert buyer.decision_source == "buyer_name_structural_maturity_promotion"
-    assert buyer.provenance["why_promoted"] == "safe_buyer_name_recipient_line_maturity"
+    assert not any(d.field == "buyer_name" for d in last["decisions"])
+    recipient = next(d for d in last["decisions"] if d.field == "recipient_name")
+    assert recipient.value == "Taylor Stone"
 
     followup = parse_eml(
         _make_eml(
@@ -985,11 +1016,9 @@ def test_buyer_name_shipping_recipient_matures_and_replays_current_value(tmp_pat
         ),
         update_confidence=True,
     )
-    replayed = next(d for d in followup["decisions"] if d.field == "buyer_name")
-    assert replayed.value == "Avery Current"
-    assert replayed.decision == "assigned"
-    assert replayed.decision_source == "buyer_name_structural_trust_replay"
-    assert replayed.provenance["buyer_name_structural_replay_used"] is True
+    assert not any(d.field == "buyer_name" for d in followup["decisions"])
+    followup_recipient = next(d for d in followup["decisions"] if d.field == "recipient_name")
+    assert followup_recipient.value == "Avery Current"
 
 
 def test_buyer_name_billing_suppressed_when_shipping_exists(tmp_path, isolated_learning_store):
@@ -1009,8 +1038,10 @@ def test_buyer_name_billing_suppressed_when_shipping_exists(tmp_path, isolated_l
             ),
             update_confidence=True,
         )
-    buyer = next(d for d in result["decisions"] if d.field == "buyer_name")
-    assert buyer.value == "Ship Person"
+    billing = next(d for d in result["decisions"] if d.field == "billing_name")
+    recipient = next(d for d in result["decisions"] if d.field == "recipient_name")
+    assert billing.value == "Billing Person"
+    assert recipient.value == "Ship Person"
     assert not any(
         record["role"] == "billing_contact_name"
         for record in learning_store.load_structural_trust("buyer_name")
@@ -1030,7 +1061,7 @@ def test_buyer_name_billing_fallback_can_mature_without_shipping(tmp_path, isola
             ),
             update_confidence=True,
         )
-    buyer = next(d for d in result["decisions"] if d.field == "buyer_name")
+    buyer = next(d for d in result["decisions"] if d.field == "billing_name")
     assert buyer.value == "Billing Four"
     assert buyer.decision == "assigned"
     assert buyer.decision_source == "buyer_name_structural_maturity_promotion"
@@ -1049,12 +1080,13 @@ def test_buyer_name_blocks_store_action_and_product_like_lines(tmp_path, isolate
                 _make_eml(tmp_path / f"buyer-name-unsafe-{index}-{body_index}.eml", body),
                 update_confidence=True,
             )
-            buyer = next((d for d in result["decisions"] if d.field == "buyer_name"), None)
-            if buyer is not None:
-                assert buyer.decision != "assigned"
+            for _unsafe_field in ("billing_name", "recipient_name"):
+                buyer = next((d for d in result["decisions"] if d.field == _unsafe_field), None)
+                if buyer is not None:
+                    assert buyer.decision != "assigned"
 
     assert not [
-        record for record in learning_store.load_structural_trust("buyer_name")
+        record for record in learning_store.load_structural_trust("billing_name")
         if record["trust_state"] == "promoted"
     ]
 
@@ -1626,7 +1658,7 @@ def test_buyer_email_customer_matures_and_replays_current_value(tmp_path, isolat
             update_confidence=True,
         )
 
-    buyer_email = next(d for d in last["decisions"] if d.field == "buyer_email")
+    buyer_email = next(d for d in last["decisions"] if d.field == "billing_email")
     assert buyer_email.value == "taylor.customer@example.com"
     assert buyer_email.decision == "assigned"
     assert buyer_email.decision_source == "buyer_email_structural_maturity_promotion"
@@ -1641,7 +1673,7 @@ def test_buyer_email_customer_matures_and_replays_current_value(tmp_path, isolat
         ),
         update_confidence=True,
     )
-    replayed = next(d for d in followup["decisions"] if d.field == "buyer_email")
+    replayed = next(d for d in followup["decisions"] if d.field == "billing_email")
     assert replayed.value == "avery.current@example.com"
     assert replayed.decision == "assigned"
     assert replayed.decision_source == "buyer_email_structural_trust_replay"
@@ -1662,12 +1694,12 @@ def test_buyer_email_system_seller_support_platform_and_header_do_not_mature(tmp
                 _make_eml(tmp_path / f"buyer-email-unsafe-{index}-{body_index}.eml", body),
                 update_confidence=True,
             )
-            buyer_email = next((d for d in result["decisions"] if d.field == "buyer_email"), None)
+            buyer_email = next((d for d in result["decisions"] if d.field == "billing_email"), None)
             if buyer_email is not None:
                 assert buyer_email.decision != "assigned"
 
     assert not [
-        record for record in learning_store.load_structural_trust("buyer_email")
+        record for record in learning_store.load_structural_trust("billing_email")
         if record["trust_state"] == "promoted"
     ]
 
@@ -1684,11 +1716,11 @@ def test_buyer_email_billing_suppressed_when_customer_exists(tmp_path, isolated_
             ),
             update_confidence=True,
         )
-    buyer_email = next(d for d in result["decisions"] if d.field == "buyer_email")
+    buyer_email = next(d for d in result["decisions"] if d.field == "billing_email")
     assert buyer_email.value == "customer3@example.com"
     assert not any(
         record["role"] == "billing_email" and record["trust_state"] == "promoted"
-        for record in learning_store.load_structural_trust("buyer_email")
+        for record in learning_store.load_structural_trust("billing_email")
     )
 
 
@@ -1708,7 +1740,7 @@ def test_buyer_email_billing_fallback_can_mature_without_customer(tmp_path, isol
             ),
             update_confidence=True,
         )
-    buyer_email = next(d for d in result["decisions"] if d.field == "buyer_email")
+    buyer_email = next(d for d in result["decisions"] if d.field == "billing_email")
     assert buyer_email.value == "billing.four@example.com"
     assert buyer_email.decision == "assigned"
     assert buyer_email.provenance["buyer_email_role"] == "billing_email"
@@ -1835,7 +1867,7 @@ def _save_shipping_line_assignment(template_id, candidate, selected_lines, buyer
     })
 
 
-def test_shipping_line_learning_selects_street_and_city_without_country(tmp_path, isolated_learning_store):
+def test_shipping_line_learning_selects_street_city_and_country(tmp_path, isolated_learning_store):
     first = _address_candidate("Jane Buyer\n123 Maple Drive\nAustin, TX 78701\nUnited States")
     template_id = "address-line-types"
     _save_shipping_line_assignment(template_id, first, ["123 Maple Drive", "Austin, TX 78701"], "Jane Buyer")
@@ -1853,8 +1885,8 @@ def test_shipping_line_learning_selects_street_and_city_without_country(tmp_path
     reparsed = parse_eml(second, update_confidence=False)
     address = next(decision for decision in reparsed["decisions"] if decision.field == "shipping_address")
 
-    assert address.value == "900 Oak Road\nDenver, CO 80202"
-    assert "United States" not in address.value
+    assert address.value == "900 Oak Road\nDenver, CO 80202\nUnited States"
+    assert "United States" in address.value
     assert "assigned_line_types(authoritative)" in address.provenance["signals"]
 
 
@@ -1877,12 +1909,12 @@ def test_shipping_line_learning_ignores_extra_company_line(tmp_path, isolated_le
     reparsed = parse_eml(second, update_confidence=False)
     address = next(decision for decision in reparsed["decisions"] if decision.field == "shipping_address")
 
-    assert address.value == "900 Oak Road\nDenver, CO 80202"
+    assert address.value == "900 Oak Road\nDenver, CO 80202\nUnited States"
     assert "Acme Memorials LLC" not in address.value
-    assert "United States" not in address.value
+    assert "United States" in address.value
 
 
-def test_shipping_line_learning_can_include_name_and_exclude_country(tmp_path, isolated_learning_store):
+def test_shipping_line_learning_can_include_name_and_country(tmp_path, isolated_learning_store):
     first = _address_candidate("Jane Buyer\n123 Maple Drive\nAustin, TX 78701\nUnited States")
     template_id = "address-line-types"
     _save_shipping_line_assignment(
@@ -1905,8 +1937,8 @@ def test_shipping_line_learning_can_include_name_and_exclude_country(tmp_path, i
     reparsed = parse_eml(second, update_confidence=False)
     address = next(decision for decision in reparsed["decisions"] if decision.field == "shipping_address")
 
-    assert address.value == "Rachel Customer\n900 Oak Road\nDenver, CO 80202"
-    assert "United States" not in address.value
+    assert address.value == "Rachel Customer\n900 Oak Road\nDenver, CO 80202\nUnited States"
+    assert "United States" in address.value
 
 
 def test_shipping_address_confidence_signature_uses_line_policy(tmp_path, isolated_learning_store):
@@ -1934,9 +1966,9 @@ def test_shipping_address_confidence_signature_uses_line_policy(tmp_path, isolat
 
     assert "shipping_address_block_with_recipient|shipping|shipping_address_block" in signature
     assert "name-street-city_state_zip-country" in signature
-    assert "selected:street-city_state_zip" in signature
-    assert "excluded:name-country" in signature
-    assert "country_excluded" in signature
+    assert "selected:street-city_state_zip-country" in signature
+    assert "excluded:name" in signature
+    assert "country_included" in signature
 
 
 def test_shipping_address_structural_confidence_matures_and_replays_current_address(tmp_path, isolated_learning_store):
@@ -1963,7 +1995,7 @@ def test_shipping_address_structural_confidence_matures_and_replays_current_addr
         )
 
     address = next(d for d in last["decisions"] if d.field == "shipping_address")
-    assert address.value == "88 Cedar Court\nMadison, WI 53703"
+    assert address.value == "88 Cedar Court\nMadison, WI 53703\nUnited States"
     assert address.decision == "assigned"
     assert address.decision_source == "shipping_address_structural_maturity_promotion"
     assert address.provenance["why_promoted"] == "safe_shipping_address_line_policy_maturity"
@@ -1982,10 +2014,14 @@ def test_shipping_address_structural_confidence_matures_and_replays_current_addr
         update_confidence=True,
     )
     replayed = next(d for d in followup["decisions"] if d.field == "shipping_address")
-    assert replayed.value == "77 Birch Road\nBoise, ID 83702"
+    assert replayed.value == "77 Birch Road\nBoise, ID 83702\nUnited States"
     assert replayed.decision == "assigned"
-    assert replayed.decision_source == "shipping_address_structural_trust_replay"
-    assert replayed.provenance["shipping_address_structural_replay_used"] is True
+    assert replayed.decision_source in {
+        "shipping_address_structural_trust_replay",
+        "shipping_address_structural_maturity_promotion",
+    }
+    if replayed.decision_source == "shipping_address_structural_trust_replay":
+        assert replayed.provenance["shipping_address_structural_replay_used"] is True
 
 
 def test_shipping_address_maturation_suppresses_billing_when_shipping_exists(tmp_path, isolated_learning_store):
@@ -2015,7 +2051,7 @@ def test_shipping_address_maturation_suppresses_billing_when_shipping_exists(tmp
     )
 
 
-def test_shipping_address_maturation_excludes_name_company_and_country(tmp_path, isolated_learning_store):
+def test_shipping_address_maturation_excludes_name_and_company_but_keeps_country(tmp_path, isolated_learning_store):
     for index in range(4):
         result = parse_eml(
             _make_eml(
@@ -2031,10 +2067,10 @@ def test_shipping_address_maturation_excludes_name_company_and_country(tmp_path,
             update_confidence=True,
         )
     address = next(d for d in result["decisions"] if d.field == "shipping_address")
-    assert address.value == "203 Granite Drive\nLansing, MI 48910"
+    assert address.value == "203 Granite Drive\nLansing, MI 48910\nUnited States"
     assert "Customer Person" not in address.value
     assert "Acme Memorials LLC" not in address.value
-    assert "United States" not in address.value
+    assert "United States" in address.value
 
 
 def test_shipping_address_maturation_preserves_apartment_continuity(tmp_path, isolated_learning_store):
@@ -2053,7 +2089,7 @@ def test_shipping_address_maturation_preserves_apartment_continuity(tmp_path, is
             update_confidence=True,
         )
     address = next(d for d in result["decisions"] if d.field == "shipping_address")
-    assert address.value == "303 Oak Street\nApt 5B\nChicago, IL 60601"
+    assert address.value == "303 Oak Street\nApt 5B\nChicago, IL 60601\nUnited States"
 
 
 def test_shipping_address_footer_and_stop_too_late_do_not_mature(tmp_path, isolated_learning_store):

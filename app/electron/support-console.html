@@ -308,6 +308,7 @@ details.accordion > .accordion-body {
             <option value="open">Open</option>
             <option value="investigating">Investigating</option>
             <option value="resolved">Resolved</option>
+            <option value="escalated">Escalated</option>
           </select>
         </div>
         <div class="filter-row">
@@ -396,6 +397,22 @@ function typeLabel(t) {
   return { bug_report: "Bug", support_request: "Support", feature_request: "Feature", billing_help: "Billing" }[t] || t;
 }
 
+function ticketLabel(r) {
+  return r.ticket_id || (r.report_id ? r.report_id.slice(0, 8) : "No ticket");
+}
+
+function billingBadges(flags = {}) {
+  const badges = [];
+  if (flags.payment_failed) badges.push(`<span class="badge badge-email-fail">payment failed</span>`);
+  if (flags.billing_retry) badges.push(`<span class="badge badge-high">billing retry</span>`);
+  if (flags.trial_expired) badges.push(`<span class="badge badge-email-fail">trial expired</span>`);
+  if (flags.canceled) badges.push(`<span class="badge badge-email-off">canceled</span>`);
+  if (flags.subscription_locked) badges.push(`<span class="badge badge-email-fail">locked</span>`);
+  if (flags.trial_active) badges.push(`<span class="badge badge-low">trial active</span>`);
+  if (flags.active && !badges.length) badges.push(`<span class="badge badge-email-ok">active</span>`);
+  return badges.join("");
+}
+
 function showToast(msg, dur = 2400) {
   const el = document.getElementById("toast");
   el.textContent = msg;
@@ -460,11 +477,12 @@ function applyFilters() {
 
   state.filtered = state.reports.filter((r) => {
     if (severity !== "all" && r.severity !== severity) return false;
-    if (status !== "all"   && r.status   !== status)   return false;
+    if (status === "escalated" && !r.escalated) return false;
+    if (status !== "all" && status !== "escalated" && r.status !== status) return false;
     if (source !== "all"   && r.app_source !== source)  return false;
     if (type !== "all"     && r.type     !== type)     return false;
     if (search) {
-      const haystack = `${r.subject} ${r.user_email || ""} ${r.screen || ""}`.toLowerCase();
+      const haystack = `${r.ticket_id || ""} ${r.subject} ${r.user_email || ""} ${r.screen || ""}`.toLowerCase();
       if (!haystack.includes(search)) return false;
     }
     return true;
@@ -498,13 +516,19 @@ function renderList() {
       : r.email_sent === false
         ? `<span class="badge badge-email-fail">✗ no email</span>`
         : "";
+    const escalationBadge = r.escalated ? `<span class="badge badge-blocking">ESCALATED</span>` : "";
+    const attachBadge = r.attachment_count ? `<span class="badge badge-low">${r.attachment_count} attachment${r.attachment_count === 1 ? "" : "s"}</span>` : "";
 
     return `<div class="report-card${sel ? " selected" : ""}${res ? " resolved" : ""}" data-fp="${esc(r.filepath)}">
       <div class="card-top">
+        <span class="badge badge-type">${esc(ticketLabel(r))}</span>
         <span class="badge ${severityClass(r.severity)}">${esc(r.severity?.toUpperCase() || "NORMAL")}</span>
         <span class="badge badge-type">${esc(typeLabel(r.type))}</span>
         <span class="badge ${sourceClass(r.app_source)}">${esc(r.app_source || "?")}</span>
         <span class="badge ${statusClass(r.status)}">${esc(r.status || "open")}</span>
+        ${escalationBadge}
+        ${billingBadges(r.billing_flags || {})}
+        ${attachBadge}
         ${emailSentBadge}
       </div>
       <div class="card-subject">${esc(r.subject || "(no subject)")}</div>
@@ -525,8 +549,8 @@ function renderList() {
 
 // ── Report detail ────────────────────────────────────────────────────────────
 
-async function selectReport(filepath) {
-  if (state.selected === filepath) return;
+async function selectReport(filepath, { force = false } = {}) {
+  if (state.selected === filepath && !force) return;
   state.selected = filepath;
   renderList(); // highlight selected
 
@@ -555,6 +579,9 @@ function renderDetail(r, filepath, rawJson) {
   const diag    = r.diagnostics || {};
   const dash    = r.dashboard || {};
   const notif   = r.notification || {};
+  const billing = r.billing || {};
+  const attachments = Array.isArray(r.attachments) ? r.attachments : [];
+  const parser = r.parser || {};
 
   const emailStatus = notif.email_sent === true
     ? `<span class="badge badge-email-ok">✓ email sent to ${esc(notif.notify_email || "?")}</span>`
@@ -565,6 +592,7 @@ function renderDetail(r, filepath, rawJson) {
         : "";
 
   const helperLogs  = diag.recentHelperLogs  || diag.helperLogs  || [];
+  const parserLogs  = diag.recentParserLogs  || [];
   const consolErrs  = diag.recentConsoleErrors || diag.consoleErrors || [];
   const apiFaults   = diag.recentApiFailures  || diag.apiFailures  || [];
   const promRejects = diag.recentPromiseRejections || [];
@@ -579,23 +607,29 @@ function renderDetail(r, filepath, rawJson) {
       <span class="badge badge-type">${esc(typeLabel(r.type))}</span>
       <span class="badge ${sourceClass(r.app_source)}">${esc(r.app_source || "?")}</span>
       <span class="badge ${statusClass(dash.status)}" id="status-badge">${esc(dash.status || "open")}</span>
+      ${dash.escalated ? `<span class="badge badge-blocking">ESCALATED</span>` : ""}
+      ${billingBadges(billing)}
       ${emailStatus}
     </div>
     <div class="detail-subject">${esc(r.subject || "(no subject)")}</div>
     <div class="detail-meta">
       <span>🕒 ${fmtDate(r.received_at)}</span>
-      <span>🆔 ${esc((r.report_id || "").slice(0, 8))}</span>
+      <span>🆔 ${esc(r.ticket_id || (r.report_id || "").slice(0, 8))}</span>
       ${ctx.screen ? `<span>📍 ${esc(ctx.screen)}</span>` : ""}
     </div>
   </div>
 
   <!-- Actions -->
   <div class="action-bar">
-    ${dash.status !== "investigating" ? `<button class="action-btn warn" onclick="setStatus('${esc(filepath)}', 'investigating')">🔍 Investigating</button>` : ""}
-    ${dash.status !== "resolved" ? `<button class="action-btn success" onclick="setStatus('${esc(filepath)}', 'resolved')">✓ Resolve</button>` : ""}
-    ${dash.status === "resolved" ? `<button class="action-btn" onclick="setStatus('${esc(filepath)}', 'open')">↩ Reopen</button>` : ""}
-    <button class="action-btn primary" onclick="copyJson()">⎘ Copy JSON</button>
-    <button class="action-btn" onclick="openFile('${esc(filepath)}')">⊞ Open JSON File</button>
+    ${dash.status !== "investigating" ? `<button class="action-btn warn" data-status-action="investigating">🔍 Investigating</button>` : ""}
+    ${dash.status !== "resolved" ? `<button class="action-btn success" data-status-action="resolved">✓ Resolve</button>` : ""}
+    ${dash.status === "resolved" ? `<button class="action-btn" data-status-action="open">↩ Reopen</button>` : ""}
+    <button class="action-btn warn" data-dashboard-toggle="escalated">${dash.escalated ? "Clear Escalation" : "Escalate"}</button>
+    <button class="action-btn" data-dashboard-toggle="customer_contacted">${dash.customer_contacted ? "Customer Contacted ✓" : "Mark Contacted"}</button>
+    <button class="action-btn" data-dashboard-toggle="awaiting_response">${dash.awaiting_response ? "Awaiting Response ✓" : "Await Response"}</button>
+    <button class="action-btn" data-dashboard-toggle="follow_up_required">${dash.follow_up_required ? "Follow-Up Needed ✓" : "Needs Follow-Up"}</button>
+    <button class="action-btn primary" data-copy-json>⎘ Copy JSON</button>
+    <button class="action-btn" data-open-json>⊞ Open JSON File</button>
     <button class="action-btn" onclick="window.supportConsole.openFolder()">📂 Open Folder</button>
   </div>
 
@@ -603,6 +637,22 @@ function renderDetail(r, filepath, rawJson) {
   <div class="section">
     <div class="section-title">Message</div>
     <div class="content-block">${esc(r.message || "(none)")}</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Ticket &amp; Workflow</div>
+    <table class="info-table">
+      ${row("Ticket ID", esc(r.ticket_id || "—"))}
+      ${row("Report ID", esc(r.report_id || "—"))}
+      ${row("Assigned to", esc(dash.assigned_to || "—"))}
+      ${row("Escalated", esc(String(Boolean(dash.escalated))))}
+      ${dash.escalated_at ? row("Escalated at", esc(fmtDate(dash.escalated_at))) : ""}
+      ${dash.escalation_reason ? row("Escalation reason", esc(dash.escalation_reason)) : ""}
+      ${row("Contactable", esc(String(dash.contactable ?? Boolean(user.email))))}
+      ${row("Customer contacted", esc(String(Boolean(dash.customer_contacted))))}
+      ${row("Awaiting response", esc(String(Boolean(dash.awaiting_response))))}
+      ${row("Follow-up required", esc(String(Boolean(dash.follow_up_required))))}
+    </table>
   </div>
 
   ${r.steps_to_reproduce ? `
@@ -622,8 +672,28 @@ function renderDetail(r, filepath, rawJson) {
       ${row("Trial active", esc(user.trial_active != null ? String(user.trial_active) : "—"))}
       ${row("Trial days",   esc(user.trial_days_remaining != null ? String(user.trial_days_remaining) : "—"))}
       ${row("Entitlement",  esc(user.entitlement_state  || "—"))}
+      ${row("Billing state", esc(billing.state || user.billing_state || "—"))}
+      ${row("Payment failed", esc(String(Boolean(billing.payment_failed || user.payment_failed))))}
+      ${row("Trial expired", esc(String(Boolean(billing.trial_expired || user.trial_expired))))}
+      ${row("Canceled", esc(String(Boolean(billing.canceled || user.canceled))))}
+      ${row("Billing retry", esc(String(Boolean(billing.billing_retry || user.billing_retry))))}
+      ${row("Subscription locked", esc(String(Boolean(billing.subscription_locked || user.subscription_locked))))}
     </table>
   </div>
+
+  ${attachments.length ? `
+  <div class="section">
+    <div class="section-title">Screenshots &amp; Attachments</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
+      ${attachments.map((a, idx) => `
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius2);padding:8px">
+          ${String(a.mime || "").startsWith("image/") ? `<img src="file:///${esc(String(a.path || "").replace(/\\/g, "/"))}" style="width:100%;max-height:120px;object-fit:contain;border-radius:6px;background:#000;margin-bottom:6px">` : ""}
+          <div style="font-size:11px;color:var(--text2);word-break:break-word">${esc(a.name || a.filename || "attachment")}</div>
+          <button class="action-btn" style="margin-top:6px" data-open-attachment="${idx}">Open</button>
+          <button class="action-btn" style="margin-top:6px" data-locate-attachment="${idx}">Locate</button>
+        </div>`).join("")}
+    </div>
+  </div>` : ""}
 
   <!-- Environment -->
   <div class="section">
@@ -646,6 +716,48 @@ function renderDetail(r, filepath, rawJson) {
   <!-- Diagnostics -->
   <div class="section">
     <div class="section-title">Diagnostics</div>
+
+    ${diag.helperState || diag.watcherPaths ? `
+    <details class="accordion" open>
+      <summary>Helper Diagnostics</summary>
+      <div class="accordion-body">
+        <table class="info-table">
+          ${row("Workspace root", esc(diag.workspaceRoot || diag.helperState?.folders?.workspaceRoot || "—"))}
+          ${row("Helper version", esc(diag.helperVersion || "—"))}
+          ${row("Status", esc(diag.helperStatus || diag.helperState?.status || "—"))}
+          ${row("Uptime seconds", esc(String(diag.helperUptimeSeconds ?? diag.helperState?.diagnostics?.helperUptimeSeconds ?? "—")))}
+          ${row("Active watchers", esc((diag.activeWatchers || []).join(", ") || "—"))}
+          ${row("Inbox", esc(diag.watcherPaths?.inbox || diag.helperState?.folders?.inbox || "—"))}
+          ${row("Duplicates", esc(String(diag.duplicateDetection?.duplicateCount ?? diag.helperState?.review?.duplicateCount ?? "—")))}
+          ${row("Needs review", esc(String(diag.duplicateDetection?.unmatchedCount ?? diag.helperState?.review?.unmatchedCount ?? "—")))}
+          ${row("Queue inbox", esc(String(diag.queueState?.inboxCount ?? diag.helperState?.diagnostics?.queueState?.inboxCount ?? "—")))}
+          ${row("Last processed", esc(diag.lastProcessedFile || "—"))}
+          ${row("Sync failures", esc(String((diag.syncFailures || []).length)))}
+        </table>
+      </div>
+    </details>` : ""}
+
+    ${Object.keys(parser || {}).length ? `
+    <details class="accordion" open>
+      <summary>Parser Diagnostics</summary>
+      <div class="accordion-body">
+        <pre class="json-pre" style="max-height:260px;border-radius:var(--radius)">${highlightJson(JSON.stringify(parser, null, 2))}</pre>
+      </div>
+    </details>` : ""}
+
+    ${parserLogs.length ? `
+    <details class="accordion">
+      <summary>Parser Logs <span class="accordion-count">${parserLogs.length}</span></summary>
+      <div class="accordion-body">
+        <ul class="log-list">${parserLogs.map((l) => `
+          <li class="log-item">
+            <span class="log-ts">${esc(fmtDate(l.timestamp))}</span>
+            <span class="log-level-${esc(l.level || "info")}">[${esc(l.level || "info").toUpperCase()}]</span>
+            ${esc(l.message || "")}
+          </li>`).join("")}
+        </ul>
+      </div>
+    </details>` : ""}
 
     ${diag.helperStatus ? `
     <table class="info-table" style="margin-bottom:10px">
@@ -697,7 +809,7 @@ function renderDetail(r, filepath, rawJson) {
       </div>
     </details>` : ""}
 
-    ${!helperLogs.length && !consolErrs.length && !apiFaults.length && !promRejects.length && !diag.helperStatus
+    ${!helperLogs.length && !parserLogs.length && !consolErrs.length && !apiFaults.length && !promRejects.length && !diag.helperStatus
       ? `<div style="color:var(--text3);font-size:12px">No diagnostics captured.</div>` : ""}
   </div>
 
@@ -714,6 +826,13 @@ function renderDetail(r, filepath, rawJson) {
     </table>
   </div>` : ""}
 
+  <div class="section">
+    <div class="section-title">Support Notes</div>
+    <textarea id="support-notes" class="filter-search" style="min-height:70px;resize:vertical;margin-bottom:8px" placeholder="Internal support notes">${esc(dash.support_notes || dash.internal_notes || "")}</textarea>
+    <textarea id="response-notes" class="filter-search" style="min-height:70px;resize:vertical;margin-bottom:8px" placeholder="Customer response notes / follow-up context">${esc(dash.response_notes || "")}</textarea>
+    <button class="action-btn primary" data-save-notes>Save Notes</button>
+  </div>
+
   <!-- Raw JSON -->
   <div class="section">
     <details class="accordion">
@@ -723,6 +842,28 @@ function renderDetail(r, filepath, rawJson) {
   </div>
 
 </div>`;
+
+  document.querySelectorAll("[data-status-action]").forEach((btn) => {
+    btn.addEventListener("click", () => setStatus(state.selected || filepath, btn.dataset.statusAction));
+  });
+  document.querySelectorAll("[data-dashboard-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleDashboardFlag(state.selected || filepath, btn.dataset.dashboardToggle));
+  });
+  document.querySelectorAll("[data-open-attachment]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const attachment = attachments[Number(btn.dataset.openAttachment)];
+      if (attachment?.path) window.supportConsole.openAttachment(attachment.path);
+    });
+  });
+  document.querySelectorAll("[data-locate-attachment]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const attachment = attachments[Number(btn.dataset.locateAttachment)];
+      if (attachment?.path) window.supportConsole.locateAttachment(attachment.path);
+    });
+  });
+  document.querySelector("[data-save-notes]")?.addEventListener("click", () => saveNotes(state.selected || filepath));
+  document.querySelector("[data-open-json]")?.addEventListener("click", () => openFile(state.selected || filepath));
+  document.querySelector("[data-copy-json]")?.addEventListener("click", copyJson);
 }
 
 // Utility: table row helper
@@ -752,16 +893,42 @@ async function setStatus(filepath, newStatus) {
   if (state.selectedJson) {
     state.selectedJson.dashboard = result.dashboard;
   }
-  // Re-read and re-render detail
-  const readResult = await window.supportConsole.readReport(filepath);
-  if (readResult?.ok) {
-    try {
-      state.selectedJson = JSON.parse(readResult.json);
-      renderDetail(state.selectedJson, filepath, readResult.json);
-    } catch (_) {}
-  }
-  applyFilters();
+  const resolvedPath = result.filepath || filepath;
+  state.selected = resolvedPath;
+  await loadReports({ silent: true });
+  await selectReport(resolvedPath, { force: true });
   showToast(`Status set to ${newStatus}`);
+}
+
+async function toggleDashboardFlag(filepath, key) {
+  const dash = state.selectedJson?.dashboard || {};
+  const patch = { [key]: !Boolean(dash[key]) };
+  if (key === "escalated" && patch[key]) patch.escalation_reason = "Manual escalation";
+  const result = await window.supportConsole.updateDashboard(filepath, patch);
+  if (!result?.ok) {
+    showToast(`Error: ${result?.error || "Update failed"}`);
+    return;
+  }
+  const resolvedPath = result.filepath || filepath;
+  state.selected = resolvedPath;
+  await loadReports({ silent: true });
+  await selectReport(resolvedPath, { force: true });
+  showToast("Workflow updated");
+}
+
+async function saveNotes(filepath) {
+  const result = await window.supportConsole.updateDashboard(filepath, {
+    support_notes: document.getElementById("support-notes")?.value || "",
+    internal_notes: document.getElementById("support-notes")?.value || "",
+    response_notes: document.getElementById("response-notes")?.value || "",
+  });
+  if (!result?.ok) {
+    showToast(`Error: ${result?.error || "Notes failed"}`);
+    return;
+  }
+  await loadReports({ silent: true });
+  await selectReport(result.filepath || filepath, { force: true });
+  showToast("Notes saved");
 }
 
 async function openFile(filepath) {

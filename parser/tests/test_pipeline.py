@@ -47,6 +47,147 @@ def test_pipeline_confidence_valid(sample_eml):
     assert 0.0 <= decisions[0].confidence <= 1.0
 
 
+def test_shipping_address_provenance_matches_exact_source_block(tmp_path):
+    eml_path = tmp_path / "etsy-shipping-block.eml"
+    eml_path.write_text(
+        "From: sender@example.com\n"
+        "To: seller@example.com\n"
+        "Subject: Order #999123\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain; charset=utf-8\n\n"
+        "Congratulations on your Etsy sale of 1 item.\n"
+        "Your order number is: 999123\n"
+        "Order details\n"
+        "Shipping address\n"
+        "Beth Nemchik\n"
+        "807 Jack Russell Lane\n"
+        "WEST CHESTER, PA 19380\n"
+        "United States\n"
+        "Purchase Shipping Label\n"
+        "Quantity: 1\n"
+        "Price: $64.00\n",
+        encoding="utf-8",
+    )
+
+    result = parse_eml(str(eml_path), update_confidence=False)
+    shipping_address = next(
+        decision for decision in result["decisions"]
+        if decision.field == "shipping_address"
+    )
+    recipient_name = next(
+        decision for decision in result["decisions"]
+        if decision.field == "recipient_name"
+    )
+
+    expected_address = "807 Jack Russell Lane\nWEST CHESTER, PA 19380\nUnited States"
+    assert recipient_name.value == "Beth Nemchik"
+    assert shipping_address.value == expected_address
+    assert result["clean_text"][shipping_address.start:shipping_address.end] == expected_address
+    assert result["clean_text"][recipient_name.start:recipient_name.end] == "Beth Nemchik"
+
+
+def test_etsy_shipping_address_keeps_zip_only_line_and_usps_stop(tmp_path):
+    eml_path = tmp_path / "etsy-split-zip.eml"
+    eml_path.write_text(
+        "From: sender@example.com\n"
+        "To: seller@example.com\n"
+        "Subject: Order #999124\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain; charset=utf-8\n\n"
+        "Order #999124\n"
+        "Shipping address\n"
+        "Beth Nemchik\n"
+        "807 Jack Russell Lane\n"
+        "WEST CHESTER, PA\n"
+        "19380\n"
+        "United States\n"
+        "USPS could not confirm this address.\n"
+        "Purchase Shipping Label\n"
+        "Quantity: 1\n"
+        "Price: $64.00\n",
+        encoding="utf-8",
+    )
+
+    result = parse_eml(str(eml_path), update_confidence=False)
+    shipping_address = next(
+        decision for decision in result["decisions"]
+        if decision.field == "shipping_address"
+    )
+
+    expected_address = "807 Jack Russell Lane\nWEST CHESTER, PA\n19380\nUnited States"
+    assert shipping_address.value == expected_address
+    assert result["clean_text"][shipping_address.start:shipping_address.end] == expected_address
+    assert "USPS could not confirm" not in shipping_address.value
+
+
+def test_shipping_address_provenance_keeps_apartment_continuation(tmp_path):
+    eml_path = tmp_path / "etsy-apartment.eml"
+    eml_path.write_text(
+        "From: sender@example.com\n"
+        "To: seller@example.com\n"
+        "Subject: Order #999125\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain; charset=utf-8\n\n"
+        "Order #999125\n"
+        "Shipping address\n"
+        "Alex Customer\n"
+        "303 Oak Street\n"
+        "Apt 5B\n"
+        "Chicago, IL 60601\n"
+        "United States\n"
+        "Purchase Shipping Label\n"
+        "Quantity: 1\n"
+        "Price: $48.00\n",
+        encoding="utf-8",
+    )
+
+    result = parse_eml(str(eml_path), update_confidence=False)
+    shipping_address = next(
+        decision for decision in result["decisions"]
+        if decision.field == "shipping_address"
+    )
+
+    expected_address = "303 Oak Street\nApt 5B\nChicago, IL 60601\nUnited States"
+    assert shipping_address.value == expected_address
+    assert result["clean_text"][shipping_address.start:shipping_address.end] == expected_address
+
+
+def test_woo_billing_and_shipping_blocks_keep_shipping_provenance(tmp_path):
+    eml_path = tmp_path / "woo-billing-shipping.eml"
+    eml_path.write_text(
+        "From: store@example.com\n"
+        "To: seller@example.com\n"
+        "Subject: New customer order #999126\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain; charset=utf-8\n\n"
+        "Order #999126\n"
+        "Billing address\n"
+        "Billing Buyer\n"
+        "10 Billing Road\n"
+        "Austin, TX 78701\n"
+        "United States\n"
+        "Shipping address\n"
+        "Shipping Recipient\n"
+        "22 Shipping Lane\n"
+        "Denver, CO 80202\n"
+        "United States\n"
+        "Quantity: 1\n"
+        "Price: $72.00\n",
+        encoding="utf-8",
+    )
+
+    result = parse_eml(str(eml_path), update_confidence=False)
+    shipping_address = next(
+        decision for decision in result["decisions"]
+        if decision.field == "shipping_address"
+    )
+
+    expected_address = "22 Shipping Lane\nDenver, CO 80202\nUnited States"
+    assert shipping_address.value == expected_address
+    assert result["clean_text"][shipping_address.start:shipping_address.end] == expected_address
+    assert "Billing Road" not in shipping_address.value
+
+
 def test_pipeline_provenance_keys(sample_eml):
     result = parse_eml(sample_eml, update_confidence=False)
     decisions = result["decisions"]
@@ -90,10 +231,14 @@ def test_parser_trust_report_schema_and_artifact(tmp_path, monkeypatch):
         "order_number",
         "item_price",
         "shipping_address",
+        "billing_address",
         "buyer_name",
+        "billing_name",
+        "recipient_name",
         "quantity",
         "ship_by",
         "buyer_email",
+        "billing_email",
         "order_date",
     }
     assert fields["order_number"]["final_value"] == decisions["order_number"].value

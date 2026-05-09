@@ -82,11 +82,33 @@ def _sanitize_for_fs(text: str) -> str:
     return text.strip()
 
 
-def _format_folder_name(buyer_name: str | None, order_number: str) -> str:
+ORDER_FOLDER_NAME_KEYS = (
+    "recipient_name",
+    "shipping_name",
+    "billing_name",
+    "buyer_name",
+    "billing_email",
+    "email",
+)
+
+
+def _first_nonempty(order: dict, keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = order.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _folder_display_name(order: dict) -> str | None:
+    return _first_nonempty(order, ORDER_FOLDER_NAME_KEYS)
+
+
+def _format_folder_name(display_name: str | None, order_number: str) -> str:
     oid = _sanitize_for_fs(order_number) or "unknown"
-    if not buyer_name:
+    if not display_name:
         return f"Unknown – {oid}"
-    name = _sanitize_for_fs(buyer_name.strip())
+    name = _sanitize_for_fs(display_name.strip())
     lower = name.lower()
     if any(x in lower for x in ["family", "llc", "inc", "corp", "company"]):
         return f"{name} – {oid}"
@@ -100,7 +122,7 @@ def _format_folder_name(buyer_name: str | None, order_number: str) -> str:
 
 
 def _make_order_folder(
-    buyer_name: str | None,
+    display_name: str | None,
     order_number: str,
     order_date: str | None,
 ) -> str | None:
@@ -116,13 +138,38 @@ def _make_order_folder(
 
         year  = str(dt.year)
         month = dt.strftime("%B")
-        folder_name = _format_folder_name(buyer_name, order_number)
+        folder_name = _format_folder_name(display_name, order_number)
         path = ORDERS_PATH / year / month / folder_name
         path.mkdir(parents=True, exist_ok=True)
         return str(path)
     except Exception as e:
         print(f"[CREATE] folder creation failed: {e}")
         return None
+
+
+def _text_or_none(value) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _billing_name(order: dict) -> str | None:
+    return _text_or_none(order.get("billing_name") or order.get("buyer_name"))
+
+
+def _billing_email(order: dict) -> str | None:
+    return _text_or_none(order.get("billing_email") or order.get("buyer_email"))
+
+
+def _recipient_name(order: dict) -> str | None:
+    return _text_or_none(order.get("recipient_name") or order.get("shipping_name"))
+
+
+def _legacy_buyer_name(order: dict) -> str | None:
+    return _billing_name(order)
+
+
+def _legacy_shipping_name(order: dict) -> str | None:
+    return _recipient_name(order)
 
 router = APIRouter()
 
@@ -544,6 +591,10 @@ def _write_manifest(
     shipping_address: str | None,
     pet_name: str | None,
     src_folder: Path,
+    billing_name: str | None = None,
+    billing_email: str | None = None,
+    billing_address: str | None = None,
+    recipient_name: str | None = None,
 ) -> bool:
     """
     Write manifest.json into the order folder before archiving.
@@ -557,7 +608,11 @@ def _write_manifest(
         "order_id":        order_id,
         "order_number":    order_number,
         "buyer_name":      buyer_name,
+        "billing_name":    billing_name or buyer_name,
         "buyer_email":     buyer_email,
+        "billing_email":   billing_email or buyer_email,
+        "billing_address": billing_address,
+        "recipient_name":  recipient_name,
         "shipping_address": shipping_address,
         "pet_name":        pet_name,
         "folder_name":     src_folder.name,
@@ -565,7 +620,8 @@ def _write_manifest(
         "archived_at":     _now_iso_utc(),
         "search_blob": " ".join(
             str(v or "") for v in (
-                order_number, buyer_name, buyer_email, shipping_address, pet_name
+                order_number, buyer_name, billing_name, buyer_email, billing_email,
+                billing_address, recipient_name, shipping_address, pet_name
             )
         ).lower(),
     }
@@ -657,7 +713,11 @@ def _build_archive_index_row(
         "original_order_id": original_order_id,
         "order_number": str(manifest.get("order_number") or conversation.get("order_number") or "").strip(),
         "buyer_name": str(manifest.get("buyer_name") or "").strip(),
+        "billing_name": str(manifest.get("billing_name") or manifest.get("buyer_name") or "").strip(),
         "buyer_email": str(manifest.get("buyer_email") or "").strip(),
+        "billing_email": str(manifest.get("billing_email") or manifest.get("buyer_email") or "").strip(),
+        "billing_address": str(manifest.get("billing_address") or "").strip(),
+        "recipient_name": str(manifest.get("recipient_name") or manifest.get("shipping_name") or "").strip(),
         "shipping_address": str(manifest.get("shipping_address") or "").strip(),
         "pet_name": str(manifest.get("pet_name") or "").strip(),
         "order_date": str(manifest.get("order_date") or "").strip(),
@@ -674,7 +734,8 @@ def _build_archive_index_row(
     }
     row["search_blob"] = " ".join(
         " ".join(expand_search_value_aliases(row.get(key))) for key in (
-            "order_number", "buyer_name", "buyer_email", "shipping_address", "pet_name",
+            "order_number", "buyer_name", "billing_name", "buyer_email", "billing_email",
+            "billing_address", "recipient_name", "shipping_address", "pet_name",
             "order_date", "archived_at", "folder_name", "folder_path", "product_text",
             "notes_text", "conversation_text",
         )
@@ -686,16 +747,21 @@ def _upsert_archive_index(cur, row: dict) -> None:
     cur.execute(
         """
         INSERT INTO archive_orders (
-            archive_id, original_order_id, order_number, buyer_name, buyer_email,
+            archive_id, original_order_id, order_number, buyer_name, billing_name,
+            buyer_email, billing_email, billing_address, recipient_name,
             shipping_address, pet_name, order_date, archived_at, archive_status,
             folder_name, folder_path, manifest_path, conversation_path,
             product_text, notes_text, conversation_text, search_blob, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(archive_id) DO UPDATE SET
             original_order_id=excluded.original_order_id,
             order_number=excluded.order_number,
             buyer_name=excluded.buyer_name,
+            billing_name=excluded.billing_name,
             buyer_email=excluded.buyer_email,
+            billing_email=excluded.billing_email,
+            billing_address=excluded.billing_address,
+            recipient_name=excluded.recipient_name,
             shipping_address=excluded.shipping_address,
             pet_name=excluded.pet_name,
             order_date=excluded.order_date,
@@ -713,7 +779,9 @@ def _upsert_archive_index(cur, row: dict) -> None:
         """,
         (
             row.get("archive_id"), row.get("original_order_id"), row.get("order_number"),
-            row.get("buyer_name"), row.get("buyer_email"), row.get("shipping_address"),
+            row.get("buyer_name"), row.get("billing_name"), row.get("buyer_email"),
+            row.get("billing_email"), row.get("billing_address"), row.get("recipient_name"),
+            row.get("shipping_address"),
             row.get("pet_name"), row.get("order_date"), row.get("archived_at"),
             row.get("archive_status"), row.get("folder_name"), row.get("folder_path"),
             row.get("manifest_path"), row.get("conversation_path"), row.get("product_text"),
@@ -806,7 +874,8 @@ def _offload_order_to_filesystem(
         # ── Step 1: read order fields ─────────────────────────────────────
         cur.execute(
             """SELECT order_number, messages, source_eml_path, eml_path,
-                      buyer_name, buyer_email, shipping_address, pet_name
+                      buyer_name, billing_name, buyer_email, billing_email,
+                      billing_address, recipient_name, shipping_address, pet_name
                FROM orders WHERE id = ?""",
             (order_id,),
         )
@@ -815,7 +884,8 @@ def _offload_order_to_filesystem(
             print(f"[ARCHIVE_SKIP] order_id={order_id} reason=not_found_in_db")
             return False
         (order_number, messages_raw, source_eml_path, eml_path,
-         buyer_name, buyer_email, shipping_address, pet_name) = row
+         buyer_name, billing_name, buyer_email, billing_email,
+         billing_address, recipient_name, shipping_address, pet_name) = row
 
         # Derive pet_name from items.custom_1 when not set on the order directly.
         if not pet_name:
@@ -928,6 +998,10 @@ def _offload_order_to_filesystem(
                 shipping_address=shipping_address,
                 pet_name=pet_name,
                 src_folder=src_folder,
+                billing_name=billing_name,
+                billing_email=billing_email,
+                billing_address=billing_address,
+                recipient_name=recipient_name,
             ):
                 # Revert status so the order reappears and can be retried.
                 cur.execute(
@@ -1095,14 +1169,18 @@ async def create_order(payload: dict):
     source_eml_path = payload.get("meta", {}).get("source_eml_path")
 
     order_number = order.get("order_number") or ""
-    buyer_name   = order.get("buyer_name")
+    billing_name = _billing_name(order)
+    buyer_name   = _legacy_buyer_name(order)
+    billing_email = _billing_email(order)
+    recipient_name = _recipient_name(order)
+    display_name = _folder_display_name(order)
     order_date   = order.get("order_date")
     ship_by      = str(order.get("ship_by") or "").strip()
     if not ship_by:
         raise HTTPException(status_code=400, detail="Ship by date is required.")
 
     # Create the folder immediately so Show Folder works without waiting for the helper
-    order_folder_path = _make_order_folder(buyer_name, order_number, order_date)
+    order_folder_path = _make_order_folder(display_name, order_number, order_date)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -1111,19 +1189,24 @@ async def create_order(payload: dict):
 
     cur.execute("""
         INSERT INTO orders (
-            id, order_number, order_date, buyer_name, shipping_name,
-            buyer_email, shipping_address, phone_number, ship_by, pet_name,
+            id, order_number, order_date, buyer_name, billing_name, shipping_name,
+            recipient_name, buyer_email, billing_email, billing_address,
+            shipping_address, phone_number, ship_by, pet_name,
             status, created_at, last_activity_at, updated_at,
             source_eml_path, eml_path, order_folder_path,
             platform, is_gift, gift_wrap
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
         order_date,
         buyer_name,
-        order.get("shipping_name") or None,
-        order.get("buyer_email"),
+        billing_name,
+        _legacy_shipping_name(order),
+        recipient_name,
+        order.get("buyer_email") or billing_email,
+        billing_email,
+        order.get("billing_address") or None,
         order.get("shipping_address"),
         order.get("phone_number") or None,
         ship_by,
@@ -1204,29 +1287,38 @@ def create_manual_order(payload: dict):
     item_id = str(uuid.uuid4())
     created_at = datetime.utcnow().isoformat()
     activity_ts = created_at
-    buyer_name = payload.get("buyer_name") or ""
+    billing_name = _billing_name(payload) or ""
+    buyer_name = _legacy_buyer_name(payload) or ""
+    billing_email = _billing_email(payload)
+    recipient_name = _recipient_name(payload)
+    display_name = _folder_display_name(payload)
     order_date = payload.get("order_date")
     status = payload.get("status") or "active"
-    order_folder_path = _make_order_folder(buyer_name, order_number, order_date)
+    order_folder_path = _make_order_folder(display_name, order_number, order_date)
 
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         INSERT INTO orders (
-            id, order_number, order_date, buyer_name, shipping_name,
-            buyer_email, shipping_address, phone_number, ship_by, pet_name,
+            id, order_number, order_date, buyer_name, billing_name, shipping_name,
+            recipient_name, buyer_email, billing_email, billing_address,
+            shipping_address, phone_number, ship_by, pet_name,
             status, created_at, last_activity_at, updated_at,
             source_eml_path, eml_path, order_folder_path,
             platform, is_gift, gift_wrap
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id,
         order_number,
         order_date,
         buyer_name,
-        payload.get("shipping_name") or None,
-        payload.get("buyer_email") or None,
+        billing_name or None,
+        _legacy_shipping_name(payload),
+        recipient_name,
+        payload.get("buyer_email") or billing_email,
+        billing_email,
+        payload.get("billing_address") or None,
         payload.get("shipping_address") or None,
         payload.get("phone_number") or None,
         payload.get("ship_by") or None,
@@ -1348,8 +1440,12 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             (
                 LOWER(COALESCE(orders.order_number, '')) LIKE ?
                 OR LOWER(COALESCE(orders.buyer_name, '')) LIKE ?
+                OR LOWER(COALESCE(orders.billing_name, '')) LIKE ?
                 OR LOWER(COALESCE(orders.shipping_name, '')) LIKE ?
+                OR LOWER(COALESCE(orders.recipient_name, '')) LIKE ?
                 OR LOWER(COALESCE(orders.buyer_email, '')) LIKE ?
+                OR LOWER(COALESCE(orders.billing_email, '')) LIKE ?
+                OR LOWER(COALESCE(orders.billing_address, '')) LIKE ?
                 OR LOWER(COALESCE(orders.shipping_address, '')) LIKE ?
                 OR LOWER(COALESCE(orders.phone_number, '')) LIKE ?
                 OR LOWER(COALESCE(orders.pet_name, '')) LIKE ?
@@ -1364,7 +1460,7 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             )
             """
         )
-        values.extend([like] * 15)
+        values.extend([like] * 19)
 
     sort_value = str(sort or "newest").strip().lower()
     order_by = {
@@ -1372,7 +1468,9 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
         "oldest": "orders.created_at ASC, items.item_index ASC",
         "ship_by": "orders.ship_by ASC, orders.created_at DESC, items.item_index ASC",
         "order_date": "orders.order_date DESC, orders.created_at DESC, items.item_index ASC",
-        "buyer": "orders.buyer_name COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
+        "buyer": "COALESCE(orders.billing_name, orders.buyer_name) COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
+        "billing_name": "COALESCE(orders.billing_name, orders.buyer_name) COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
+        "recipient_name": "COALESCE(orders.recipient_name, orders.shipping_name) COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
         "status": "orders.status COLLATE NOCASE ASC, orders.created_at DESC, items.item_index ASC",
     }.get(sort_value, "orders.created_at DESC, items.item_index ASC")
 
@@ -1383,8 +1481,12 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             orders.id,
             orders.order_number,
             orders.buyer_name,
+            orders.billing_name,
             orders.shipping_name,
+            orders.recipient_name,
             orders.buyer_email,
+            orders.billing_email,
+            orders.billing_address,
             orders.shipping_address,
             orders.phone_number,
             orders.order_date,
@@ -1426,34 +1528,38 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             "order_id": r[1],
             "order_number": r[2],
             "buyer_name": r[3],
-            "shipping_name": r[4],
-            "buyer_email": r[5],
-            "shipping_address": r[6],
-            "phone_number": r[7],
-            "order_date": r[8],
-            "ship_by": r[9],
-            "status": r[10],
-            "price": r[11],
-            "quantity": r[12],
-            "custom_1": r[13],
-            "custom_2": r[14],
-            "custom_3": r[15],
-            "custom_4": r[16],
-            "custom_5": r[17],
-            "custom_6": r[18],
-            "order_folder_path": r[19],
-            "source_eml_path": r[20],
-            "eml_path": r[21],
-            "gift_message": r[22],
-            "order_notes": r[23],
-            "item_index": r[24],
-            "platform":    r[25] or "unknown",
-            "item_status": r[26] or None,
-            "is_gift": bool(r[27]),
-            "gift_wrap": bool(r[28]),
-            "messages": _parse_order_messages(r[29]),
-            "pet_name": r[30] or r[13],
-            "updated_at": r[31],
+            "billing_name": r[4] or r[3],
+            "shipping_name": r[5],
+            "recipient_name": r[6] or r[5],
+            "buyer_email": r[7],
+            "billing_email": r[8] or r[7],
+            "billing_address": r[9],
+            "shipping_address": r[10],
+            "phone_number": r[11],
+            "order_date": r[12],
+            "ship_by": r[13],
+            "status": r[14],
+            "price": r[15],
+            "quantity": r[16],
+            "custom_1": r[17],
+            "custom_2": r[18],
+            "custom_3": r[19],
+            "custom_4": r[20],
+            "custom_5": r[21],
+            "custom_6": r[22],
+            "order_folder_path": r[23],
+            "source_eml_path": r[24],
+            "eml_path": r[25],
+            "gift_message": r[26],
+            "order_notes": r[27],
+            "item_index": r[28],
+            "platform":    r[29] or "unknown",
+            "item_status": r[30] or None,
+            "is_gift": bool(r[31]),
+            "gift_wrap": bool(r[32]),
+            "messages": _parse_order_messages(r[33]),
+            "pet_name": r[34] or r[17],
+            "updated_at": r[35],
         }
         for r in rows
     ]
@@ -1463,7 +1569,8 @@ def list_orders(status: str = "", search: str = "", sort: str = "newest"):
             if normalized_search_matches(
                 search_value,
                 (
-                    row.get("order_number"), row.get("buyer_name"), row.get("shipping_name"), row.get("buyer_email"),
+                    row.get("order_number"), row.get("buyer_name"), row.get("billing_name"), row.get("shipping_name"),
+                    row.get("recipient_name"), row.get("buyer_email"), row.get("billing_email"), row.get("billing_address"),
                     row.get("shipping_address"), row.get("phone_number"), row.get("pet_name"), row.get("custom_1"),
                     row.get("custom_2"), row.get("custom_3"), row.get("custom_4"),
                     row.get("custom_5"), row.get("custom_6"), row.get("order_date"),
@@ -1485,8 +1592,12 @@ def get_order(order_id: str):
             id,
             order_number,
             buyer_name,
+            billing_name,
             shipping_name,
+            recipient_name,
             buyer_email,
+            billing_email,
+            billing_address,
             shipping_address,
             phone_number,
             order_date,
@@ -1540,23 +1651,27 @@ def get_order(order_id: str):
         "id": row[0],
         "order_number": row[1],
         "buyer_name": row[2],
-        "shipping_name": row[3],
-        "buyer_email": row[4],
-        "shipping_address": row[5],
-        "phone_number": row[6],
-        "order_date": row[7],
-        "ship_by": row[8],
-        "status": row[9],
-        "order_folder_path": row[10],
-        "messages": _parse_order_messages(row[11]),
-        "source_eml_path": row[12],
-        "eml_path": row[13],
-        "platform": row[14] or "unknown",
-        "is_gift": bool(row[15]),
-        "gift_wrap": bool(row[16]),
-        "last_activity_at": row[17],
-        "updated_at": row[18],
-        "pet_name": row[19] or (item_rows[0][4] if item_rows else None),
+        "billing_name": row[3] or row[2],
+        "shipping_name": row[4],
+        "recipient_name": row[5] or row[4],
+        "buyer_email": row[6],
+        "billing_email": row[7] or row[6],
+        "billing_address": row[8],
+        "shipping_address": row[9],
+        "phone_number": row[10],
+        "order_date": row[11],
+        "ship_by": row[12],
+        "status": row[13],
+        "order_folder_path": row[14],
+        "messages": _parse_order_messages(row[15]),
+        "source_eml_path": row[16],
+        "eml_path": row[17],
+        "platform": row[18] or "unknown",
+        "is_gift": bool(row[19]),
+        "gift_wrap": bool(row[20]),
+        "last_activity_at": row[21],
+        "updated_at": row[22],
+        "pet_name": row[23] or (item_rows[0][4] if item_rows else None),
         "items": [
             {
                 "id": item[0],
@@ -1635,9 +1750,13 @@ def update_full(payload: dict):
 
     order_parts: list[tuple[str, object]] = [
         ("order_number", payload.get("order_number")),
-        ("buyer_name", payload.get("buyer_name") or None),
-        ("shipping_name", payload.get("shipping_name") or None),
-        ("buyer_email", payload.get("buyer_email") or None),
+        ("buyer_name", _legacy_buyer_name(payload)),
+        ("billing_name", _billing_name(payload)),
+        ("shipping_name", _legacy_shipping_name(payload)),
+        ("recipient_name", _recipient_name(payload)),
+        ("buyer_email", payload.get("buyer_email") or _billing_email(payload)),
+        ("billing_email", _billing_email(payload)),
+        ("billing_address", payload.get("billing_address") or None),
         ("shipping_address", payload.get("shipping_address") or None),
         ("phone_number", payload.get("phone_number") or None),
         ("order_date", payload.get("order_date")),
@@ -1999,7 +2118,8 @@ def search_archive(q: str = "", status: str = "archived", include_paths: bool = 
         params.append(status_value)
     cur.execute(
         f"""
-        SELECT ao.archive_id, ao.original_order_id, ao.order_number, ao.buyer_name, ao.buyer_email,
+        SELECT ao.archive_id, ao.original_order_id, ao.order_number, ao.buyer_name, ao.billing_name,
+               ao.buyer_email, ao.billing_email, ao.billing_address, ao.recipient_name,
                ao.shipping_address, ao.pet_name, ao.order_date, ao.archived_at, ao.archive_status,
                ao.folder_name, ao.folder_path, ao.manifest_path, ao.conversation_path,
                ao.product_text, ao.notes_text, ao.conversation_text
@@ -2017,13 +2137,17 @@ def search_archive(q: str = "", status: str = "archived", include_paths: bool = 
         searchable_fields = {
             "order_number": row[2],
             "buyer_name": row[3],
-            "buyer_email": row[4],
-            "shipping_address": row[5],
-            "pet_name": row[6],
-            "order_date": row[7],
-            "product": row[14],
-            "notes": row[15],
-            "conversation": row[16],
+            "billing_name": row[4],
+            "buyer_email": row[5],
+            "billing_email": row[6],
+            "billing_address": row[7],
+            "recipient_name": row[8],
+            "shipping_address": row[9],
+            "pet_name": row[10],
+            "order_date": row[11],
+            "product": row[18],
+            "notes": row[19],
+            "conversation": row[20],
         }
         if query_is_date_like and not normalized_search_matches(query, searchable_fields.values()):
             continue
@@ -2039,21 +2163,25 @@ def search_archive(q: str = "", status: str = "archived", include_paths: bool = 
             "original_order_id": row[1],
             "order_number": row[2],
             "buyer_name": row[3],
-            "buyer_email": row[4],
-            "shipping_address": row[5],
-            "pet_name": row[6],
-            "order_date": row[7],
-            "archived_at": row[8],
-            "status": row[9],
-            "folder_name": row[10],
+            "billing_name": row[4] or row[3],
+            "buyer_email": row[5],
+            "billing_email": row[6] or row[5],
+            "billing_address": row[7],
+            "recipient_name": row[8],
+            "shipping_address": row[9],
+            "pet_name": row[10],
+            "order_date": row[11],
+            "archived_at": row[12],
+            "status": row[13],
+            "folder_name": row[14],
             **({
-                "folder_path": row[11],
-                "manifest_path": row[12],
-                "conversation_path": row[13],
+                "folder_path": row[15],
+                "manifest_path": row[16],
+                "conversation_path": row[17],
             } if include_paths else {}),
-            "product_text": row[14],
-            "notes_text": row[15],
-            "conversation_text": row[16],
+            "product_text": row[18],
+            "notes_text": row[19],
+            "conversation_text": row[20],
             "match_fields": match_fields,
             "snippet": snippet_source[:240],
         })
@@ -2200,8 +2328,12 @@ async def restore_order_from_archive(request: Request):
     if not restore_order_id or not order_number:
         raise HTTPException(status_code=400, detail="manifest.json missing order_id or order_number")
 
-    buyer_name       = str(manifest.get("buyer_name")       or "").strip() or None
-    buyer_email      = str(manifest.get("buyer_email")      or "").strip() or None
+    billing_name     = str(manifest.get("billing_name")     or manifest.get("buyer_name") or "").strip() or None
+    billing_email    = str(manifest.get("billing_email")    or manifest.get("buyer_email") or "").strip() or None
+    billing_address  = str(manifest.get("billing_address")  or "").strip() or None
+    recipient_name   = str(manifest.get("recipient_name")   or manifest.get("shipping_name") or "").strip() or None
+    buyer_name       = str(manifest.get("buyer_name")       or billing_name or "").strip() or None
+    buyer_email      = str(manifest.get("buyer_email")      or billing_email or "").strip() or None
     shipping_address = str(manifest.get("shipping_address") or "").strip() or None
     pet_name         = str(manifest.get("pet_name")         or "").strip() or None
 
@@ -2242,16 +2374,22 @@ async def restore_order_from_archive(request: Request):
         cur.execute(
             """
             INSERT INTO orders (
-                id, order_number, buyer_name, buyer_email, shipping_address, pet_name,
+                id, order_number, buyer_name, billing_name, shipping_name, recipient_name,
+                buyer_email, billing_email, billing_address, shipping_address, pet_name,
                 status, created_at, last_activity_at, updated_at,
                 order_folder_path, source_eml_path, eml_path, messages
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 restore_order_id,
                 order_number,
                 buyer_name,
+                billing_name,
+                recipient_name,
+                recipient_name,
                 buyer_email,
+                billing_email,
+                billing_address,
                 shipping_address,
                 pet_name,
                 now_iso,
@@ -2391,8 +2529,12 @@ def patch_order(order_id: str, payload: dict):
         "source_original_path",
         "status",
         "buyer_name",
+        "billing_name",
         "shipping_name",
+        "recipient_name",
         "buyer_email",
+        "billing_email",
+        "billing_address",
         "shipping_address",
         "phone_number",
         "ship_by",
@@ -2674,6 +2816,13 @@ async def reload_workspace():
         import server.inbox.attachments as _att
         _att._WORKSPACE_DIRS = new_dirs
         _att._ATTACHMENT_ROOT = new_dirs["root"] / ".spaila_internal" / "attachments"
+    except Exception:
+        pass
+
+    # ── Trigger legacy repo-root support_reports migration with new paths ────
+    try:
+        import backend.support as _support
+        _support._migrate_backend_fallback_reports()
     except Exception:
         pass
 

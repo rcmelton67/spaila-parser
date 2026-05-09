@@ -68,11 +68,26 @@ const labelStyle = {
   marginBottom: 5,
 };
 
+function fileToScreenshotPayload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      name: file.name,
+      mime: file.type || "image/png",
+      size: file.size,
+      data: String(reader.result || ""),
+    });
+    reader.onerror = () => reject(reader.error || new Error("Could not read screenshot."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function SupportModal({ route = "", initialType = "bug_report", onClose }) {
   const [type, setType] = React.useState(initialType || "bug_report");
   const [subject, setSubject] = React.useState("");
   const [message, setMessage] = React.useState("");
   const [steps, setSteps] = React.useState("");
+  const [screenshots, setScreenshots] = React.useState([]);
   const [severity, setSeverity] = React.useState("normal");
   const [includeDiagnostics, setIncludeDiagnostics] = React.useState(true);
   const [state, setState] = React.useState({ saving: false, done: false, error: "", reportId: "", notification: null });
@@ -125,6 +140,7 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
       }
 
       // Submit via IPC (handler enriches with helperLogs + account session)
+      const screenshotPayload = await Promise.all(screenshots.map(fileToScreenshotPayload));
       const result = await window.parserApp?.submitSupportReport?.({
         type,
         severity,
@@ -135,6 +151,7 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
         screen: screenName,
         context,
         includeDiagnostics,
+        screenshots: screenshotPayload,
       });
 
       if (result?.ok) {
@@ -155,11 +172,12 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
           app_source: "desktop",
           context,
           diagnostics: {},
+          screenshots: screenshotPayload,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (data?.status === "received") {
-        setState({ saving: false, done: true, error: "", reportId: data.report_id || "", notification: data.notification || null });
+        setState({ saving: false, done: true, error: "", reportId: data.ticket_id || data.report_id || "", notification: data.notification || null });
       } else {
         setState({ saving: false, done: false, error: result?.error || "Could not submit report. Please try again.", reportId: "", notification: null });
         submitRef.current = false;
@@ -172,9 +190,15 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
 
   const typeLabel = TYPE_OPTIONS.find((o) => o.value === type)?.label || "Support";
   const isBug = type === "bug_report";
+  const addScreenshotFiles = React.useCallback((files) => {
+    setScreenshots((prev) => [...prev, ...Array.from(files || [])].slice(0, 5));
+  }, []);
 
   return (
-    <div style={{
+    <div
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); addScreenshotFiles(e.dataTransfer?.files || []); }}
+      style={{
       position: "fixed",
       inset: 0,
       zIndex: 100000,
@@ -233,7 +257,7 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
               </div>
               {state.reportId && (
                 <div style={{ fontSize: 12, color: "#475569", marginBottom: 6, textAlign: "center" }}>
-                  Report ID: <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>{state.reportId.slice(0, 8)}</code>
+                  Ticket ID: <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>{state.reportId}</code>
                 </div>
               )}
               {state.notification ? (
@@ -245,10 +269,8 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
                   lineHeight: 1.6,
                 }}>
                   {state.notification.email_sent
-                    ? `✓ Notification emailed to support.`
-                    : state.notification.email_enabled
-                      ? `Email attempted but failed: ${state.notification.email_error || "Unknown error."}`
-                      : `Report saved locally. ${state.notification.email_error || "Email notification not configured."}`
+                    ? "Report saved successfully. Support notified."
+                    : "Report saved successfully."
                   }
                 </div>
               ) : null}
@@ -313,6 +335,24 @@ export default function SupportModal({ route = "", initialType = "bug_report", o
                   />
                 </div>
               )}
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={labelStyle}>
+                  Screenshots <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional, up to 5)</span>
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => addScreenshotFiles(e.target.files || [])}
+                  style={fieldStyle({ padding: 8 })}
+                />
+                {screenshots.length ? (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
+                    {screenshots.length} screenshot{screenshots.length === 1 ? "" : "s"} selected
+                  </div>
+                ) : null}
+              </div>
 
               <div style={{
                 background: "#f8fafc",

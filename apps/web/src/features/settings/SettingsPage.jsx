@@ -124,6 +124,12 @@ export default function SettingsPage({ onSettingsSaved }) {
                 label="Show thank-you letter shortcut"
                 hint="Show the Thank-You Letter button in the main navigation header."
               />
+              <CheckSetting
+                checked={ws.show_email_icon !== false}
+                onChange={(e) => setWebForm((p) => ({ ...p, show_email_icon: e.target.checked }))}
+                label="Show ✉ email icon in status column"
+                hint="Show a quick-compose button on each order row to open the customer email thread."
+              />
             </div>
 
             {webState.error ? <div className="error-banner" style={{ marginTop: 8 }}>{webState.error}</div> : null}

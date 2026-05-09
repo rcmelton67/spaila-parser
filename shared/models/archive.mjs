@@ -1,7 +1,11 @@
 export const ARCHIVE_SEARCH_FIELDS = Object.freeze([
   "order_number",
   "buyer_name",
+  "billing_name",
   "buyer_email",
+  "billing_email",
+  "billing_address",
+  "recipient_name",
   "shipping_address",
   "pet_name",
   "order_date",

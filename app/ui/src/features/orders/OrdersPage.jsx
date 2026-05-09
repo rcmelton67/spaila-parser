@@ -800,6 +800,10 @@ function createManualOrderDraft(activeTab = "active") {
     gift_message: "",
     is_gift: false,
     gift_wrap: false,
+    billing_name: "",
+    billing_email: "",
+    billing_address: "",
+    recipient_name: "",
     buyer_name: "",
     buyer_email: "",
     shipping_address: "",
@@ -1078,6 +1082,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
   const [backupSaving, setBackupSaving] = React.useState(false);
   const [backupDialog, setBackupDialog] = React.useState(() => emptyBackupDialog());
   const [backupNow, setBackupNow] = React.useState(() => Date.now());
+  const [resolvedBackupFolder, setResolvedBackupFolder] = React.useState("");
 
   React.useEffect(() => {
     if (!emailToast || emailToast.kind !== "success") return undefined;
@@ -1126,19 +1131,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
   async function handleSaveToFolder() {
     if (backupSaving) return;
-    const folder = DEFAULT_SAVE_FOLDER;
-    if (!folder) {
-      setBackupDialog({
-        ...emptyBackupDialog(),
-        open: true,
-        status: "failure",
-        error: "No save folder available.",
-        message: "No save folder available.",
-        startedAt: Date.now(),
-        endedAt: Date.now(),
-      });
-      return;
-    }
+    const folder = DEFAULT_SAVE_FOLDER; // empty = backend resolves to workspace Backup dir
     // Collect ALL localStorage entries so they're included in the backup
     const localStorageData = {};
     try {
@@ -1165,6 +1158,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         localStorageData,
       });
       if (result?.ok) {
+        setResolvedBackupFolder(result.path || "");
         setBackupDialog((prev) => ({
           ...prev,
           open: true,
@@ -1358,6 +1352,11 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     setRows((current) => current.map((row) => (
       String(row.id) === String(itemId) ? { ...row, item_status: nextStatus || "" } : row
     )));
+    setEditingOrder((current) => (
+      current && String(current.id) === String(itemId)
+        ? { ...current, item_status: nextStatus || "" }
+        : current
+    ));
     setOrderStatus(itemId, nextStatus);
     setOrderStatuses(loadOrderStatuses());
     setSessionDirty(true);
@@ -1411,7 +1410,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     [columnOrder, fieldMap, statusConfig]
   );
   const sortFieldOptions = React.useMemo(() => {
-    const preferredKeys = new Set(["order_date", "ship_by", "buyer_name", "order_number", "price"]);
+    const preferredKeys = new Set(["order_number", "billing_name", "recipient_name", "order_date", "ship_by", "price"]);
     const options = fieldConfig
       .filter((field) => field.visibleInOrders || preferredKeys.has(field.key))
       .map((field) => ({ key: field.key, label: field.label }));
@@ -1685,7 +1684,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
 
       setMailDock({
         row,
-        to: row.buyer_email || "",
+        to: row.billing_email || row.buyer_email || "",
         subject,
         body,
         originalSubject: subject,
@@ -1822,7 +1821,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
       orderFolderPath: mailDock.attachmentFolderPath || mailDock.attachmentSourcePath || "",
       orderNumber: mailDock.row?.order_number || "",
       buyerName: mailDock.row?.buyer_name || "",
-      buyerEmail: mailDock.row?.buyer_email || "",
+      buyerEmail: mailDock.row?.billing_email || mailDock.row?.buyer_email || "",
     });
     if (result?.ok) {
       const append = result.appendToSent || {};
@@ -1971,7 +1970,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     window.addEventListener("mouseup", onUp);
   }
 
-  async function loadOrders({ retries = 5, delayMs = 600, background = false, preserveSelection = false } = {}) {
+  async function loadOrders({ retries = 12, delayMs = 800, background = false, preserveSelection = false } = {}) {
     if (ordersRefreshInFlightRef.current) {
       return ordersRefreshInFlightRef.current;
     }
@@ -2339,7 +2338,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
     const cardHtmlRows = safeDisplayOrders.length && cardPrintColumns.length
       ? safeDisplayOrders.map((row) => {
           const orderNumber = getDisplayedCellValue(row, "order_number") || row.order_number || "Order";
-          const buyerName = getDisplayedCellValue(row, "buyer_name") || row.buyer_name || "";
+          const buyerName = getDisplayedCellValue(row, "billing_name") || row.billing_name || row.buyer_name || "";
           const shipByDate = getDisplayedCellValue(row, "ship_by") || row.ship_by || "";
           const priceRule = matchPriceRule(row.price, priceList);
           const identityBg = priceRule?.color || "#ffffff";
@@ -2600,7 +2599,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
         backup={backupDialog}
         now={backupNow}
         onRetry={handleSaveToFolder}
-        onOpenFolder={() => window.parserApp?.openFolder?.(DEFAULT_SAVE_FOLDER)}
+        onOpenFolder={() => window.parserApp?.openFolder?.(resolvedBackupFolder || DEFAULT_SAVE_FOLDER || backupDialog.path || "")}
         onClose={() => {
           if (backupDialog.status === "running") return;
           setBackupDialog(emptyBackupDialog());
@@ -3126,6 +3125,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                           const pillBorder = pillBg
                             ? (pillTc === "#ffffff" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.12)")
                             : "#d1d5db";
+                          const showEmailIconInStatus = shopConfig.showEmailIcon !== false;
                           return (
                             <td key="status" style={{
                               width: w, minWidth: w, maxWidth: w,
@@ -3137,6 +3137,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                               boxSizing: "border-box",
                               verticalAlign: "middle",
                               textAlign: "left",
+                              position: showEmailIconInStatus ? "relative" : undefined,
                             }}>
                               <select
                                 value={currentKey}
@@ -3166,6 +3167,31 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                                   <option key={s.key} value={s.key}>{s.label}</option>
                                 ))}
                               </select>
+                              {showEmailIconInStatus && (() => {
+                                const onDark = pillBg && contrastColor(pillBg) === "#ffffff";
+                                const iconColor = onDark ? "#ffffff" : "#1e40af";
+                                return (
+                                  <button
+                                    title="Compose email"
+                                    onClick={(e) => { e.stopPropagation(); handleOpenEmailInOrderModal(r); }}
+                                    className="email-btn"
+                                    disabled={mailDockLoadingId === r.id}
+                                    style={{
+                                      position: "absolute", bottom: 2, right: 3,
+                                      width: 20, height: 20,
+                                      background: "none", border: "none", cursor: mailDockLoadingId === r.id ? "wait" : "pointer",
+                                      padding: 0, lineHeight: 1,
+                                      fontSize: 17,
+                                      color: iconColor,
+                                      opacity: mailDockLoadingId === r.id ? 0.5 : 0.9,
+                                      transition: "opacity 0.15s, transform 0.1s",
+                                      display: "flex", alignItems: "center", justifyContent: "center",
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
+                                  >{mailDockLoadingId === r.id ? "…" : "✉"}</button>
+                                );
+                              })()}
                             </td>
                           );
                         }
@@ -3209,10 +3235,9 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                           ? contrastColor(cellBg)
                           : (displayValue ? "#1a1a1a" : "#bbb");
 
-                        const isBuyerName  = c.key === "buyer_name" && shopConfig.showEmailIcon !== false;
                         const isGiftMsg    = c.key === "gift_message";
                         const hasGiftMsg   = isGiftMsg && !!r.gift_message && documentsConfig.showPrintIcon !== false;
-                        const needsIcon    = isBuyerName || hasGiftMsg;
+                        const needsIcon    = hasGiftMsg;
                         return (
                           <td key={c.key} style={{
                             width: w,
@@ -3255,31 +3280,6 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                                   onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
                                   onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
                                 >🖨</button>
-                              );
-                            })()}
-                            {isBuyerName && (() => {
-                              const onDark = cellBg && contrastColor(cellBg) === "#ffffff";
-                              const iconColor = onDark ? "#ffffff" : "#1e40af";
-                              return (
-                                <button
-                                  title="Compose email"
-                                  onClick={(e) => { e.stopPropagation(); handleOpenEmailInOrderModal(r); }}
-                                  className="email-btn"
-                                  disabled={mailDockLoadingId === r.id}
-                                  style={{
-                                    position: "absolute", bottom: 2, right: 3,
-                                    width: 20, height: 20,
-                                    background: "none", border: "none", cursor: mailDockLoadingId === r.id ? "wait" : "pointer",
-                                    padding: 0, lineHeight: 1,
-                                    fontSize: 17,
-                                    color: iconColor,
-                                    opacity: mailDockLoadingId === r.id ? 0.5 : 0.9,
-                                    transition: "opacity 0.15s, transform 0.1s",
-                                    display: "flex", alignItems: "center", justifyContent: "center",
-                                  }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
-                                >{mailDockLoadingId === r.id ? "…" : "✉"}</button>
                               );
                             })()}
                             <div style={{
@@ -3402,16 +3402,16 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ fontWeight: 700, color: "#1e1b4b" }}>
-                      {order.buyer_name || "—"}
+                      {order.billing_name || order.buyer_name || "—"}
                     </span>
                     {order.order_number && (
                       <span style={{ marginLeft: 6, color: "#6366f1", fontWeight: 600 }}>
                         #{order.order_number}
                       </span>
                     )}
-                    {order.buyer_email && (
+                    {(order.billing_email || order.buyer_email) && (
                       <span style={{ marginLeft: 8, color: "#64748b", fontSize: 12 }}>
-                        {order.buyer_email}
+                        {order.billing_email || order.buyer_email}
                       </span>
                     )}
                     {order.pet_name && (
@@ -3487,6 +3487,17 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
             loadOrders();
             if (wasDirectOpen) onDirectOrderModalClose?.();
           }}
+          onStatusChanged={(itemId, nextStatus) => {
+            setRows((current) => current.map((row) => (
+              String(row.id) === String(itemId) ? { ...row, item_status: nextStatus || "" } : row
+            )));
+            setEditingOrder((current) => (
+              current && String(current.id) === String(itemId)
+                ? { ...current, item_status: nextStatus || "" }
+                : current
+            ));
+            setSessionDirty(true);
+          }}
         />
       )}
 
@@ -3514,7 +3525,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                   <div style={{ marginTop: "8px", maxHeight: "120px", overflowY: "auto" }}>
                     {confirmDelete.rows.map((r) => (
                       <div key={r.id} style={{ color: "#555", fontSize: "12px" }}>
-                        #{r.order_number} — {r.buyer_name || "Unknown"}
+                        #{r.order_number} — {r.billing_name || r.buyer_name || "Unknown"}
                       </div>
                     ))}
                   </div>
@@ -3523,7 +3534,7 @@ export default function OrdersPage({ onWorkspace, onSettings, refreshKey, column
                 <>
                   Are you sure you want to delete order{" "}
                   <strong>#{confirmDelete.rows[0]?.order_number}</strong> for{" "}
-                  <strong>{confirmDelete.rows[0]?.buyer_name || "this buyer"}</strong>?
+                  <strong>{confirmDelete.rows[0]?.billing_name || confirmDelete.rows[0]?.buyer_name || "this buyer"}</strong>?
                 </>
               )}
               <br />

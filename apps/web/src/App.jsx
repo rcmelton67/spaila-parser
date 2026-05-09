@@ -433,6 +433,7 @@ export default function App() {
   const showCompletedTab = webSettings != null ? webSettings.show_completed_tab : true;
   const showInventoryTab = webSettings != null ? webSettings.show_inventory_tab : false;
   const showThankYouShortcut = webSettings != null ? webSettings.show_thank_you_shortcut : true;
+  const showEmailIcon = webSettings != null ? webSettings.show_email_icon !== false : true;
   const entitlements = capabilities?.entitlements || {};
   const isSubscriptionLocked = entitlements.locked === true;
 
@@ -442,6 +443,13 @@ export default function App() {
   const selectedItemId = typeof selectedOrderContext === "object" && selectedOrderContext
     ? selectedOrderContext.id || selectedOrderContext.item_id || ""
     : "";
+  const selectedOrderFocusCompose = typeof selectedOrderContext === "object" && selectedOrderContext
+    ? selectedOrderContext._focusCompose === true
+    : false;
+
+  function handleEmailCompose(row) {
+    setSelectedOrderContext({ ...row, _focusCompose: true });
+  }
   const showDetail = Boolean(selectedOrderId);
   const hasActiveOrderSearch = orderSearch.trim().length > 0;
   const topNavItems = [
@@ -624,7 +632,8 @@ export default function App() {
               >
                 <option value="order_date">Order Date</option>
                 <option value="ship_by">Ship By</option>
-                <option value="buyer_name">Buyer</option>
+                <option value="billing_name">Billing Name</option>
+                <option value="recipient_name">Shipping Name</option>
                 <option value="order_number">Order #</option>
                 <option value="price">Price</option>
                 <option value="status">Status</option>
@@ -683,6 +692,8 @@ export default function App() {
                 onTabChange={setOrdersTab}
                 onSelectOrder={setSelectedOrderContext}
                 showCompletedTab={showCompletedTab}
+                showEmailIcon={showEmailIcon}
+                onEmailCompose={handleEmailCompose}
                 layoutRefreshKey={layoutRefreshKey}
                 ordersRefreshKey={ordersRefreshKey}
                 shopName={shopName}
@@ -699,7 +710,7 @@ export default function App() {
 
           {showDetail ? (
             <div className="web-page-inner">
-              <OrderDetail orderId={selectedOrderId} initialItemId={selectedItemId} onBack={closeOrderDetail} />
+              <OrderDetail orderId={selectedOrderId} initialItemId={selectedItemId} onBack={closeOrderDetail} focusCompose={selectedOrderFocusCompose} />
             </div>
           ) : route === "archive" ? (
             <div className="web-page-inner">

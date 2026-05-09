@@ -10,7 +10,7 @@ import os
 import sys
 import tempfile
 import time
-from typing import Dict, Set, Tuple
+from typing import Dict, Set, Tuple, Any
 
 # Absolute path anchored to this file's location — never relative to CWD.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,13 +37,20 @@ _QUARANTINE_RULES: Dict[str, Set[str]] = {
     "number_regex|none|buyer":    set(),
     # price|pricing IS a valid signature for price but must never promote
     # non-price fields (e.g. a numeric price value mistaken for order_number).
-    "number_regex|price|pricing": {"order_number", "quantity", "buyer_name",
-                                   "buyer_email", "order_date", "ship_by",
+    "number_regex|price|pricing": {"order_number", "quantity", "billing_name",
+                                   "billing_email", "order_date", "ship_by",
                                    "shipping_address"},
     # Generic "from" body context for order_number
     "number_regex|from|body":     set(),
-    # Shipping label context incorrectly captured as buyer_name
+    # Shipping label context incorrectly captured as billing_name
     "address_label_name|none|shipping": set(),
+}
+
+# Legacy → canonical field alias for key migration
+_LEGACY_FIELD_ALIAS: Dict[str, str] = {
+    "buyer_name":    "billing_name",
+    "buyer_email":   "billing_email",
+    "shipping_name": "recipient_name",
 }
 
 
@@ -67,6 +74,26 @@ def _is_quarantined(extraction_signature: str, field: str = "") -> bool:
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
+def _migrate_store_keys(store: Dict[str, Any]) -> Dict[str, Any]:
+    """Rename legacy buyer_name/buyer_email keys and field values to canonical.
+
+    The key format is ``{template_id}:{field}:{signature}`` — we replace
+    the field segment and the ``"field"`` value inside each record.
+    """
+    migrated: Dict[str, Any] = {}
+    for key, record in store.items():
+        raw_field = record.get("field", "")
+        canonical_field = _LEGACY_FIELD_ALIAS.get(raw_field, raw_field)
+        if canonical_field != raw_field:
+            # Rebuild the key with the canonical field name
+            parts = key.split(":", 2)
+            if len(parts) == 3 and parts[1] == raw_field:
+                key = f"{parts[0]}:{canonical_field}:{parts[2]}"
+            record = {**record, "field": canonical_field}
+        migrated[key] = record
+    return migrated
+
+
 def _load() -> Dict:
     if not os.path.exists(CONFIDENCE_STORE_PATH):
         print(
@@ -76,7 +103,8 @@ def _load() -> Dict:
         return {}
     try:
         with open(CONFIDENCE_STORE_PATH, "r", encoding="utf-8") as f:
-            store = json.load(f)
+            raw = json.load(f)
+        store = _migrate_store_keys(raw)
         print(
             f"[CONF_STORE_LOAD] entries={len(store)} path={CONFIDENCE_STORE_PATH}",
             file=sys.stderr, flush=True,
@@ -144,6 +172,7 @@ def update_streak(
     Returns (streak_count, promoted) where promoted is True when
     streak_count >= CONFIDENCE_PROMOTION_THRESHOLD (4).
     """
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     store = _load()
     legacy_key = f"{template_id}:{field}:{extraction_signature}"
     key = legacy_key
@@ -227,6 +256,7 @@ def get_currently_promoted_fields(template_id: str, source_scopes: Dict[str, str
 
 def get_promoted_signature_records(template_id: str, field: str, source: str = "") -> list[Dict]:
     """Return promoted confidence records for one field/template."""
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     store = _load()
     promoted: list[Dict] = []
     prefix = f"{template_id}:{field}:"
@@ -248,6 +278,7 @@ def get_promoted_signature_records(template_id: str, field: str, source: str = "
 
 def reset_field(template_id: str, field: str, source: str = "") -> int:
     """Remove confidence streaks for one field after an explicit user action."""
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     store = _load()
     prefix = f"{template_id}:{field}:"
     removed = 0
@@ -292,6 +323,7 @@ def summarize_fields(fields: set[str]) -> Dict[str, Dict]:
 
 def reset_field_everywhere(field: str) -> int:
     """Remove confidence streaks for one field across all templates."""
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     store = _load()
     removed = 0
     for key in list(store.keys()):

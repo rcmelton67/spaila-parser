@@ -16,6 +16,7 @@ from backend.db import init_db
 
 def setup_db(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SPAILA_ALLOW_DEV_SUBSCRIPTION_PATCH", "1")
     init_db()
 
 

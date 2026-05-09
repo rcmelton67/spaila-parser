@@ -278,6 +278,27 @@ def _sanitize_for_fs(text: str) -> str:
     return text.strip()
 
 
+ORDER_FOLDER_NAME_KEYS = (
+    "recipient_name",
+    "shipping_name",
+    "billing_name",
+    "buyer_name",
+    "billing_email",
+    "email",
+    "name",
+)
+
+
+def _first_nonempty_mapping_value(*maps):
+    valid_maps = [mapping for mapping in maps if isinstance(mapping, dict)]
+    for key in ORDER_FOLDER_NAME_KEYS:
+        for mapping in valid_maps:
+            value = mapping.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return None
+
+
 def format_customer_name(name, order_number) -> str:
     """Last, First [Middle] – order_number. Skips reversal for company names."""
     oid = _sanitize_for_fs(str(order_number or "")) or "unknown"
@@ -319,13 +340,7 @@ def create_order_folder(row):
     if not isinstance(order, dict):
         order = row
 
-    name = (
-        order.get("buyer_name")
-        or order.get("name")
-        or row.get("buyer_name")
-        or row.get("name")
-        or "Unknown"
-    )
+    name = _first_nonempty_mapping_value(order, row) or "Unknown"
     order_number = _order_number_from_dict(row)
     if not order_number:
         v = order.get("order_number")

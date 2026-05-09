@@ -153,9 +153,18 @@ function fieldValue(row, column, dateConfig, priceRule = null, statusConfig = nu
   return value === null || value === undefined || value === "" ? "—" : value;
 }
 
-function GiftPrintButton({ row, cellBackground, onGenerateGiftLetter }) {
-  const onDark = cellBackground && contrastColor(cellBackground) === "#ffffff";
-  const iconColor = onDark ? "#ffffff" : "#2563eb";
+function GiftPrintIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path d="M6 7V3h8v4" />
+      <path d="M6 15H4.5A2.5 2.5 0 0 1 2 12.5v-3A2.5 2.5 0 0 1 4.5 7h11A2.5 2.5 0 0 1 18 9.5v3a2.5 2.5 0 0 1-2.5 2.5H14" />
+      <path d="M6 12h8v5H6z" />
+      <path d="M14.5 10h.01" />
+    </svg>
+  );
+}
+
+function GiftPrintButton({ row, onGenerateGiftLetter }) {
   return (
     <button
       type="button"
@@ -168,10 +177,20 @@ function GiftPrintButton({ row, cellBackground, onGenerateGiftLetter }) {
       }}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
-      style={{ color: iconColor }}
     >
-      🖨
+      <GiftPrintIcon />
     </button>
+  );
+}
+
+function GiftMessageCell({ row }) {
+  const message = String(row.gift_message || "").trim();
+  if (!message) return <span className="orders-cell-muted">—</span>;
+
+  return (
+    <span className="orders-gift-message-pill">
+      <span className="orders-gift-message-text">{message}</span>
+    </span>
   );
 }
 
@@ -313,6 +332,8 @@ export default function OrdersTable({
   excludedSearchColumns = new Set(),
   onExcludeSearchColumn,
   onNewOrder,
+  showEmailIcon = true,
+  onEmailCompose,
 }) {
   const [localProfile, setLocalProfile] = React.useState(readLocalWidthProfile);
   const [selectedIds, setSelectedIds] = React.useState(() => new Set());
@@ -325,7 +346,7 @@ export default function OrdersTable({
     .filter((field) => field.visibleInOrders !== false);
   const columns = buildAdaptiveColumns(visibleFields.length ? visibleFields : [
     { key: "order_number", label: "Order #" },
-    { key: "buyer_name", label: "Buyer" },
+    { key: "billing_name", label: "Billing Name" },
     { key: "ship_by", label: "Ship By" },
     { key: "status", label: "Status" },
   ], localProfile, sheetScale);
@@ -487,7 +508,7 @@ export default function OrdersTable({
 
   return (
     <>
-    <div className={`orders-table-wrap orders-table-wrap--no-bottom-radius${searchActive ? " search-active" : ""}`} style={tableStyleVars}>
+    <div className={`orders-table-wrap${searchActive ? " search-active" : ""}`} style={tableStyleVars}>
       <table ref={tableRef} className="orders-table" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
         <colgroup>
           <col style={{ width: CHECKBOX_COLUMN_WIDTH, minWidth: CHECKBOX_COLUMN_WIDTH, maxWidth: CHECKBOX_COLUMN_WIDTH }} />
@@ -583,26 +604,49 @@ export default function OrdersTable({
                 </td>
                 {columns.map((column) => {
                   const baseStyle = cellStyle(row, column, priceRule) || {};
-                  const hasGiftPrintIcon = column.key === "gift_message"
-                    && !!String(row.gift_message || "").trim()
-                    && documentsConfig?.show_gift_print_icon !== false;
+                  const hasGiftMessage = column.key === "gift_message" && !!String(row.gift_message || "").trim();
+                  const hasGiftPrintIcon = hasGiftMessage && documentsConfig?.show_gift_print_icon !== false;
+                  const isStatusCol = column.key === "status";
+                  const showEmailBtn = isStatusCol && showEmailIcon;
                   return (
                     <td
                       key={column.key}
                       style={{
                         ...baseStyle,
-                        position: hasGiftPrintIcon ? "relative" : baseStyle.position,
-                        paddingRight: hasGiftPrintIcon ? "34px" : baseStyle.paddingRight,
+                        position: hasGiftPrintIcon || showEmailBtn ? "relative" : baseStyle.position,
                       }}
-                      onClick={column.key === "status" ? (event) => event.stopPropagation() : undefined}
-                      onDoubleClick={column.key === "status" ? (event) => event.stopPropagation() : undefined}
-                      onPointerDown={column.key === "status" ? (event) => event.stopPropagation() : undefined}
-                      onMouseDown={column.key === "status" ? (event) => event.stopPropagation() : undefined}
+                      onClick={isStatusCol ? (event) => event.stopPropagation() : undefined}
+                      onDoubleClick={isStatusCol ? (event) => event.stopPropagation() : undefined}
+                      onPointerDown={isStatusCol ? (event) => event.stopPropagation() : undefined}
+                      onMouseDown={isStatusCol ? (event) => event.stopPropagation() : undefined}
                     >
                       {hasGiftPrintIcon ? (
-                        <GiftPrintButton row={row} cellBackground={baseStyle.background} onGenerateGiftLetter={onGenerateGiftLetter} />
+                        <GiftPrintButton row={row} onGenerateGiftLetter={onGenerateGiftLetter} />
                       ) : null}
-                      {fieldValue(row, column, dateConfig, priceRule, statusConfig, onStatusChange, savingStatusIds)}
+                      {hasGiftMessage ? (
+                        <GiftMessageCell row={row} />
+                      ) : fieldValue(row, column, dateConfig, priceRule, statusConfig, onStatusChange, savingStatusIds)}
+                      {showEmailBtn ? (
+                        <button
+                          type="button"
+                          title="Open email thread"
+                          className="email-btn"
+                          onClick={(event) => { event.stopPropagation(); onEmailCompose?.(row); }}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                          style={{
+                            position: "absolute", bottom: 2, right: 3,
+                            width: 20, height: 20,
+                            background: "none", border: "none", cursor: "pointer",
+                            padding: 0, lineHeight: 1, fontSize: 17,
+                            color: "#1e40af", opacity: 0.9,
+                            transition: "opacity 0.15s, transform 0.1s",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "scale(1.2)"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "scale(1)"; }}
+                        >✉</button>
+                      ) : null}
                     </td>
                   );
                 })}
@@ -611,6 +655,23 @@ export default function OrdersTable({
           })}
         </tbody>
       </table>
+      <div
+        className="orders-empty-zone"
+        style={{ minWidth: tableMinWidth, ...tableStyleVars }}
+      >
+        {Array.from({ length: EMPTY_TRAILING_ROW_COUNT }).map((_, index) => (
+          <div
+            key={`empty-row-${index}`}
+            className="orders-empty-zone-row"
+            style={{ background: index % 2 === 0 ? "#fff" : "#fafafa" }}
+            onDoubleClick={() => onNewOrder?.()}
+          >
+            {index === 0 ? (
+              <span className="orders-empty-hint">Double-click to add a manual order</span>
+            ) : null}
+          </div>
+        ))}
+      </div>
       {contextMenu.visible ? (
         <div
           className="orders-context-menu"
@@ -659,7 +720,7 @@ export default function OrdersTable({
                   <div className="orders-confirm-list">
                     {confirmDelete.rows.map((row) => (
                       <div key={getRowId(row)}>
-                        #{row.order_number || row.order_id} - {row.buyer_name || "Unknown"}
+                        #{row.order_number || row.order_id} - {row.billing_name || row.recipient_name || "Unknown"}
                       </div>
                     ))}
                   </div>
@@ -668,7 +729,7 @@ export default function OrdersTable({
                 <>
                   Are you sure you want to delete order{" "}
                   <strong>#{confirmDelete.rows[0]?.order_number || confirmDelete.rows[0]?.order_id}</strong>
-                  {" "}for <strong>{confirmDelete.rows[0]?.buyer_name || "this buyer"}</strong>?
+                  {" "}for <strong>{confirmDelete.rows[0]?.billing_name || confirmDelete.rows[0]?.recipient_name || "this buyer"}</strong>?
                 </>
               )}
               <br />
@@ -685,23 +746,6 @@ export default function OrdersTable({
           </div>
         </div>
       ) : null}
-    </div>
-    <div
-      className="orders-empty-zone"
-      style={{ minWidth: tableMinWidth, ...tableStyleVars }}
-    >
-      {Array.from({ length: EMPTY_TRAILING_ROW_COUNT }).map((_, index) => (
-        <div
-          key={`empty-row-${index}`}
-          className="orders-empty-zone-row"
-          style={{ background: index % 2 === 0 ? "#fff" : "#fafafa" }}
-          onDoubleClick={() => onNewOrder?.()}
-        >
-          {index === 0 ? (
-            <span className="orders-empty-hint">Double-click to add a manual order</span>
-          ) : null}
-        </div>
-      ))}
     </div>
     </>
   );

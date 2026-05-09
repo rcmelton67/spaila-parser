@@ -6,40 +6,47 @@ const DEFAULT_ORDER = [
   "status",
   "order_info",
   "order_number",
-  "buyer_name",
-  "price",
+  "billing_name",
+  "billing_address",
+  "billing_email",
+  "phone_number",
+  "order_date",
+  "ship_by",
+  "recipient_name",
+  "shipping_address",
   "quantity",
+  "price",
   "custom_1",
   "custom_2",
   "custom_3",
   "custom_4",
   "custom_5",
   "custom_6",
-  "shipping_address",
-  "order_date",
-  "ship_by",
-  "buyer_email",
   "gift_message",
   "order_notes",
 ];
+const HIDDEN_LEGACY_FIELD_KEYS = new Set(["buyer_name", "buyer_email", "shipping_name"]);
 
 const DEFAULT_LABELS = {
   status: "Status",
   order_info: "Order Info",
   order_number: "Order #",
-  buyer_name: "Buyer",
-  price: "Price",
+  billing_name: "Billing Name",
+  billing_address: "Billing Address",
+  billing_email: "Email",
+  phone_number: "Phone Number",
+  order_date: "Order Date",
+  ship_by: "Ship By",
+  recipient_name: "Shipping Name",
+  shipping_address: "Shipping Address",
   quantity: "Qty",
+  price: "Price",
   custom_1: "Pet Name",
   custom_2: "Pet Type",
   custom_3: "Epitaph",
   custom_4: "Dates Of Life",
   custom_5: "Stone Color",
   custom_6: "Type",
-  shipping_address: "Shipping Address",
-  order_date: "Order Date",
-  ship_by: "Ship By",
-  buyer_email: "Buyer Email",
   gift_message: "Gift Message",
   order_notes: "Notes",
 };
@@ -57,7 +64,8 @@ function normalizePrintConfig(config = {}) {
 function layoutToColumns(layout) {
   const fields = Array.isArray(layout?.fields) ? layout.fields : [];
   const fieldMap = new Map(fields.map((field) => [field.key, field]));
-  const order = Array.isArray(layout?.order) && layout.order.length ? layout.order : DEFAULT_ORDER;
+  const order = (Array.isArray(layout?.order) && layout.order.length ? layout.order : DEFAULT_ORDER)
+    .filter((key) => !HIDDEN_LEGACY_FIELD_KEYS.has(key));
   const status = {
     key: "status",
     label: layout?.status?.columnLabel || "Status",

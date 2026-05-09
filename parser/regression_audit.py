@@ -19,10 +19,12 @@ CORE_FIELDS = [
     "order_number",
     "price",
     "shipping_address",
-    "buyer_name",
+    "billing_address",
+    "billing_name",
+    "recipient_name",
     "quantity",
     "ship_by",
-    "buyer_email",
+    "billing_email",
     "order_date",
 ]
 REPORT_FIELD_MAP = {"price": "item_price"}

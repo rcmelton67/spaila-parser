@@ -1,6 +1,12 @@
 import React from "react";
 import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
-import { OPERATIONAL_ORDER_FIELDS, ORDER_FIELD_STORAGE } from "../../../../../shared/models/orderFields.mjs";
+import {
+  HIDDEN_LEGACY_ORDER_FIELD_KEYS,
+  OPERATIONAL_ORDER_FIELD_BY_KEY,
+  OPERATIONAL_ORDER_FIELD_SECTIONS,
+  OPERATIONAL_ORDER_FIELDS,
+  ORDER_FIELD_STORAGE,
+} from "../../../../../shared/models/orderFields.mjs";
 import { normalizeStatusConfig } from "../../../../../shared/models/statusConfig.mjs";
 import { api, attachmentsApi, ordersApi } from "../../api.js";
 import AttachmentCard from "../attachments/AttachmentCard.jsx";
@@ -54,6 +60,16 @@ function getFieldLabel(field, labelMap) {
   return labelMap[field.key] || field.label;
 }
 
+function shouldOpenBilling(order) {
+  const platform = String(order?.platform || order?.source || order?.marketplace || "").toLowerCase();
+  const isNonEtsy = !!(platform && !platform.includes("etsy"));
+  return !!(order?.billing_name || order?.buyer_name || order?.billing_address || order?.phone_number || isNonEtsy);
+}
+
+function shouldOpenGift(order) {
+  return !!(order?.is_gift || order?.gift_wrap || order?.gift_message);
+}
+
 function chooseActiveItem(order, initialItemId, previousItemId = "") {
   const items = Array.isArray(order?.items) ? order.items : [];
   if (!items.length) return null;
@@ -103,9 +119,10 @@ function buildSavePayload(form) {
     is_gift: !!form.is_gift,
     gift_wrap: !!form.gift_wrap,
     item_status: form.item_status || null,
-    buyer_name: form.buyer_name,
-    shipping_name: form.shipping_name,
-    buyer_email: form.buyer_email,
+    billing_name: form.billing_name,
+    billing_email: form.billing_email,
+    billing_address: form.billing_address,
+    recipient_name: form.recipient_name,
     shipping_address: form.shipping_address,
     phone_number: form.phone_number,
     order_number: form.order_number,
@@ -134,6 +151,7 @@ function draftStorageKey(orderId) {
 }
 
 function FieldInput({ field, label, value, onChange }) {
+  const isAddressField = field.key === "billing_address" || field.key === "shipping_address";
   const commonProps = {
     value,
     onChange: (event) => onChange(field.key, event.target.value),
@@ -142,7 +160,7 @@ function FieldInput({ field, label, value, onChange }) {
   return (
     <label className={`order-editor-field${field.multiline ? " multiline" : ""}`}>
       {field.multiline ? (
-        <textarea {...commonProps} aria-label={label} rows={field.key === "shipping_address" ? 4 : 3} />
+        <textarea {...commonProps} aria-label={label} rows={isAddressField ? 4 : 3} />
       ) : (
         <input {...commonProps} aria-label={label} type={field.inputType || "text"} />
       )}
@@ -150,7 +168,7 @@ function FieldInput({ field, label, value, onChange }) {
   );
 }
 
-export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
+export default function OrderDetail({ orderId, initialItemId = "", onBack, focusCompose = false }) {
   const [order, setOrder] = React.useState(null);
   const [attachments, setAttachments] = React.useState([]);
   const [form, setForm] = React.useState(null);
@@ -159,6 +177,10 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
   const [state, setState] = React.useState({ loading: true, saving: false, error: "", conflict: null });
   const [messageDraft, setMessageDraft] = React.useState("");
   const [messageState, setMessageState] = React.useState({ sending: false, error: "", message: "" });
+  const [billingOpen, setBillingOpen] = React.useState(null);
+  const [giftOpen, setGiftOpen] = React.useState(null);
+  const composeRef = React.useRef(null);
+  const [savingStatus, setSavingStatus] = React.useState(false);
   const [statusConfig, setStatusConfig] = React.useState(() => normalizeStatusConfig(null));
   const [labelMap, setLabelMap] = React.useState({});
   const [pricingRules, setPricingRules] = React.useState([]);
@@ -175,6 +197,18 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
   React.useEffect(() => {
     activeItemIdRef.current = activeItemId;
   }, [activeItemId]);
+
+  React.useEffect(() => {
+    if (focusCompose && composeRef.current) {
+      composeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      composeRef.current.focus();
+    }
+  }, [focusCompose]);
+
+  React.useEffect(() => {
+    setBillingOpen(null);
+    setGiftOpen(null);
+  }, [orderId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -199,6 +233,8 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
     setActiveItemId(nextItem?.id || "");
     setForm(nextForm);
     setLoadedForm(nextForm);
+    setBillingOpen((prev) => prev === null ? shouldOpenBilling(nextOrder) : prev);
+    setGiftOpen((prev) => prev === null ? shouldOpenGift(nextOrder) : prev);
   }, [pricingRules]);
 
   const loadOrder = React.useCallback(async ({ preserveDirty = false, attempt = 0 } = {}) => {
@@ -267,6 +303,60 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  async function updateCurrentItemStatus(nextValue) {
+    const itemId = String(form?.id || activeItemId || "").trim();
+    if (!itemId) return;
+    const previousStatus = String(form?.item_status || "");
+    const nextStatus = nextValue || "";
+    setSavingStatus(true);
+    setState((current) => ({ ...current, error: "", conflict: null }));
+    setForm((current) => (current ? { ...current, item_status: nextStatus } : current));
+    setLoadedForm((current) => (
+      current && String(current.id || "") === itemId
+        ? { ...current, item_status: nextStatus }
+        : current
+    ));
+    setOrder((current) => (
+      current
+        ? {
+            ...current,
+            items: (current.items || []).map((item) => (
+              String(item.id || "") === itemId ? { ...item, item_status: nextStatus } : item
+            )),
+          }
+        : current
+    ));
+    try {
+      await ordersApi.updateItemStatus(itemId, nextStatus || null);
+      window.dispatchEvent(new CustomEvent("spaila:item-status-updated", {
+        detail: { itemId, item_status: nextStatus },
+      }));
+    } catch (error) {
+      setForm((current) => (current ? { ...current, item_status: previousStatus } : current));
+      setLoadedForm((current) => (
+        current && String(current.id || "") === itemId
+          ? { ...current, item_status: previousStatus }
+          : current
+      ));
+      setOrder((current) => (
+        current
+          ? {
+              ...current,
+              items: (current.items || []).map((item) => (
+                String(item.id || "") === itemId ? { ...item, item_status: previousStatus } : item
+              )),
+            }
+          : current
+      ));
+      setState((current) => ({
+        ...current,
+        error: error?.message || "Could not update item status.",
+      }));
+    } finally {
+      setSavingStatus(false);
+    }
+  }
+
   function changeActiveItem(itemId) {
     if (dirty) {
       const discard = window.confirm("Discard unsaved changes and switch items?");
@@ -332,7 +422,7 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
           direction: "outbound",
           type: "outbound",
           subject: `Order ${form?.order_number || order?.order_number || ""}`.trim(),
-          to: form?.buyer_email || order?.buyer_email || "",
+          to: form?.billing_email || order?.billing_email || form?.buyer_email || order?.buyer_email || "",
           body,
           source: "web",
           delivery_status: "draft_saved",
@@ -379,6 +469,24 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
   const activeItem = items.find((item) => item.id === activeItemId) || items[0];
   const statusStates = Array.isArray(statusConfig?.states) ? statusConfig.states : [];
   const conversationMessages = order.messages || [];
+  const hiddenLegacyFields = new Set(HIDDEN_LEGACY_ORDER_FIELD_KEYS);
+  const fieldForKey = (key) => OPERATIONAL_ORDER_FIELD_BY_KEY[key] || null;
+  const renderOperationalField = (key) => {
+    const field = fieldForKey(key);
+    if (!field || hiddenLegacyFields.has(field.key)) return null;
+    return (
+      <FieldInput
+        key={field.key}
+        field={field}
+        label={getFieldLabel(field, labelMap)}
+        value={form[field.key] || ""}
+        onChange={setField}
+      />
+    );
+  };
+  const renderOperationalDivider = (key) => (
+    <div key={key} className="operational-form-divider" aria-hidden="true" />
+  );
 
   return (
     <section className="detail-page order-editor-page">
@@ -387,11 +495,15 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
         <div className="order-editor-title">
           <span className="section-eyebrow">Order Workspace</span>
           <h2>Order #{form.order_number || "Unnumbered"}</h2>
-          <p>{form.buyer_name || "Unknown buyer"} · {order.platform || "unknown"}</p>
+          <p>{form.billing_name || form.recipient_name || "Unknown purchaser"} · {order.platform || "unknown"}</p>
         </div>
         <label className="order-editor-status">
           <span>{statusConfig.columnLabel || "Status"}</span>
-          <select value={form.item_status || ""} onChange={(event) => setField("item_status", event.target.value)}>
+          <select
+            value={form.item_status || ""}
+            onChange={(event) => updateCurrentItemStatus(event.target.value)}
+            disabled={savingStatus || state.saving}
+          >
             <option value="" hidden></option>
             {statusStates.map((status) => (
               <option key={status.key} value={status.key}>{status.label}</option>
@@ -431,27 +543,83 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
             </label>
           ) : null}
 
-          <div className="order-editor-fields">
-            {OPERATIONAL_ORDER_FIELDS.map((field) => (
-              <FieldInput
-                key={field.key}
-                field={field}
-                label={getFieldLabel(field, labelMap)}
-                value={form[field.key] || ""}
-                onChange={setField}
-              />
-            ))}
-          </div>
+          <div className="order-editor-fields operational-form-fields">
+            {OPERATIONAL_ORDER_FIELD_SECTIONS.find((section) => section.id === "order_core")?.keys.map(renderOperationalField)}
+            {renderOperationalDivider("core-billing-divider")}
 
-          <div className="order-editor-gift-row">
-            <label>
-              <input type="checkbox" checked={!!form.is_gift} onChange={(event) => setField("is_gift", event.target.checked)} />
-              <span>Mark as gift</span>
-            </label>
-            <label>
-              <input type="checkbox" checked={!!form.gift_wrap} onChange={(event) => setField("gift_wrap", event.target.checked)} />
-              <span>Gift wrap</span>
-            </label>
+            {/* ── Billing accordion ── */}
+            <div className="order-accordion">
+              <div
+                className="order-accordion-header"
+                role="button"
+                tabIndex={0}
+                aria-expanded={billingOpen ?? false}
+                onClick={() => setBillingOpen((o) => !o)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setBillingOpen((o) => !o); } }}
+              >
+                <span className="order-accordion-label">
+                  Billing Details
+                  <span className="order-accordion-label-sub"> (optional)</span>
+                </span>
+                <span className="order-accordion-summary">
+                  {!(billingOpen ?? false) && (form?.billing_name || order?.billing_name) ? (
+                    <span className="order-accordion-name-preview">{form?.billing_name || order?.billing_name}</span>
+                  ) : null}
+                  <span className={`order-accordion-chevron${(billingOpen ?? false) ? " open" : ""}`}>▶</span>
+                </span>
+              </div>
+              {(billingOpen ?? false) ? (
+                <div className="order-accordion-body">
+                  {OPERATIONAL_ORDER_FIELD_SECTIONS.find((section) => section.id === "billing")?.keys.map(renderOperationalField)}
+                </div>
+              ) : null}
+            </div>
+
+            {renderOperationalDivider("billing-shipping-divider")}
+            {OPERATIONAL_ORDER_FIELD_SECTIONS.find((section) => section.id === "shipping")?.keys.map(renderOperationalField)}
+            {renderOperationalDivider("shipping-gift-divider")}
+
+            {/* ── Gift accordion ── */}
+            <div className="order-accordion">
+              <div
+                className="order-accordion-header"
+                role="button"
+                tabIndex={0}
+                aria-expanded={giftOpen ?? false}
+                onClick={() => setGiftOpen((o) => !o)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setGiftOpen((o) => !o); } }}
+              >
+                <span className="order-accordion-label">Gift</span>
+                <span className="order-accordion-summary">
+                  {!(giftOpen ?? false) ? (
+                    <>
+                      {form?.is_gift ? <span className="order-accordion-badge order-accordion-badge--gift">Gift</span> : null}
+                      {form?.gift_wrap ? <span className="order-accordion-badge order-accordion-badge--wrap">Wrapped</span> : null}
+                      {form?.gift_message ? <span className="order-accordion-badge order-accordion-badge--msg">Message</span> : null}
+                    </>
+                  ) : null}
+                  <span className={`order-accordion-chevron${(giftOpen ?? false) ? " open" : ""}`}>▶</span>
+                </span>
+              </div>
+              {(giftOpen ?? false) ? (
+                <div className="order-accordion-body">
+                  <div className="order-editor-gift-row">
+                    <label>
+                      <input type="checkbox" checked={!!form?.is_gift} onChange={(event) => setField("is_gift", event.target.checked)} />
+                      <span>Gift</span>
+                    </label>
+                    <label>
+                      <input type="checkbox" checked={!!form?.gift_wrap} onChange={(event) => setField("gift_wrap", event.target.checked)} />
+                      <span>Gift wrap</span>
+                    </label>
+                  </div>
+                  {renderOperationalField("gift_message")}
+                </div>
+              ) : null}
+            </div>
+
+            {renderOperationalDivider("gift-remaining-divider")}
+            {OPERATIONAL_ORDER_FIELD_SECTIONS.find((section) => section.id === "remaining")?.keys.map(renderOperationalField)}
           </div>
           <div className="order-editor-footer-actions">
             <button className="ghost-button" type="button" onClick={cancelEdit} disabled={state.saving}>
@@ -522,6 +690,7 @@ export default function OrderDetail({ orderId, initialItemId = "", onBack }) {
             </div>
             <label className="order-editor-field multiline">
               <textarea
+                ref={composeRef}
                 value={messageDraft}
                 onChange={(event) => setMessageDraft(event.target.value)}
                 placeholder="Write a reply or internal communication note..."

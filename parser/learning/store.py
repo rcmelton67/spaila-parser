@@ -7,11 +7,17 @@ from ..structural_rules import classify_role, structural_signature
 from datetime import datetime, timezone
 
 STORE_PATH = "parser/learning/learning_store.json"
+
+# Canonical field sets — legacy buyer_name/buyer_email are NOT included.
+# Records stored under legacy keys are normalized on read via _normalize_record.
 CORE_FIELDS = {
     "order_number",
     "shipping_address",
-    "buyer_name",
-    "buyer_email",
+    "billing_address",
+    "billing_name",
+    "recipient_name",
+    "billing_email",
+    "phone_number",
     "price",
     "quantity",
     "order_date",
@@ -20,13 +26,22 @@ CORE_FIELDS = {
 TRUST_GLOBAL_TEMPLATE_ID = "__global_structural_trust__"
 TRUST_FIELDS = {
     "order_number",
-    "buyer_name",
-    "buyer_email",
+    "billing_name",
+    "recipient_name",
+    "billing_email",
     "shipping_address",
+    "billing_address",
     "order_date",
     "ship_by",
     "quantity",
     "price",
+}
+
+# Legacy → canonical field alias map (mirrors canonical_fields.py)
+_LEGACY_FIELD_ALIAS: Dict[str, str] = {
+    "buyer_name":    "billing_name",
+    "buyer_email":   "billing_email",
+    "shipping_name": "recipient_name",
 }
 
 
@@ -49,8 +64,10 @@ def save_store(store: Dict[str, List[Dict]]) -> None:
 
 
 def _normalize_record(record: Dict) -> Dict:
+    raw_field = record.get("field", "")
+    canonical_field = _LEGACY_FIELD_ALIAS.get(raw_field, raw_field)
     return {
-        "field": record.get("field", ""),
+        "field": canonical_field,
         "value": record.get("value", ""),
         "template_id": record.get("template_id", ""),
         "source": record.get("source", ""),
@@ -542,6 +559,7 @@ def update_structural_trust(
     context: Dict,
     polarity: str,
 ) -> Dict:
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     if field not in TRUST_FIELDS:
         return {}
 
@@ -629,6 +647,7 @@ def load_structural_trust(
 ) -> List[Dict]:
     store = load_store()
     records: List[Dict] = []
+    canonical_field = _LEGACY_FIELD_ALIAS.get(field, field) if field else None
     for tid, store_records in store.items():
         if template_id and tid not in {template_id, TRUST_GLOBAL_TEMPLATE_ID}:
             continue
@@ -638,13 +657,14 @@ def load_structural_trust(
                 continue
             if not record.get("active", True):
                 continue
-            if field and record.get("field") != field:
+            if canonical_field and record.get("field") != canonical_field:
                 continue
             records.append(record)
     return records
 
 
 def save_assignment(template_id: str, field: str, value: str, context=None) -> None:
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     raw_value = "" if value is None else str(value)
     value = _normalize_value(value)
     source = ""
@@ -734,7 +754,7 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
     _self_heal_matching_rejections(store, template_id, payload)
     save_store(store)
     update_structural_trust(template_id, field, value, payload, "positive")
-    if field in {"order_number", "price", "buyer_name"}:
+    if field in {"order_number", "price", "billing_name", "recipient_name"}:
         rule = save_structural_rule(template_id, field, "positive", value, payload)
         print(
             "[POSITIVE_RULE_WRITTEN] "
@@ -759,6 +779,7 @@ def save_assignment(template_id: str, field: str, value: str, context=None) -> N
 
 
 def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
+    field = _LEGACY_FIELD_ALIAS.get(field, field)
     source = ""
     value = _normalize_value(getattr(candidate_or_value, "value", candidate_or_value))
     segment_id = getattr(candidate_or_value, "segment_id", "")
@@ -803,7 +824,7 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
         role = candidate_or_value.get("role", role)
         struct_sig = candidate_or_value.get("structural_signature", struct_sig)
     store = load_store()
-    if field != "shipping_address":
+    if field not in {"shipping_address", "billing_address"}:
         _deactivate_matching_assignments(
             store,
             template_id,
@@ -843,7 +864,7 @@ def save_rejection(template_id: str, field: str, candidate_or_value) -> None:
         "active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    if field in {"order_number", "price", "buyer_name"}:
+    if field in {"order_number", "price", "billing_name", "recipient_name"}:
         rule = save_structural_rule(template_id, field, "negative", value, reject_payload)
         print(
             "[UNLEARN_STRUCTURAL] "
@@ -893,7 +914,10 @@ def load_records(
 ) -> List[Dict]:
     records = [_normalize_record(r) for r in load_store().get(template_id, [])]
     if field is not None:
-        records = [r for r in records if r["field"] == field]
+        # Normalize the query key so callers using legacy names still match
+        # records that were already canonicalized during save/load.
+        canonical_field = _LEGACY_FIELD_ALIAS.get(field, field)
+        records = [r for r in records if r["field"] == canonical_field]
     if record_type is not None:
         records = [r for r in records if r["type"] == record_type]
     if field == "quantity" and source is not None:

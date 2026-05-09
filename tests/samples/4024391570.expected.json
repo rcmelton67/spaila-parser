@@ -1,10 +1,34 @@
 [
-  { "field": "quantity", "value": "1" },
-  { "field": "price", "value": "159.99" },
-  { "field": "order_number", "value": "4024391570" },
-  { "field": "order_date", "value": "April 9, 2026" },
-  { "field": "buyer_email", "value": "djfurlong18@yahoo.com" },
-  { "field": "ship_by", "value": "Apr 16" },
-  { "field": "buyer_name", "value": "Doug Furlong" },
-  { "field": "shipping_address", "value": "115 Carpenter Rd\nWALPOLE , MA 02081-3303" }
+  {
+    "field": "quantity",
+    "value": "1"
+  },
+  {
+    "field": "price",
+    "value": "159.99"
+  },
+  {
+    "field": "order_number",
+    "value": "4024391570"
+  },
+  {
+    "field": "order_date",
+    "value": "April 9, 2026"
+  },
+  {
+    "field": "billing_email",
+    "value": "djfurlong18@yahoo.com"
+  },
+  {
+    "field": "ship_by",
+    "value": "Apr 16"
+  },
+  {
+    "field": "recipient_name",
+    "value": "Doug Furlong"
+  },
+  {
+    "field": "shipping_address",
+    "value": "115 Carpenter Rd\nWALPOLE , MA 02081-3303\nUnited States"
+  }
 ]

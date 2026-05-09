@@ -12,9 +12,12 @@ contextBridge.exposeInMainWorld("supportConsole", {
 
   // Status management
   updateStatus:  (fp, status) => ipcRenderer.invoke("support:update-status", fp, status),
+  updateDashboard: (fp, patch) => ipcRenderer.invoke("support:update-dashboard", fp, patch || {}),
 
   // File system
   openFile:      (fp)        => ipcRenderer.invoke("support:open-file", fp),
+  openAttachment:(fp)        => ipcRenderer.invoke("support:open-attachment", fp),
+  locateAttachment:(fp)      => ipcRenderer.invoke("support:locate-attachment", fp),
   openFolder:    ()          => ipcRenderer.invoke("support:open-reports-folder"),
 
   // Live watch — backend pushes "support:new-report" events to this window

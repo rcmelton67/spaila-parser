@@ -10,7 +10,8 @@ missing the pet_name field so the search_blob is complete.
 
 Fields written to manifest (strict contract — nothing else):
     schema_version, order_id, order_number,
-    buyer_name, buyer_email, shipping_address, pet_name,
+    buyer_name, billing_name, buyer_email, billing_email,
+    billing_address, recipient_name, shipping_address, pet_name,
     folder_name, folder_path, archived_at, search_blob
 
 Usage:
@@ -25,12 +26,15 @@ from pathlib import Path
 ARCHIVE_ROOT = Path("C:/Spaila/archive")
 
 # Schema is "current" when it has the pet_name key regardless of value.
-CURRENT_SCHEMA_KEYS = {"pet_name"}
+CURRENT_SCHEMA_KEYS = {"pet_name", "billing_name", "billing_email", "billing_address", "recipient_name"}
 
 
-def build_search_blob(order_number, buyer_name, buyer_email, shipping_address, pet_name):
+def build_search_blob(order_number, buyer_name, billing_name, buyer_email, billing_email, billing_address, recipient_name, shipping_address, pet_name):
     return " ".join(
-        str(v or "") for v in (order_number, buyer_name, buyer_email, shipping_address, pet_name)
+        str(v or "") for v in (
+            order_number, buyer_name, billing_name, buyer_email, billing_email,
+            billing_address, recipient_name, shipping_address, pet_name
+        )
     ).lower()
 
 
@@ -44,17 +48,20 @@ def extract_from_conversation(convo):
     Pull core fields from the conversation root first, then fall back to
     best-effort message-body parsing for order_number and buyer_email.
 
-    Returns (order_number, buyer_name, buyer_email, shipping_address, pet_name).
-    Any value may be None.
+    Returns order core fields. Any value may be None.
     """
     order_number     = _str(convo.get("order_number"))
     buyer_name       = _str(convo.get("buyer_name"))
+    billing_name     = _str(convo.get("billing_name")) or buyer_name
     buyer_email      = _str(convo.get("buyer_email"))
+    billing_email    = _str(convo.get("billing_email")) or buyer_email
+    billing_address  = _str(convo.get("billing_address"))
+    recipient_name   = _str(convo.get("recipient_name")) or _str(convo.get("shipping_name"))
     shipping_address = _str(convo.get("shipping_address"))
     pet_name         = _str(convo.get("pet_name"))
 
     if order_number and buyer_email:
-        return order_number, buyer_name, buyer_email, shipping_address, pet_name
+        return order_number, buyer_name, billing_name, buyer_email, billing_email, billing_address, recipient_name, shipping_address, pet_name
 
     for msg in convo.get("messages", []):
         body = str(msg.get("body") or "").lower()
@@ -72,7 +79,7 @@ def extract_from_conversation(convo):
         if order_number and buyer_email:
             break
 
-    return order_number, buyer_name, buyer_email, shipping_address, pet_name
+    return order_number, buyer_name, billing_name, buyer_email, billing_email, billing_address, recipient_name, shipping_address, pet_name
 
 
 def needs_backfill(manifest_path: Path) -> bool:
@@ -131,13 +138,17 @@ def backfill():
             except (OSError, json.JSONDecodeError):
                 existing = {}
 
-        (order_number, buyer_name, buyer_email,
-         shipping_address, pet_name) = extract_from_conversation(convo)
+        (order_number, buyer_name, billing_name, buyer_email, billing_email,
+         billing_address, recipient_name, shipping_address, pet_name) = extract_from_conversation(convo)
 
         # Prefer already-correct values from an existing (partial) manifest.
         order_number     = _str(existing.get("order_number"))     or order_number
         buyer_name       = _str(existing.get("buyer_name"))       or buyer_name
+        billing_name     = _str(existing.get("billing_name"))     or billing_name or buyer_name
         buyer_email      = _str(existing.get("buyer_email"))      or buyer_email
+        billing_email    = _str(existing.get("billing_email"))    or billing_email or buyer_email
+        billing_address  = _str(existing.get("billing_address"))  or billing_address
+        recipient_name   = _str(existing.get("recipient_name"))   or recipient_name
         shipping_address = _str(existing.get("shipping_address")) or shipping_address
         pet_name         = _str(existing.get("pet_name"))         or pet_name
         order_id         = _str(existing.get("order_id"))         or _str(convo.get("order_id"))
@@ -150,14 +161,19 @@ def backfill():
             "order_id":        order_id,
             "order_number":    order_number,
             "buyer_name":      buyer_name,
+            "billing_name":    billing_name,
             "buyer_email":     buyer_email,
+            "billing_email":   billing_email,
+            "billing_address": billing_address,
+            "recipient_name":  recipient_name,
             "shipping_address": shipping_address,
             "pet_name":        pet_name,
             "folder_name":     folder.name,
             "folder_path":     str(folder),
             "archived_at":     archived_at,
             "search_blob":     build_search_blob(
-                order_number, buyer_name, buyer_email, shipping_address, pet_name
+                order_number, buyer_name, billing_name, buyer_email, billing_email,
+                billing_address, recipient_name, shipping_address, pet_name
             ),
         }
 

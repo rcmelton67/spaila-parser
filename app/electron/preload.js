@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("parserApp", {
   getAccountAuthToken: ()        => ipcRenderer.invoke("account-auth:get-token"),
   saveAccountAuthToken:(token)   => ipcRenderer.invoke("account-auth:set-token", token || ""),
   clearAccountAuthToken:()       => ipcRenderer.invoke("account-auth:clear-token"),
+  getInstallIdentity:  ()        => ipcRenderer.invoke("account:get-install-identity"),
   getOrderFieldLayout: ()        => ipcRenderer.invoke("account:get-order-field-layout"),
   updateOrderFieldLayout: (layout) => ipcRenderer.invoke("account:update-order-field-layout", layout || {}),
   getPricingRules:     ()        => ipcRenderer.invoke("account:get-pricing-rules"),

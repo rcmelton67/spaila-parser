@@ -22,6 +22,7 @@ const WORKSPACE_SELECTED_EMAIL_ID_KEY = "workspace_selected_email_id";
 const WORKSPACE_SELECTED_THREAD_ID_KEY = "workspace_selected_thread_id";
 const WORKSPACE_SELECTED_SENT_ID_KEY = "workspace_selected_sent_id";
 const WORKSPACE_SCROLL_Y_KEY = "workspace_scroll_y";
+const WORKSPACE_MAIL_LIST_SCROLL_Y_KEY = "workspace_mail_list_scroll_y";
 
 function formatTimestamp(value) {
   if (!value) return "Unknown time";
@@ -1885,11 +1886,13 @@ export default function WorkspacePage({
   const trashRef = React.useRef({});
   const previousImapConnectedRef = React.useRef(false);
   const startupInboxFetchRef = React.useRef(false);
+  const mailListScrollRef = React.useRef(null);
   const previewScrollRef = React.useRef(null);
   const bottomRef = React.useRef(null);
   const lastConversationKeyRef = React.useRef("");
   const lastMessageCountRef = React.useRef(0);
   const hasRestoredSelectionRef = React.useRef(false);
+  const selectedInboxIndexRef = React.useRef(0);
 
   React.useEffect(() => {
     setMode("inbox");
@@ -2337,9 +2340,45 @@ export default function WorkspacePage({
   const mailServiceBusy = !!mailServiceState?.in_flight || refreshingInbox;
   const showInboxEmptyState = !loading && inboxItems.length === 0 && sentMessages.length === 0;
   const displayInboxPath = inboxPath || "Spaila/Inbox";
-  const inboxModeItems = selectableInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound");
-  const sentItems = sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound");
-  const checkedInboxItems = selectableInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item)));
+  const inboxModeItems = React.useMemo(
+    () => selectableInboxItems.filter((item) => String(item.direction || "inbound").toLowerCase() === "inbound"),
+    [selectableInboxItems],
+  );
+  const sentItems = React.useMemo(
+    () => sentMessages.filter((item) => String(item.direction || "outbound").toLowerCase() === "outbound"),
+    [sentMessages],
+  );
+  const checkedInboxItems = React.useMemo(
+    () => selectableInboxItems.filter((item) => checkedEmailIds.has(getInboxItemId(item))),
+    [checkedEmailIds, selectableInboxItems],
+  );
+
+  const rememberMailListScroll = React.useCallback(() => {
+    const node = mailListScrollRef.current;
+    if (!node) return;
+    setLocalStorageValue(WORKSPACE_MAIL_LIST_SCROLL_Y_KEY, String(node.scrollTop || 0));
+  }, []);
+
+  const rememberInboxSelectionIndex = React.useCallback((emailId, sourceItems = inboxModeItems) => {
+    const index = sourceItems.findIndex((item) => getInboxItemId(item) === emailId);
+    if (index >= 0) selectedInboxIndexRef.current = index;
+  }, [inboxModeItems]);
+
+  const selectNextInboxItemAfter = React.useCallback((emailId, sourceItems = inboxModeItems) => {
+    const remainingItems = sourceItems.filter((item) => getInboxItemId(item) !== emailId);
+    if (!remainingItems.length) {
+      setSelectedEmailId("");
+      return;
+    }
+    const removedIndex = sourceItems.findIndex((item) => getInboxItemId(item) === emailId);
+    const targetIndex = Math.min(
+      removedIndex >= 0 ? removedIndex : selectedInboxIndexRef.current,
+      remainingItems.length - 1,
+    );
+    const nextId = getInboxItemId(remainingItems[Math.max(0, targetIndex)]);
+    setSelectedEmailId(nextId || "");
+    if (nextId) selectedInboxIndexRef.current = Math.max(0, targetIndex);
+  }, [inboxModeItems]);
 
   const mailSearchResults = React.useMemo(() => {
     const q = mailSearchQuery.toLowerCase().trim();
@@ -2501,6 +2540,28 @@ export default function WorkspacePage({
   }
 
   React.useEffect(() => {
+    const savedScrollTop = Number(getLocalStorageValue(WORKSPACE_MAIL_LIST_SCROLL_Y_KEY));
+    if (!Number.isNaN(savedScrollTop) && savedScrollTop > 0) {
+      window.requestAnimationFrame(() => {
+        const node = mailListScrollRef.current;
+        if (node) {
+          node.scrollTop = savedScrollTop;
+        }
+      });
+    }
+  }, [displayInboxIdKey, mode]);
+
+  React.useEffect(() => {
+    const node = mailListScrollRef.current;
+    if (!node) return undefined;
+    const handleScroll = () => {
+      setLocalStorageValue(WORKSPACE_MAIL_LIST_SCROLL_Y_KEY, String(node.scrollTop || 0));
+    };
+    node.addEventListener("scroll", handleScroll, { passive: true });
+    return () => node.removeEventListener("scroll", handleScroll);
+  }, [mode]);
+
+  React.useEffect(() => {
     loadWorkspace();
     loadOrdersForLinking();
   }, [loadOrdersForLinking, loadWorkspace]);
@@ -2642,7 +2703,7 @@ export default function WorkspacePage({
   }, [inboxItems.length]);
 
   React.useEffect(() => {
-    const visibleIds = new Set(displayInboxItems.map(getInboxItemId).filter(Boolean));
+    const visibleIds = new Set(inboxModeItems.map(getInboxItemId).filter(Boolean));
     setCheckedEmailIds((current) => {
       const nextValues = [...current].filter((emailId) => visibleIds.has(emailId));
       if (nextValues.length === current.size) {
@@ -2651,12 +2712,12 @@ export default function WorkspacePage({
       return new Set(nextValues);
     });
     if (selectedEmailId && !visibleIds.has(selectedEmailId) && !emailTrash[selectedEmailId]) {
-      setSelectedEmailId("");
+      selectNextInboxItemAfter(selectedEmailId);
     }
     if (inboxContextMenu?.emailId && !visibleIds.has(inboxContextMenu.emailId)) {
       setInboxContextMenu(null);
     }
-  }, [displayInboxIdKey, selectedEmailId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [displayInboxIdKey, selectedEmailId, selectNextInboxItemAfter, inboxModeItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
     setPreviewContextMenu(null);
@@ -3049,6 +3110,8 @@ export default function WorkspacePage({
     event.preventDefault();
     const emailId = getInboxItemId(item);
     if (!emailId) return;
+    rememberMailListScroll();
+    rememberInboxSelectionIndex(emailId);
     setSelectedEmailId(emailId);
     setPreviewContextMenu(null);
     setInboxContextMenu({ x: event.clientX, y: event.clientY, emailId });
@@ -3060,6 +3123,9 @@ export default function WorkspacePage({
   }
 
   async function openInboxItem(item) {
+    const emailId = getInboxItemId(item);
+    rememberMailListScroll();
+    if (emailId) rememberInboxSelectionIndex(emailId);
     try {
       const result = await window.parserApp?.openInboxItem?.({ filePath: item.path });
       if (!result?.ok || !result?.path) {
@@ -3074,7 +3140,11 @@ export default function WorkspacePage({
 
   function hideInboxItemInState(item) {
     const emailId = getInboxItemId(item);
-    setSelectedEmailId((current) => (current === emailId ? "" : current));
+    rememberMailListScroll();
+    if (emailId) rememberInboxSelectionIndex(emailId);
+    if (selectedEmailId === emailId) {
+      selectNextInboxItemAfter(emailId);
+    }
     setCheckedEmailIds((current) => {
       const next = new Set(current);
       next.delete(emailId);
@@ -3571,7 +3641,10 @@ export default function WorkspacePage({
   }
 
   function selectInboxItem(item) {
-    setSelectedEmailId(getInboxItemId(item));
+    const emailId = getInboxItemId(item);
+    rememberMailListScroll();
+    if (emailId) rememberInboxSelectionIndex(emailId);
+    setSelectedEmailId(emailId);
   }
 
   function toggleCheckedInboxItem(item, checked) {
@@ -3714,6 +3787,8 @@ export default function WorkspacePage({
     const linkedOrderBadge = linkedOrderNumber ? `#${linkedOrderNumber}` : "Linked Order";
 
     function openInboxCard() {
+      rememberMailListScroll();
+      if (emailId) rememberInboxSelectionIndex(emailId);
       if (item?.is_activity_event && item?.activity_event_id) {
         markEventRead(item.activity_event_id);
       }
@@ -3725,8 +3800,15 @@ export default function WorkspacePage({
       setSelectedThreadId("");
     }
 
-    const cardTint = linkedOrder ? "#eff6ff" : isFlaggedOrder ? "#f0fdf4" : orderScore > 70 ? "#f7fee7" : orderScore >= 40 ? "#fbfdf2" : "#fff";
-    const borderColor = linkedOrder ? "#93c5fd" : isFlaggedOrder ? "#86efac" : orderScore > 70 ? "#bef264" : orderScore >= 40 ? "#e2e8a8" : "#e5e7eb";
+    const statusAccentColor = isSelected
+      ? "#2563eb"
+      : item.source_deleted === true
+        ? "#ef4444"
+        : linkedOrder || isFlaggedOrder
+          ? "#22c55e"
+          : orderScore >= 40
+            ? "#f59e0b"
+            : "#e5e7eb";
     return (
       <div
         key={emailId}
@@ -3751,15 +3833,18 @@ export default function WorkspacePage({
         style={{
           width: "100%",
           textAlign: "left",
-          border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#3b82f6" : borderColor}`,
-          borderLeft: isSelected ? "4px solid #2563eb" : orderScore >= 40 || isFlaggedOrder ? `4px solid ${borderColor}` : `1px solid ${borderColor}`,
-          background: isSelected ? "#dbeafe" : cardTint,
+          border: `${isSelected ? "2px" : "1px"} solid ${isSelected ? "#2563eb" : "#e5e7eb"}`,
+          borderLeft: `6px solid ${statusAccentColor}`,
+          background: isSelected ? "#eff6ff" : "#fff",
           borderRadius: 12,
-          padding: isSelected ? 13 : 14,
+          padding: isSelected ? "13px 14px 13px 12px" : "14px 14px 14px 12px",
           marginBottom: 10,
           cursor: "pointer",
           boxSizing: "border-box",
-          boxShadow: isSelected ? "0 2px 12px rgba(37,99,235,0.18)" : "none",
+          boxShadow: isSelected ? "0 8px 22px rgba(37,99,235,0.18)" : "0 1px 2px rgba(15,23,42,0.04)",
+          outline: isSelected ? "2px solid rgba(37,99,235,0.18)" : "none",
+          outlineOffset: 1,
+          transition: "border-color 120ms ease, box-shadow 120ms ease, background 120ms ease",
         }}
       >
         <div className="email-card" style={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 10, alignItems: "start" }}>
@@ -4510,7 +4595,7 @@ export default function WorkspacePage({
             </div>
           ) : null}
 
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 16px 16px" }}>
+          <div ref={mailListScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 16px 16px" }}>
             {loading && !workspaceState ? (
               <div style={{ fontSize: 13, color: "#64748b" }}>Loading workspace…</div>
             ) : showInboxEmptyState && mode !== "search" ? (

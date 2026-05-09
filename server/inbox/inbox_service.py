@@ -432,7 +432,10 @@ def _load_active_order_candidates(conn: sqlite3.Connection) -> list[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, order_number, buyer_name, buyer_email, messages,
+        SELECT id, order_number,
+               COALESCE(NULLIF(billing_name, ''), buyer_name) AS buyer_name,
+               COALESCE(NULLIF(billing_email, ''), buyer_email) AS buyer_email,
+               messages,
                source_eml_path, eml_path, created_at, order_date, last_activity_at
         FROM orders
         WHERE COALESCE(status, '') != 'deleted'
@@ -775,7 +778,7 @@ def _persist_inbound_to_order_thread(raw_mime: bytes, email_id: str) -> dict:
                 "reason": match_reason,
                     "confidence": match_confidence,
                 }
-        cur.execute("SELECT messages, buyer_name FROM orders WHERE id = ?", (order_id,))
+        cur.execute("SELECT messages, COALESCE(NULLIF(billing_name, ''), buyer_name) FROM orders WHERE id = ?", (order_id,))
         row = cur.fetchone()
         if not row:
             conn.close()

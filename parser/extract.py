@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 from typing import List, Optional
@@ -243,6 +244,7 @@ _NAME_WITH_TRAILING_NUMBER_RE = re.compile(r"^([A-Za-z][A-Za-z'\- ]*?[A-Za-z])\s
 _STREET_RE = re.compile(r"^\d[\d\-]*\s+\S")
 _PHONE_RE = re.compile(r"^\+?\d[\d\s().-]{6,}\d$")
 _CITY_STATE_RE = re.compile(r"^[A-Za-z .'\-]+,\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?$")
+_ZIP_ONLY_RE = re.compile(r"^\d{5}(?:-\d{4})?$")
 _COUNTRY_RE = re.compile(r"^[A-Za-z .'\-]{3,40}$")
 _ADDRESS_STOP_RE = re.compile(
     r"^(?:"
@@ -257,6 +259,7 @@ _ADDRESS_STOP_RE = re.compile(
     r"|shop\s+policies"
     r"|transaction\s+id"
     r"|processing\s+time"
+    r"|pixelyoursite"
     r"|returns?\s*&\s*exchanges?"
     r"|cancellations?"
     r")(?::|\b)",
@@ -310,6 +313,8 @@ def _is_addressish_line(text: str) -> bool:
         return True
     if _CITY_STATE_RE.match(normalized):
         return True
+    if _ZIP_ONLY_RE.match(normalized):
+        return True
     if lower in {"united states", "usa", "canada", "australia"}:
         return True
     if any(token in lower for token in ("apt", "apartment", "suite", "ste", "unit", "po box", "p.o. box")):
@@ -332,14 +337,18 @@ def _collect_address_blocks(segments: List[Segment]) -> List[tuple[str, List[Seg
         block: List[Segment] = []
         started = False
 
+        blank_gap_count = 0
         for j in range(i + 1, len(segments)):
             seg_j = segments[j]
             text = seg_j.text.strip()
 
             if not text:
                 if started:
-                    break
+                    blank_gap_count += 1
+                    if blank_gap_count > 3:
+                        break
                 continue
+            blank_gap_count = 0
 
             if _is_address_stop(text):
                 if started:
@@ -509,8 +518,30 @@ def validate_candidates(candidates: List[Candidate], clean_text: str) -> List[Ca
         if c.start is None or c.end is None:
             valid.append(c)
             continue
-        if clean_text[c.start:c.end] == c.value:
+        actual = clean_text[c.start:c.end]
+        if actual == c.value:
             valid.append(c)
+        elif c.field_type == "shipping_address":
+            print(
+                "[SHIPPING_ADDRESS_PROVENANCE_REJECTED] "
+                + json.dumps(
+                    {
+                        "candidate_id": c.id,
+                        "value": c.value,
+                        "extractor": c.extractor,
+                        "start": c.start,
+                        "end": c.end,
+                        "source_text": actual,
+                        "provenance": {
+                            "segment_id": c.segment_id,
+                            "source": c.source,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
     return valid
 
 

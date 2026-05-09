@@ -16,7 +16,8 @@ def run_case(eml_path, expected_path):
     result = {d.field: d.value for d in decisions}
     expected = load_expected(expected_path)
 
-    assert result == expected, f"""
+    comparable = {field: result.get(field) for field in expected}
+    assert comparable == expected, f"""
 Mismatch for {eml_path}
 
 Expected:

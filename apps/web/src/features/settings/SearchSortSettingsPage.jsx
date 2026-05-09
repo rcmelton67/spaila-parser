@@ -3,15 +3,15 @@ import { API_ENDPOINTS } from "../../../../../shared/api/endpoints.mjs";
 import { api } from "../../api.js";
 
 const SEARCH_FIELD_GROUPS = [
-  { label: "Core", keys: ["order_number", "buyer_name", "price", "quantity"] },
-  { label: "Details", keys: ["custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "order_date", "ship_by"] },
-  { label: "System", keys: ["buyer_email", "shipping_address", "gift_message", "order_notes"] },
+  { label: "Core", keys: ["order_number", "billing_name", "recipient_name", "quantity", "price"] },
+  { label: "Details", keys: ["order_date", "ship_by", "billing_address", "billing_email", "phone_number", "shipping_address", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6"] },
+  { label: "System", keys: ["gift_message", "order_notes"] },
 ];
 
 const DEFAULT_SEARCHABLE = Object.fromEntries(
   SEARCH_FIELD_GROUPS.flatMap((group) => group.keys).map((key) => [
     key,
-    ["order_number", "buyer_name", "custom_1", "custom_2", "custom_3"].includes(key),
+    ["order_number", "billing_name", "recipient_name", "custom_1", "custom_2", "custom_3"].includes(key),
   ])
 );
 
@@ -24,7 +24,14 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_LABELS = {
   order_number: "Order #",
-  buyer_name: "Buyer",
+  billing_name: "Billing Name",
+  billing_address: "Billing Address",
+  billing_email: "Email",
+  phone_number: "Phone Number",
+  order_date: "Order Date",
+  ship_by: "Ship By",
+  recipient_name: "Shipping Name",
+  shipping_address: "Shipping Address",
   price: "Price",
   quantity: "Qty",
   custom_1: "Pet Name",
@@ -33,10 +40,6 @@ const DEFAULT_LABELS = {
   custom_4: "Dates Of Life",
   custom_5: "Stone Color",
   custom_6: "Stone Type",
-  order_date: "Order Date",
-  ship_by: "Ship By",
-  buyer_email: "Buyer Email",
-  shipping_address: "Shipping Address",
   gift_message: "Gift Message",
   order_notes: "Notes",
 };
@@ -113,7 +116,7 @@ export default function SearchSortSettingsPage({ onSettingsSaved }) {
   }, []);
 
   const labelMap = getLabelMap(layout || {});
-  const sortableKeys = ["order_date", "ship_by", "buyer_name", "order_number", "price", "quantity", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "status"];
+  const sortableKeys = ["order_number", "billing_name", "order_date", "ship_by", "recipient_name", "price", "quantity", "custom_1", "custom_2", "custom_3", "custom_4", "custom_5", "custom_6", "status"];
 
   function setSearch(key, checked) {
     setForm((current) => ({

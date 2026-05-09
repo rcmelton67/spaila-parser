@@ -12,6 +12,7 @@ import { normalizedSearchMatches } from "../../../../../shared/search/dateSearch
 const DEFAULT_ORDER_SHEET_SIZE = 12;
 const ORDER_ROWS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const WEB_WIDTH_PROFILE_KEY = "spaila_web_column_width_profile";
+const HIDDEN_LEGACY_FIELD_KEYS = new Set(["buyer_name", "buyer_email", "shipping_name"]);
 const orderRowsCache = new Map();
 const orderRowsInflight = new Map();
 
@@ -20,19 +21,22 @@ const DEFAULT_ORDER_LAYOUT = Object.freeze({
     { key: "status", label: "Status", visibleInOrders: true, paletteEnabled: false },
     { key: "order_info", label: "Order Info", visibleInOrders: true, paletteEnabled: false },
     { key: "order_number", label: "Order #", visibleInOrders: true, paletteEnabled: false },
-    { key: "buyer_name", label: "Buyer", visibleInOrders: true, paletteEnabled: true },
-    { key: "price", label: "Price", visibleInOrders: true, paletteEnabled: true },
+    { key: "order_date", label: "Order Date", visibleInOrders: true, paletteEnabled: false },
+    { key: "ship_by", label: "Ship By", visibleInOrders: true, paletteEnabled: false },
+    { key: "billing_name", label: "Billing Name", visibleInOrders: true, paletteEnabled: true },
+    { key: "billing_address", label: "Billing Address", visibleInOrders: false, paletteEnabled: false },
+    { key: "billing_email", label: "Email", visibleInOrders: false, paletteEnabled: false },
+    { key: "phone_number", label: "Phone Number", visibleInOrders: false, paletteEnabled: false },
+    { key: "recipient_name", label: "Shipping Name", visibleInOrders: true, paletteEnabled: true },
+    { key: "shipping_address", label: "Shipping Address", visibleInOrders: false, paletteEnabled: false },
     { key: "quantity", label: "Qty", visibleInOrders: true, paletteEnabled: false },
+    { key: "price", label: "Price", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_1", label: "Pet Name", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_2", label: "Pet Type", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_3", label: "Epitaph", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_4", label: "Dates Of Life", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_5", label: "Stone Color", visibleInOrders: true, paletteEnabled: true },
     { key: "custom_6", label: "Type", visibleInOrders: false, paletteEnabled: true },
-    { key: "shipping_address", label: "Shipping Address", visibleInOrders: false, paletteEnabled: false },
-    { key: "order_date", label: "Order Date", visibleInOrders: true, paletteEnabled: false },
-    { key: "ship_by", label: "Ship By", visibleInOrders: true, paletteEnabled: false },
-    { key: "buyer_email", label: "Buyer Email", visibleInOrders: false, paletteEnabled: false },
     { key: "gift_message", label: "Gift Message", visibleInOrders: false, paletteEnabled: false, highlight: { enabled: true, color: "#fca5a5" } },
     { key: "order_notes", label: "Notes", visibleInOrders: true, paletteEnabled: false },
   ],
@@ -40,19 +44,22 @@ const DEFAULT_ORDER_LAYOUT = Object.freeze({
     "status",
     "order_info",
     "order_number",
-    "buyer_name",
-    "price",
+    "order_date",
+    "ship_by",
+    "billing_name",
+    "billing_address",
+    "billing_email",
+    "phone_number",
+    "recipient_name",
+    "shipping_address",
     "quantity",
+    "price",
     "custom_1",
     "custom_2",
     "custom_3",
     "custom_4",
     "custom_5",
     "custom_6",
-    "shipping_address",
-    "order_date",
-    "ship_by",
-    "buyer_email",
     "gift_message",
     "order_notes",
   ],
@@ -61,7 +68,14 @@ const DEFAULT_ORDER_LAYOUT = Object.freeze({
 
 const DEFAULT_SEARCHABLE_FIELDS = {
   order_number: true,
-  buyer_name: true,
+  billing_name: true,
+  billing_address: false,
+  billing_email: false,
+  phone_number: false,
+  order_date: false,
+  ship_by: false,
+  recipient_name: true,
+  shipping_address: false,
   price: false,
   quantity: false,
   custom_1: true,
@@ -70,10 +84,6 @@ const DEFAULT_SEARCHABLE_FIELDS = {
   custom_4: false,
   custom_5: false,
   custom_6: false,
-  order_date: false,
-  ship_by: false,
-  buyer_email: false,
-  shipping_address: false,
   gift_message: false,
   order_notes: false,
 };
@@ -265,7 +275,8 @@ function normalizeOrderLayout(layout) {
     label: statusConfig.columnLabel || "Status",
     visibleInOrders: statusConfig.enabled !== false,
   };
-  const order = Array.isArray(source.order) && source.order.length ? source.order : DEFAULT_ORDER_LAYOUT.order;
+  const order = (Array.isArray(source.order) && source.order.length ? source.order : DEFAULT_ORDER_LAYOUT.order)
+    .filter((key) => !HIDDEN_LEGACY_FIELD_KEYS.has(key));
   const fields = [
     ...order.map((key) => {
       if (key === "status") return statusField;
@@ -276,7 +287,7 @@ function normalizeOrderLayout(layout) {
     ...DEFAULT_ORDER_LAYOUT.fields
       .filter((field) => !order.includes(field.key))
       .map((field) => fieldMap.get(field.key) || field),
-    ...[...fieldMap.values()].filter((field) => !order.includes(field.key) && !defaultMap.has(field.key)),
+    ...[...fieldMap.values()].filter((field) => !HIDDEN_LEGACY_FIELD_KEYS.has(field.key) && !order.includes(field.key) && !defaultMap.has(field.key)),
   ];
   return {
     fields: fields.map((field) => ({
@@ -519,6 +530,8 @@ export default function OrdersPage({
   onRegisterPrint,
   onSearchCountsChange,
   onClearSearch,
+  showEmailIcon = true,
+  onEmailCompose,
 }) {
   // Support both controlled (activeTab/onTabChange from parent) and uncontrolled (scope prop alone)
   const [localTab, setLocalTab] = React.useState(scope || "active");
@@ -637,14 +650,33 @@ export default function OrdersPage({
       refreshSharedLayout();
       loadOrders({ force: true });
     }
+    function handleItemStatusUpdated(event) {
+      const itemId = String(event?.detail?.itemId || "").trim();
+      if (!itemId) return;
+      const nextStatus = String(event?.detail?.item_status || "");
+      setRows((current) => current.map((item) => (
+        String(item.id || "") === itemId ? { ...item, item_status: nextStatus } : item
+      )));
+      for (const [cacheKey, cached] of orderRowsCache.entries()) {
+        if (!cached?.rows) continue;
+        orderRowsCache.set(cacheKey, {
+          ...cached,
+          rows: cached.rows.map((item) => (
+            String(item.id || "") === itemId ? { ...item, item_status: nextStatus } : item
+          )),
+        });
+      }
+    }
     function handleVisibilityChange() {
       if (!document.hidden) refreshFromOtherSurface();
     }
     window.addEventListener("focus", refreshFromOtherSurface);
+    window.addEventListener("spaila:item-status-updated", handleItemStatusUpdated);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", refreshFromOtherSurface);
+      window.removeEventListener("spaila:item-status-updated", handleItemStatusUpdated);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [loadOrders]);
@@ -1101,6 +1133,8 @@ export default function OrdersPage({
         excludedSearchColumns={searchExcludedColumns}
         onExcludeSearchColumn={excludeSearchColumn}
         onNewOrder={() => setNewOrderOpen(true)}
+        showEmailIcon={showEmailIcon}
+        onEmailCompose={onEmailCompose}
       />
       {newOrderOpen ? (
         <NewOrderModal

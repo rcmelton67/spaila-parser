@@ -19,10 +19,12 @@ def test_regression_manifest_schema_has_required_metadata():
         "order_number",
         "price",
         "shipping_address",
-        "buyer_name",
+        "billing_address",
+        "billing_name",
+        "recipient_name",
         "quantity",
         "ship_by",
-        "buyer_email",
+        "billing_email",
         "order_date",
     }
     assert "critical" in manifest["metadata"]["severity_classification"]

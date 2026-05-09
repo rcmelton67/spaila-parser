@@ -34,6 +34,7 @@ let helperRestarting = false;
 let helperStopRequested = false;
 let helperStatus = "stopped";
 let helperLastActivityAt = "";
+let helperStartedAt = "";
 
 function getAuthSessionPath() {
   return path.join(app.getPath("userData"), "account-session.bin");
@@ -78,6 +79,86 @@ function writeStoredAuthSession(sessionToken) {
   }
 }
 
+function getInstallIdentityPath() {
+  return path.join(app.getPath("userData"), "install-identity.json");
+}
+
+function getOrCreateInstallIdentity() {
+  const identityPath = getInstallIdentityPath();
+  let installId = "";
+  try {
+    if (fs.existsSync(identityPath)) {
+      installId = String(JSON.parse(fs.readFileSync(identityPath, "utf8"))?.install_id || "").trim();
+    }
+  } catch (_) {}
+  if (!installId) {
+    installId = crypto.randomUUID?.() || `desktop-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+    try {
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(identityPath, JSON.stringify({
+        install_id: installId,
+        created_at: new Date().toISOString(),
+        purpose: "privacy-preserving trial and entitlement anti-abuse identity",
+      }, null, 2), "utf8");
+    } catch (_) {}
+  }
+  const machineSeed = [
+    os.hostname(),
+    os.userInfo?.().username || "",
+    os.platform(),
+    os.arch(),
+    os.release(),
+  ].join("|");
+  return {
+    install_id: installId,
+    device_fingerprint: crypto.createHash("sha256").update(machineSeed).digest("hex"),
+    fingerprint_version: "desktop-v1",
+  };
+}
+
+function entitlementCachePath() {
+  return path.join(app.getPath("userData"), "entitlement-cache.json");
+}
+
+function entitlementCacheSignature(payload) {
+  const identity = getOrCreateInstallIdentity();
+  return crypto.createHmac("sha256", identity.install_id).update(JSON.stringify(payload)).digest("hex");
+}
+
+function writeEntitlementCache(entitlements) {
+  try {
+    const payload = {
+      entitlements,
+      checked_at_local: new Date().toISOString(),
+      server_time: entitlements?.server_time || "",
+    };
+    fs.writeFileSync(entitlementCachePath(), JSON.stringify({
+      ...payload,
+      signature: entitlementCacheSignature(payload),
+    }, null, 2), "utf8");
+  } catch (_) {}
+}
+
+function readEntitlementCache() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(entitlementCachePath(), "utf8"));
+    const payload = {
+      entitlements: raw.entitlements,
+      checked_at_local: raw.checked_at_local,
+      server_time: raw.server_time,
+    };
+    if (raw.signature !== entitlementCacheSignature(payload)) return null;
+    const checkedMs = Date.parse(raw.checked_at_local || "");
+    if (!Number.isFinite(checkedMs)) return null;
+    if (Date.now() + 5 * 60 * 1000 < checkedMs) {
+      return { ...raw, clockRollbackDetected: true };
+    }
+    return raw;
+  } catch (_) {
+    return null;
+  }
+}
+
 function clearStoredAuthSession() {
   try {
     const sessionPath = getAuthSessionPath();
@@ -91,14 +172,33 @@ function clearStoredAuthSession() {
 async function requireAccountFeature(feature) {
   const session = readStoredAuthSession();
   const token = String(session?.session_token || "").trim();
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const identity = getOrCreateInstallIdentity();
+  const headers = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    "X-Spaila-Install-Id": identity.install_id,
+    "X-Spaila-Device-Fingerprint": identity.device_fingerprint,
+  };
   let entitlements = null;
   try {
     const response = await fetch("http://127.0.0.1:8055/account/session", { headers });
     const payload = await response.json().catch(() => null);
     entitlements = payload?.entitlements || null;
-  } catch (_) {
-    return;
+    if (entitlements) writeEntitlementCache(entitlements);
+  } catch (error) {
+    const cached = readEntitlementCache();
+    if (cached?.clockRollbackDetected) {
+      throw new Error("System clock rollback detected. Reconnect to Spaila to verify your subscription.");
+    }
+    const cachedAgeMs = Date.now() - Date.parse(cached?.checked_at_local || "");
+    if (cached?.entitlements && cachedAgeMs >= 0 && cachedAgeMs <= 72 * 60 * 60 * 1000) {
+      entitlements = cached.entitlements;
+    } else {
+      throw new Error("Could not verify your subscription. Connect to the internet and try again.");
+    }
+  }
+  if (!entitlements) throw new Error("Could not verify your subscription.");
+  if (entitlements.clock_tamper_detected) {
+    throw new Error(entitlements.trial_reminder_message || "System clock rollback detected. Subscription verification is required.");
   }
   if (!entitlements?.locked_features?.includes(feature)) return;
   const messages = {
@@ -114,6 +214,7 @@ async function requireAccountFeature(feature) {
 
 let helperLastError = "";
 const helperLogs = [];
+const parserLogs = [];
 let cachedWorkspaceDirs = null;
 let backupInProgress = false;
 let restoreInProgress = false;
@@ -271,6 +372,34 @@ function appendHelperLog(level, message) {
   }
 }
 
+function appendParserLog(level, message) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message: String(message || ""),
+  };
+  parserLogs.push(entry);
+  while (parserLogs.length > 200) parserLogs.shift();
+}
+
+function collectRecentParserTrustReports(limit = 5) {
+  const trustDir = path.join(ROOT, "parser", "debug", "trust_reports");
+  try {
+    if (!fs.existsSync(trustDir)) return [];
+    return fs.readdirSync(trustDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => {
+        const full = path.join(trustDir, entry.name);
+        const stat = fs.statSync(full);
+        return { name: entry.name, path: full, modified_at: stat.mtime.toISOString(), size: stat.size };
+      })
+      .sort((a, b) => b.modified_at.localeCompare(a.modified_at))
+      .slice(0, limit);
+  } catch (_) {
+    return [];
+  }
+}
+
 function getHelperFolderSummary() {
   const dirs = getWorkspaceDirs();
   const settings = loadHelperSettings();
@@ -314,6 +443,13 @@ function getHelperState() {
       logCount: helperLogs.length,
       pythonProcess: helperProcess ? "active" : "not running",
       activitySummary: "Spaila monitors inbox folders and processes new order emails automatically.",
+      helperStartedAt,
+      helperUptimeSeconds: helperStartedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(helperStartedAt)) / 1000)) : 0,
+      queueState: {
+        inboxCount: countFolderFiles(folders.inbox),
+        duplicateCount: countFolderFiles(folders.duplicates),
+        unmatchedCount: countFolderFiles(folders.unmatched),
+      },
       ...visibilityDiagnostics,
     },
   };
@@ -2016,6 +2152,7 @@ function startHelper() {
   const settings = loadHelperSettings();
   if (settings.runInBackground === false) {
     helperStatus = "stopped";
+    helperStartedAt = "";
     appendHelperLog("info", "Helper start skipped because background helper is disabled.");
     return;
   }
@@ -2039,6 +2176,7 @@ function startHelper() {
   });
   helperStatus = "running";
   helperLastError = "";
+  helperStartedAt = new Date().toISOString();
 
   helperProcess.stdout.on("data", (data) => {
     const text = data.toString().trimEnd();
@@ -2062,6 +2200,7 @@ function startHelper() {
   helperProcess.on("close", (code) => {
     helperProcess = null;
     helperStatus = code === 0 ? "stopped" : "error";
+    helperStartedAt = "";
     appendHelperLog(code === 0 ? "info" : "error", `Helper exited with code ${code}.`);
     if (helperRestarting) return;     // Electron is quitting — don't restart
     if (helperStopRequested) {
@@ -2186,30 +2325,228 @@ function notifyConsoleNewReport(filepath) {
 
 // ── Support console IPC ───────────────────────────────────────────────────────
 
+function supportReportSearchRoots() {
+  const roots = [];
+  try {
+    const dirs = getWorkspaceDirs();
+    roots.push(dirs.SupportReports);
+    roots.push(path.join(dirs.root, "support_reports"));
+  } catch (_) {}
+  try { roots.push(path.join(os.homedir(), "Spaila", ".spaila_internal", "support_reports")); } catch (_) {}
+  try { roots.push(path.join(os.homedir(), "Spaila", "support_reports")); } catch (_) {}
+  if (process.platform === "win32") roots.push("C:\\Spaila\\support_reports");
+  roots.push(path.resolve(__dirname, "..", "..", "support_reports"));
+  return [...new Set(roots.filter(Boolean).map((root) => path.resolve(root)))];
+}
+
+function resolveSupportReportPath(filePath) {
+  const raw = String(filePath || "").trim();
+  if (!raw) return { ok: false, error: "No file path." };
+
+  const direct = path.resolve(raw);
+  const inReportRoot = supportReportSearchRoots().some((root) => {
+    const rel = path.relative(root, direct);
+    return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+  });
+  if (inReportRoot && fs.existsSync(direct) && fs.statSync(direct).isFile()) {
+    return { ok: true, path: direct };
+  }
+
+  const candidates = [];
+  if (!path.isAbsolute(raw)) {
+    for (const root of supportReportSearchRoots()) {
+      candidates.push(path.resolve(root, raw));
+    }
+  }
+
+  const filename = raw.split(/[\\/]/).pop();
+  if (filename && filename.endsWith(".json")) {
+    for (const root of supportReportSearchRoots()) {
+      try {
+        const stack = [root];
+        while (stack.length) {
+          const dir = stack.pop();
+          if (!dir || !fs.existsSync(dir)) continue;
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) stack.push(full);
+            else if (entry.name === filename) candidates.push(full);
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  const found = candidates.find((candidate) => {
+    try { return fs.existsSync(candidate) && fs.statSync(candidate).isFile(); }
+    catch (_) { return false; }
+  });
+  if (found) return { ok: true, path: path.resolve(found) };
+
+  return {
+    ok: false,
+    error: `Report JSON file was not found. It may have been moved or migrated. Path: ${raw}`,
+  };
+}
+
+function writeJsonAtomic(targetPath, data) {
+  const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf8");
+  fs.renameSync(tmpPath, targetPath);
+}
+
+function supportTicketCounterPath() {
+  return path.join(getWorkspaceDirs().Internal, "support_ticket_counter.json");
+}
+
+function scanMaxSupportTicketForYear(year) {
+  const re = new RegExp(`^SPA-${year}-(\\d{6})$`);
+  let max = 0;
+  for (const root of supportReportSearchRoots()) {
+    try {
+      const stack = [root];
+      while (stack.length) {
+        const dir = stack.pop();
+        if (!dir || !fs.existsSync(dir)) continue;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) stack.push(full);
+          else if (entry.name.endsWith(".json")) {
+            try {
+              const parsed = JSON.parse(fs.readFileSync(full, "utf8"));
+              const match = String(parsed.ticket_id || "").match(re);
+              if (match) max = Math.max(max, Number(match[1]) || 0);
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  return max;
+}
+
+function nextSupportTicketIdForReport(receivedAt) {
+  const parsedYear = Number.isFinite(Date.parse(receivedAt || "")) ? new Date(receivedAt).getUTCFullYear() : new Date().getFullYear();
+  const year = parsedYear || new Date().getFullYear();
+  const counterPath = supportTicketCounterPath();
+  let data = {};
+  try { data = fs.existsSync(counterPath) ? JSON.parse(fs.readFileSync(counterPath, "utf8")) : {}; } catch (_) { data = {}; }
+  const years = data.years && typeof data.years === "object" ? data.years : {};
+  const current = Math.max(Number(years[String(year)] || 0), scanMaxSupportTicketForYear(year));
+  const next = current + 1;
+  years[String(year)] = next;
+  writeJsonAtomic(counterPath, {
+    schema_version: 1,
+    updated_at: new Date().toISOString(),
+    years,
+  });
+  return `SPA-${year}-${String(next).padStart(6, "0")}`;
+}
+
+function ensureReportTicketId(data, filePath) {
+  if (data && typeof data.ticket_id === "string" && data.ticket_id.trim()) {
+    return { data, changed: false };
+  }
+  data.ticket_id = nextSupportTicketIdForReport(data?.received_at);
+  data.schema_version = Math.max(Number(data.schema_version || 0), 3);
+  if (filePath) writeJsonAtomic(filePath, data);
+  return { data, changed: true };
+}
+
 ipcMain.handle("support:update-status", async (_event, filePath, newStatus) => {
   const VALID = ["open", "investigating", "resolved"];
   if (!VALID.includes(newStatus)) return { ok: false, error: `Invalid status: ${newStatus}` };
-  if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
+  const resolved = resolveSupportReportPath(filePath);
+  if (!resolved.ok) return resolved;
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
+    const raw = fs.readFileSync(resolved.path, "utf8");
     const data = JSON.parse(raw);
     if (!data.dashboard) data.dashboard = {};
     data.dashboard.status = newStatus;
     data.dashboard.resolved_at = newStatus === "resolved" ? (data.dashboard.resolved_at || new Date().toISOString()) : null;
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-    return { ok: true, dashboard: data.dashboard };
+    writeJsonAtomic(resolved.path, data);
+    return { ok: true, dashboard: data.dashboard, filepath: resolved.path };
   } catch (err) {
     return { ok: false, error: err?.message || "Could not update status." };
   }
 });
 
+ipcMain.handle("support:update-dashboard", async (_event, filePath, patch = {}) => {
+  const resolved = resolveSupportReportPath(filePath);
+  if (!resolved.ok) return resolved;
+  try {
+    const raw = fs.readFileSync(resolved.path, "utf8");
+    const data = JSON.parse(raw);
+    const current = data.dashboard && typeof data.dashboard === "object" ? data.dashboard : {};
+    const allowed = [
+      "escalated",
+      "escalation_reason",
+      "customer_contacted",
+      "awaiting_response",
+      "follow_up_required",
+      "contactable",
+      "assigned_to",
+      "response_notes",
+      "support_notes",
+      "internal_notes",
+    ];
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) current[key] = patch[key];
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "escalated")) {
+      current.escalated_at = patch.escalated ? (current.escalated_at || new Date().toISOString()) : null;
+    }
+    current.updated_at = new Date().toISOString();
+    data.dashboard = current;
+    writeJsonAtomic(resolved.path, data);
+    return { ok: true, dashboard: data.dashboard, filepath: resolved.path };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not update dashboard." };
+  }
+});
+
 ipcMain.handle("support:open-file", async (_event, filePath) => {
   try {
-    if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
-    await shell.openPath(filePath);
+    const resolved = resolveSupportReportPath(filePath);
+    if (!resolved.ok) return resolved;
+    await shell.openPath(resolved.path);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err?.message || "Could not open file." };
+  }
+});
+
+ipcMain.handle("support:open-attachment", async (_event, filePath) => {
+  try {
+    const target = path.resolve(String(filePath || ""));
+    const reportsRoots = supportReportSearchRoots();
+    const inSupportRoot = reportsRoots.some((root) => {
+      const rel = path.relative(root, target);
+      return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+    });
+    if (!inSupportRoot || !fs.existsSync(target)) {
+      return { ok: false, error: "Attachment file was not found." };
+    }
+    await shell.openPath(target);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not open attachment." };
+  }
+});
+
+ipcMain.handle("support:locate-attachment", async (_event, filePath) => {
+  try {
+    const target = path.resolve(String(filePath || ""));
+    const reportsRoots = supportReportSearchRoots();
+    const inSupportRoot = reportsRoots.some((root) => {
+      const rel = path.relative(root, target);
+      return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+    });
+    if (!inSupportRoot || !fs.existsSync(target)) return { ok: false, error: "Attachment file was not found." };
+    shell.showItemInFolder(target);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Could not locate attachment." };
   }
 });
 
@@ -2258,6 +2595,7 @@ function runBridge(argsObj) {
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       stderr += text;
+      appendParserLog("error", text.trimEnd());
       process.stderr.write(text); // forward parser debug logs to terminal in real-time
     });
 
@@ -2421,6 +2759,7 @@ ipcMain.handle("parser:parse-file", async (_event, { filePath, businessTimezone 
 
 
 ipcMain.handle("parser:teach", async (_event, payload) => {
+  await requireAccountFeature("parser");
   const parsed = await runBridge({
     action: payload.action,
     path: payload.filePath,
@@ -2437,6 +2776,7 @@ ipcMain.handle("parser:teach", async (_event, payload) => {
 });
 
 ipcMain.handle("parser:save-assignment", async (_event, payload) => {
+  await requireAccountFeature("parser");
   const resolvedPath = await resolveParserPath(payload);
   const parsed = await runBridge({
     action: "save_assignment",
@@ -2454,6 +2794,7 @@ ipcMain.handle("parser:save-assignment", async (_event, payload) => {
 });
 
 ipcMain.handle("parser:save-rejection", async (_event, payload) => {
+  await requireAccountFeature("parser");
   const resolvedPath = await resolveParserPath(payload);
   const parsed = await runBridge({
     action: "save_rejection",
@@ -2471,6 +2812,7 @@ ipcMain.handle("parser:save-rejection", async (_event, payload) => {
 });
 
 ipcMain.handle("parser:learning-summary", async () => {
+  await requireAccountFeature("parser");
   const summary = await runBridge({ action: "learning_summary" });
   if (summary.error) {
     throw new Error(summary.error);
@@ -2479,6 +2821,7 @@ ipcMain.handle("parser:learning-summary", async () => {
 });
 
 ipcMain.handle("parser:reset-field-learning", async (_event, payload = {}) => {
+  await requireAccountFeature("parser");
   const field = String(payload.field || "").trim();
   if (!field) {
     throw new Error("No learning field provided.");
@@ -2491,6 +2834,7 @@ ipcMain.handle("parser:reset-field-learning", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("parser:resolve-path", async (_event, payload) => {
+  await requireAccountFeature("parser");
   const resolvedPath = await resolveParserPath(payload);
   return { path: resolvedPath };
 });
@@ -2635,14 +2979,21 @@ ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
           if (acctData) {
             // Profile fields: account_id, account_email, shop_name, subscription_state, etc.
             const subView = acctData.entitlements || {};
+            const subscriptionState = subView.subscription_state || acctData.subscription_state || null;
             accountUser = {
               account_id: acctData.account_id || null,
               email: acctData.account_email || acctData.email || null,
               display_name: acctData.shop_name || acctData.owner_name || null,
-              subscription_state: subView.subscription_state || acctData.subscription_state || null,
+              subscription_state: subscriptionState,
               trial_active: subView.trial_active ?? (acctData.subscription_state === "trial" ? true : null),
               trial_days_remaining: subView.trial_days_remaining ?? null,
               entitlement_state: subView.account_status || acctData.entitlement_state || null,
+              billing_state: subView.billing_state || subscriptionState || null,
+              payment_failed: Boolean(subView.payment_failed || subView.past_due || subscriptionState === "past_due"),
+              trial_expired: Boolean(subView.trial_expired),
+              canceled: Boolean(subView.canceled || subView.cancelled || subscriptionState === "canceled"),
+              billing_retry: Boolean(subView.billing_retry || subView.retrying_payment),
+              subscription_locked: Boolean(subView.subscription_locked || (Array.isArray(subView.locked_features) && subView.locked_features.length > 0)),
             };
           } else {
             userLookupError = "Profile endpoint returned empty data.";
@@ -2655,11 +3006,23 @@ ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
       userLookupError = String(acctErr?.message || "Account fetch error");
     }
 
+    const helperState = getHelperState();
     const diagnostics = payload.includeDiagnostics ? {
       appInfo,
       helperStatus,
       helperLastError: helperLastError || null,
+      helperVersion: appInfo.version,
+      workspaceRoot: getWorkspaceDirs().root,
+      watcherPaths: helperState.folders,
+      activeWatchers: helperStatus === "running" ? ["Inbox"] : [],
+      syncFailures: [...helperLogs].filter((entry) => entry.level === "error").slice(-20),
+      duplicateDetection: helperState.review,
+      lastProcessedFile: [...helperLogs].reverse().find((entry) => /processed|parse|saved|moved/i.test(entry.message || ""))?.message || null,
+      helperUptimeSeconds: helperState.diagnostics?.helperUptimeSeconds || 0,
+      queueState: helperState.diagnostics?.queueState || {},
       recentHelperLogs: [...helperLogs].slice(-40),
+      recentParserLogs: [...parserLogs].slice(-60),
+      helperState,
       ...(payload.diagnostics || {}),
     } : {};
 
@@ -2687,6 +3050,12 @@ ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
         ...(payload.context || {}),
       },
       diagnostics,
+      screenshots: Array.isArray(payload.screenshots) ? payload.screenshots : [],
+      parser: payload.parser || payload.parser_context || {
+        source: String(payload.route || "").includes("parser") ? "order_processor" : "",
+        recentParserLogs: [...parserLogs].slice(-60),
+        recentTrustReports: collectRecentParserTrustReports(),
+      },
     };
     // POST to local backend
     const res = await fetch("http://127.0.0.1:8055/support/report", {
@@ -2696,7 +3065,7 @@ ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
     });
     const data = await res.json().catch(() => ({}));
     if (data?.status === "received") {
-      return { ok: true, reportId: data.report_id, notification: data.notification || null };
+      return { ok: true, reportId: data.ticket_id || data.report_id, ticketId: data.ticket_id || "", notification: data.notification || null };
     }
     return { ok: false, error: data?.error || `Server responded ${res.status}` };
   } catch (error) {
@@ -2707,24 +3076,29 @@ ipcMain.handle("support:submit-report", async (_event, payload = {}) => {
 ipcMain.handle("support:list-reports", async () => {
   try {
     const reportsBase = getWorkspaceDirs().SupportReports;
-    if (!fs.existsSync(reportsBase)) {
-      return { ok: true, reports: [], folder: reportsBase };
-    }
     const reports = [];
+    const seen = new Set();
     // Walk YYYY/MM/ subfolders + flat root
     function readDir(dir) {
       try {
+        if (!fs.existsSync(dir)) return;
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           const full = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             readDir(full);
           } else if (entry.name.endsWith(".json")) {
             try {
+              const resolvedFull = path.resolve(full);
+              const seenKey = resolvedFull.toLowerCase();
+              if (seen.has(seenKey)) continue;
+              seen.add(seenKey);
               const raw = fs.readFileSync(full, "utf8");
-              const parsed = JSON.parse(raw);
+              const parsed = ensureReportTicketId(JSON.parse(raw), resolvedFull).data;
               reports.push({
                 filename: entry.name,
-                filepath: full,
+                filepath: resolvedFull,
+                file_path: resolvedFull,
+                ticket_id: parsed.ticket_id || "",
                 report_id: parsed.report_id || "",
                 received_at: parsed.received_at || "",
                 type: parsed.type || "",
@@ -2734,6 +3108,10 @@ ipcMain.handle("support:list-reports", async () => {
                 user_email: parsed.user?.email || null,
                 screen: parsed.context?.screen || parsed.context?.route || "",
                 status: parsed.dashboard?.status || "open",
+                escalated: Boolean(parsed.dashboard?.escalated),
+                billing_state: parsed.billing?.state || parsed.user?.billing_state || parsed.user?.subscription_state || "",
+                billing_flags: parsed.billing || {},
+                attachment_count: Array.isArray(parsed.attachments) ? parsed.attachments.length : 0,
                 email_sent: parsed.notification?.email_sent ?? null,
               });
             } catch (_) { /* skip malformed */ }
@@ -2741,7 +3119,7 @@ ipcMain.handle("support:list-reports", async () => {
         }
       } catch (_) { /* skip unreadable dir */ }
     }
-    readDir(reportsBase);
+    for (const root of supportReportSearchRoots()) readDir(root);
     reports.sort((a, b) => (b.received_at > a.received_at ? 1 : -1));
     return { ok: true, reports, folder: reportsBase };
   } catch (error) {
@@ -2762,9 +3140,10 @@ ipcMain.handle("support:open-reports-folder", async () => {
 
 ipcMain.handle("support:read-report", async (_event, filePath) => {
   try {
-    if (!filePath || typeof filePath !== "string") return { ok: false, error: "No file path." };
-    const raw = fs.readFileSync(filePath, "utf8");
-    return { ok: true, json: raw };
+    const resolved = resolveSupportReportPath(filePath);
+    if (!resolved.ok) return resolved;
+    const parsed = ensureReportTicketId(JSON.parse(fs.readFileSync(resolved.path, "utf8")), resolved.path).data;
+    return { ok: true, json: JSON.stringify(parsed, null, 2), filepath: resolved.path };
   } catch (error) {
     return { ok: false, error: error?.message || "Could not read report." };
   }
@@ -2805,7 +3184,8 @@ ipcMain.handle("open-external", async (_event, url) => {
   } catch (_error) {
     return { ok: false, error: "Invalid URL." };
   }
-  if (!["https:", "http:", "mailto:"].includes(parsed.protocol)) {
+  const isLocalHttp = parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname);
+  if (!["https:", "mailto:"].includes(parsed.protocol) && !isLocalHttp) {
     return { ok: false, error: "Unsupported external link type." };
   }
   await shell.openExternal(targetUrl);
@@ -2817,6 +3197,8 @@ ipcMain.handle("account-auth:get-token", async () => readStoredAuthSession());
 ipcMain.handle("account-auth:set-token", async (_event, sessionToken) => writeStoredAuthSession(sessionToken));
 
 ipcMain.handle("account-auth:clear-token", async () => clearStoredAuthSession());
+
+ipcMain.handle("account:get-install-identity", async () => ({ ok: true, ...getOrCreateInstallIdentity() }));
 
 ipcMain.handle("orders:open-print-preview", async (event, payload = {}) => {
   const html = String(payload.html || "");
@@ -3460,6 +3842,31 @@ async function createZipArchive(sourceDir, zipPath) {
   await runPowerShell(script, "Could not create backup archive.");
 }
 
+async function createZipArchiveFromList(fileListPath, zipPath) {
+  if (process.platform !== "win32") {
+    throw new Error("Compressed workspace backups are currently supported on Windows.");
+  }
+  const safeList = fileListPath.replaceAll("'", "''");
+  const safeZip  = zipPath.replaceAll("'", "''");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    "Add-Type -AssemblyName System.IO.Compression",
+    `$fileList = [System.IO.File]::ReadAllText('${safeList}') | ConvertFrom-Json`,
+    `if (Test-Path -LiteralPath '${safeZip}') { Remove-Item -LiteralPath '${safeZip}' -Force }`,
+    `$zip = [System.IO.Compression.ZipFile]::Open('${safeZip}', [System.IO.Compression.ZipArchiveMode]::Create)`,
+    "try {",
+    "  foreach ($item in $fileList) {",
+    "    $entryName = $item.entry -replace '\\\\', '/'",
+    "    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $item.src, $entryName, [System.IO.Compression.CompressionLevel]::Fastest)",
+    "  }",
+    "} finally {",
+    "  $zip.Dispose()",
+    "}",
+  ].join("\n");
+  await runPowerShell(script, "Could not create backup archive.");
+}
+
 async function expandZipArchive(zipPath, targetDir) {
   if (process.platform !== "win32") {
     throw new Error("Compressed workspace restore is currently supported on Windows.");
@@ -3783,49 +4190,60 @@ async function buildWorkspaceBackupPackage({
   const timings = [];
   function markTiming(stage) {
     const now = Date.now();
-    timings.push({
-      stage,
-      elapsedMs: now - timingStartMs,
-      deltaMs: now - lastTimingMs,
-    });
+    timings.push({ stage, elapsedMs: now - timingStartMs, deltaMs: now - lastTimingMs });
     lastTimingMs = now;
   }
   const timestamp = timestampForFilename(createdAt);
+  // Staging holds only small sidecar files — no wholesale workspace copy.
   const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spaila-backup-"));
-  const packageRoot = path.join(stagingRoot, "spaila_backup");
-  const workspaceTarget = path.join(packageRoot, "workspace");
-  const appTarget = path.join(packageRoot, "app");
+  const packageStaging = path.join(stagingRoot, "spaila_backup");
   const filename = `spaila_backup_${timestamp}.zip`;
   const dest = path.join(targetFolder, filename);
   const partialDest = path.join(stagingRoot, `${filename}.partial.zip`);
   try {
     onProgress("start", "Starting full workspace backup.");
-    await fsp.mkdir(workspaceTarget, { recursive: true });
-    await fsp.mkdir(appTarget, { recursive: true });
+    await fsp.mkdir(path.join(packageStaging, "app"), { recursive: true });
+    await fsp.mkdir(path.join(packageStaging, "workspace", "Backup"), { recursive: true });
 
-    onProgress("scanning", "Scanning workspace and backup inventory.");
+    // ── Step 1: Scan source files + reuse cached SHA-256s for unchanged files ──
+    onProgress("scanning", "Scanning workspace and computing checksums.");
+    const prevIndex = loadBackupIndex(dirs);
+    const prevFiles = prevIndex?.files || {};
     const backupInventory = listBackupInventory(dirs.Backup);
-    onProgress("copying", "Backing up orders, inbox files, archives, conversations, and attachments.");
-    await copyDirectoryRecursiveAsync(dirs.root, workspaceTarget, {
-      exclude: (sourcePath) => path.resolve(sourcePath).toLowerCase().startsWith(path.resolve(dirs.Backup).toLowerCase()),
-    });
-    markTiming("copying");
-    if (fs.existsSync(dirs.Internal)) {
-      onProgress("internal", "Backing up internal system recovery data.");
-    }
-    await fsp.mkdir(path.join(workspaceTarget, "Backup"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceTarget, "Backup", "_backup_inventory.json"), JSON.stringify(backupInventory, null, 2), "utf8");
+    const sourceRecords = await scanWorkspaceFiles(dirs, prevFiles);
+    // Only hash files whose size or mtime changed since the last backup.
+    await hashChangedRecords(sourceRecords);
+    markTiming("scanning-and-hashing");
+
+    // ── Step 2: Write sidecar files to staging (DB, localStorage, manifest) ───
     onProgress("database", "Backing up database and settings.");
-    if (fs.existsSync(DB_PATH)) {
-      await fsp.copyFile(DB_PATH, path.join(appTarget, "spaila.db"));
+    const hasDb = fs.existsSync(DB_PATH);
+    if (hasDb) {
+      await fsp.copyFile(DB_PATH, path.join(packageStaging, "app", "spaila.db"));
     }
-    await fsp.writeFile(path.join(packageRoot, "localStorage.json"), JSON.stringify(localStorageData || {}, null, 2), "utf8");
+    const lsContent = JSON.stringify(localStorageData || {}, null, 2);
+    await fsp.writeFile(path.join(packageStaging, "localStorage.json"), lsContent, "utf8");
+    const inventoryContent = JSON.stringify(backupInventory, null, 2);
+    await fsp.writeFile(path.join(packageStaging, "workspace", "Backup", "_backup_inventory.json"), inventoryContent, "utf8");
     markTiming("database-and-settings");
 
-    onProgress("manifest", "Generating backup manifest and checksums.");
-    const includedFiles = await buildFileManifestAsync(packageRoot);
-    markTiming("manifest-hashing");
+    // ── Step 3: Build manifest from source-record hashes (no staging re-hash) ─
+    onProgress("manifest", "Generating backup manifest.");
     const baselineId = crypto.randomUUID();
+    // Workspace manifest entries come from the already-computed source records.
+    const workspaceManifestFiles = recordsToManifestFiles(sourceRecords, "workspace/");
+    // Sidecar entries are small — hash them inline (fast).
+    const dbStat = hasDb ? await fsp.stat(DB_PATH) : null;
+    const dbEntry = dbStat
+      ? [{ path: "app/spaila.db", size: dbStat.size, sha256: await sha256FileAsync(DB_PATH) }]
+      : [];
+    const sidecarEntries = [
+      ...dbEntry,
+      { path: "workspace/Backup/_backup_inventory.json", size: Buffer.byteLength(inventoryContent, "utf8"), sha256: crypto.createHash("sha256").update(inventoryContent, "utf8").digest("hex") },
+      { path: "localStorage.json", size: Buffer.byteLength(lsContent, "utf8"), sha256: crypto.createHash("sha256").update(lsContent, "utf8").digest("hex") },
+    ];
+    const allFiles = [...workspaceManifestFiles, ...sidecarEntries].sort((a, b) => a.path.localeCompare(b.path));
+    const payloadBytes = allFiles.reduce((s, f) => s + f.size, 0);
     const manifest = {
       kind: BACKUP_KIND,
       appVersion: readAppPackageVersion(),
@@ -3839,7 +4257,7 @@ async function buildWorkspaceBackupPackage({
       workspaceRoot: dirs.root,
       sections: {
         workspace: true,
-        appDatabase: fs.existsSync(DB_PATH),
+        appDatabase: hasDb,
         localStorage: true,
         internalRecoveryStorage: fs.existsSync(dirs.Internal),
         emailArchive: fs.existsSync(path.join(dirs.Internal, "email_archive")),
@@ -3847,25 +4265,18 @@ async function buildWorkspaceBackupPackage({
         backupInventory: true,
         existingBackupArchives: false,
       },
-      includedSections: [
-        "workspace",
-        "app",
-        "localStorage",
-        "internalRecoveryStorage",
-        "emailArchive",
-        "emailRetentionIndex",
-        "backupInventory",
-      ].filter((section) => {
-        if (section === "app") return fs.existsSync(DB_PATH);
-        if (section === "emailArchive") return fs.existsSync(path.join(dirs.Internal, "email_archive"));
-        if (section === "emailRetentionIndex") return fs.existsSync(path.join(dirs.Internal, "email_retention_index.json"));
-        return true;
-      }),
-      fileCount: includedFiles.length,
-      payloadBytes: includedFiles.reduce((total, file) => total + file.size, 0),
+      includedSections: ["workspace", "app", "localStorage", "internalRecoveryStorage", "emailArchive", "emailRetentionIndex", "backupInventory"]
+        .filter((section) => {
+          if (section === "app") return hasDb;
+          if (section === "emailArchive") return fs.existsSync(path.join(dirs.Internal, "email_archive"));
+          if (section === "emailRetentionIndex") return fs.existsSync(path.join(dirs.Internal, "email_retention_index.json"));
+          return true;
+        }),
+      fileCount: allFiles.length,
+      payloadBytes,
       includedPaths: {
         workspace: "workspace/",
-        appDatabase: fs.existsSync(DB_PATH) ? "app/spaila.db" : "",
+        appDatabase: hasDb ? "app/spaila.db" : "",
         settings: "localStorage.json",
         internalRecoveryStorage: "workspace/.spaila_internal/",
         emailArchive: "workspace/.spaila_internal/email_archive/",
@@ -3873,65 +4284,67 @@ async function buildWorkspaceBackupPackage({
         backupInventory: "workspace/Backup/_backup_inventory.json",
       },
       checksumAlgorithm: "sha256",
-      checksum: checksumManifestFiles(includedFiles),
+      checksum: checksumManifestFiles(allFiles),
       storageOptimization: {
         excludesExistingBackupArchives: true,
         reliesOnZipCompressionForDuplicateRecoveryFiles: true,
       },
     };
-    await fsp.writeFile(path.join(packageRoot, "backup-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
-    await fsp.writeFile(path.join(packageRoot, "backup-metadata.json"), JSON.stringify(manifest, null, 2), "utf8");
+    const manifestJson = JSON.stringify(manifest, null, 2);
+    await fsp.writeFile(path.join(packageStaging, "backup-manifest.json"), manifestJson, "utf8");
+    await fsp.writeFile(path.join(packageStaging, "backup-metadata.json"), manifestJson, "utf8");
+    markTiming("manifest");
 
-    onProgress("compressing", "Compressing backup archive.", { fileCount: manifest.fileCount, payloadBytes: manifest.payloadBytes });
+    // ── Step 4: ZIP directly from source — no intermediate workspace copy ─────
+    // Write a JSON file-list so PowerShell can add each file with the correct
+    // zip-internal entry name without hitting command-line length limits.
+    const zipFileList = [
+      // All workspace source files (Backup dir already excluded by scanWorkspaceFiles)
+      ...sourceRecords.map((r) => ({ src: r.sourcePath, entry: `spaila_backup/workspace/${r.path}` })),
+      // Sidecar files from staging
+      { src: path.join(packageStaging, "workspace", "Backup", "_backup_inventory.json"), entry: "spaila_backup/workspace/Backup/_backup_inventory.json" },
+      ...(hasDb ? [{ src: DB_PATH, entry: "spaila_backup/app/spaila.db" }] : []),
+      { src: path.join(packageStaging, "localStorage.json"), entry: "spaila_backup/localStorage.json" },
+      { src: path.join(packageStaging, "backup-manifest.json"), entry: "spaila_backup/backup-manifest.json" },
+      { src: path.join(packageStaging, "backup-metadata.json"), entry: "spaila_backup/backup-metadata.json" },
+    ];
+    const fileListPath = path.join(stagingRoot, "zipfilelist.json");
+    await fsp.writeFile(fileListPath, JSON.stringify(zipFileList), "utf8");
+
+    onProgress("compressing", "Compressing backup archive.", { fileCount: manifest.fileCount, payloadBytes });
     fs.rmSync(partialDest, { force: true });
     fs.rmSync(dest, { force: true });
-    await createZipArchive(packageRoot, partialDest);
+    await createZipArchiveFromList(fileListPath, partialDest);
     markTiming("compressing");
+
     onProgress("validating", "Validating archive integrity and manifest.");
     const archiveManifest = await validateZipArchive(partialDest);
     markTiming("validating");
-    const archiveChecksum = await sha256FileAsync(partialDest);
-    markTiming("archive-checksum");
+
     await fsp.rename(partialDest, dest);
     onProgress("finalizing", "Finalizing backup archive.", { filename });
     fs.rmSync(stagingRoot, { recursive: true, force: true });
     pruneBackups(targetFolder, 30, [filename, ...pruneKeepFilenames]);
     markTiming("finalizing");
+
+    // ── Step 5: Save index — reuse source records, no second workspace scan ───
     if (updateIndex) {
-      const workspaceFiles = includedFiles
-        .filter((file) => file.path.startsWith("workspace/") && file.path !== "workspace/Backup/_backup_inventory.json")
-        .map((file) => ({
-          ...file,
-          path: file.path.slice("workspace/".length),
-        }));
-      const sourceRecords = await scanWorkspaceFiles(dirs, {});
-      const workspaceHashByPath = Object.fromEntries(workspaceFiles.map((file) => [file.path, file.sha256]));
       await saveBackupIndex(dirs, {
         version: 1,
         updatedAt: new Date().toISOString(),
         workspaceRoot: dirs.root,
-        baseline: {
-          id: baselineId,
-          filename,
-          createdAt: manifest.createdAt,
-          payloadBytes: manifest.payloadBytes,
-          fileCount: manifest.fileCount,
-        },
+        baseline: { id: baselineId, filename, createdAt: manifest.createdAt, payloadBytes, fileCount: manifest.fileCount },
         incrementals: [],
-        files: Object.fromEntries(sourceRecords.map((record) => [record.path, {
-          size: record.size,
-          sha256: workspaceHashByPath[record.path] || "",
-          mtimeMs: record.mtimeMs,
-        }])),
+        files: recordsToIndexMap(sourceRecords),
       });
     }
+
     onProgress("complete", "Backup archive validated and saved.", { filename });
     return {
       path: dest,
       filename,
       metadata: {
         ...archiveManifest,
-        archiveChecksum,
         archiveBytes: (await fsp.stat(dest)).size,
         finalized: true,
         timings,
@@ -4304,10 +4717,14 @@ ipcMain.handle("backup:restore", async (event, { filePath }) => {
 
 ipcMain.handle("documents:open-file", async (_event, { filePath }) => {
   try {
-    if (!filePath || !fs.existsSync(filePath)) {
+    const target = path.resolve(String(filePath || ""));
+    if (!target || !isWithinWorkspace(target)) {
+      return { ok: false, error: "File must be inside the Spaila workspace." };
+    }
+    if (!fs.existsSync(target)) {
       return { ok: false, error: "File not found." };
     }
-    const err = await shell.openPath(filePath);
+    const err = await shell.openPath(target);
     if (err) return { ok: false, error: err };
     return { ok: true };
   } catch (e) {
@@ -4462,8 +4879,16 @@ ipcMain.handle("file:save-json", async (_event, { folderPath, filename, data }) 
       // Always write system files to .spaila_internal/ regardless of supplied path
       targetFolder = getWorkspaceDirs().Internal;
     }
+    targetFolder = path.resolve(String(targetFolder || ""));
+    if (!isWithinWorkspace(targetFolder)) {
+      return { ok: false, error: "JSON files can only be saved inside the Spaila workspace." };
+    }
     fs.mkdirSync(targetFolder, { recursive: true });
-    const dest = path.join(targetFolder, filename);
+    const safeName = sanitizeFilenamePart(filename, "data.json");
+    if (safeName !== filename || !safeName.endsWith(".json")) {
+      return { ok: false, error: "Invalid JSON filename." };
+    }
+    const dest = path.join(targetFolder, safeName);
     fs.writeFileSync(dest, typeof data === "string" ? data : JSON.stringify(data, null, 2), "utf8");
     return { ok: true, path: dest };
   } catch (err) {
@@ -4942,14 +5367,30 @@ ipcMain.handle("email:send-smtp", async (_event, payload = {}) => {
       messageId,
     });
     const transport = createSmtpTransport(smtpValidation.smtp);
-    await transport.sendMail({
-      envelope: {
-        from: smtpValidation.smtp.emailAddress,
-        to: parseEnvelopeRecipients(to),
-      },
-      raw: mimeMessage,
+    try {
+      await transport.sendMail({
+        envelope: {
+          from: smtpValidation.smtp.emailAddress,
+          to: parseEnvelopeRecipients(to),
+        },
+        raw: mimeMessage,
+      });
+    } catch (smtpError) {
+      const isReset = smtpError?.code === "ECONNRESET" || String(smtpError?.message || "").includes("ECONNRESET");
+      if (isReset) {
+        return {
+          ok: false,
+          error: "SMTP connection was reset before a delivery confirmation was received. Your email may or may not have sent — please check your Sent folder before resending.",
+          uncertain: true,
+        };
+      }
+      throw smtpError;
+    }
+    // SMTP delivered — append to IMAP sent folder as a best-effort (non-fatal).
+    const appendResult = await appendMimeToSentFolder(payload.imap || {}, mimeMessage, sentAt).catch((appendError) => {
+      console.warn("[IMAP_APPEND_FAILED]", appendError?.message);
+      return { ok: false, error: appendError?.message };
     });
-    const appendResult = await appendMimeToSentFolder(payload.imap || {}, mimeMessage, sentAt);
 
     const sentFolder = getSentEmailFolder(payload.orderFolderPath || "");
     fs.mkdirSync(sentFolder, { recursive: true });
@@ -5235,6 +5676,7 @@ function killHelper(options = {}) {
     helperProcess = null;
   }
   helperStatus = "stopped";
+  helperStartedAt = "";
   if (!options.silent) appendHelperLog("info", "Helper stopped.");
 }
 

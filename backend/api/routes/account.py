@@ -94,6 +94,7 @@ class WebSettingsUpdate(BaseModel):
     show_completed_tab: bool | None = None
     show_inventory_tab: bool | None = None
     show_thank_you_shortcut: bool | None = None
+    show_email_icon: bool | None = None
     archive_default_status: str | None = Field(default=None, max_length=40)
 
 
@@ -175,6 +176,10 @@ class DevSubscriptionUpdate(BaseModel):
     subscription_state: str | None = Field(default=None, max_length=40)
     plan_code: str | None = Field(default=None, max_length=40)
     trial_ends_at: str | None = Field(default=None, max_length=80)
+
+
+class TrialStartRequest(BaseModel):
+    install_id: str | None = Field(default=None, max_length=300)
 
 
 class CheckoutRequest(BaseModel):
@@ -536,7 +541,8 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
     trial_expired = state == "trial" and bool(trial_end and trial_end <= now)
     billing_status = str(profile.get("billing_status") or "").strip().lower()
     active = state == "active" or (state == "trial" and not trial_expired)
-    if billing_status in {"payment_failed", "past_due", "unpaid", "canceled"}:
+    billing_issue = billing_status in {"payment_failed", "past_due", "unpaid", "canceled"}
+    if billing_issue:
         active = False
     if clock_tamper_detected and state != "active":
         active = False
@@ -553,6 +559,15 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
         "can_search_archive": True,
     })
     account_status = "Local Mode" if state == "local_only" else ("Trial Expired" if trial_expired else ("Billing Issue" if billing_status in {"payment_failed", "past_due", "unpaid"} else ("Active Subscription" if state == "active" else "Free Trial" if state == "trial" else "Setup Pending")))
+    lock_reason = ""
+    if clock_tamper_detected and state != "active":
+        lock_reason = "clock_rollback_detected"
+    elif trial_expired:
+        lock_reason = "trial_expired"
+    elif billing_issue:
+        lock_reason = f"billing_{billing_status}"
+    elif locked:
+        lock_reason = "subscription_required"
     days_remaining = None
     reminder_level = ""
     reminder_message = ""
@@ -588,6 +603,7 @@ def _subscription_view(profile: dict[str, Any]) -> dict[str, Any]:
         "last_verified_server_time": profile.get("entitlement_last_server_time") or "",
         "clock_tamper_detected": clock_tamper_detected,
         "locked": locked,
+        "lock_reason": lock_reason,
         "locked_features": locked_features,
         "preserved_features": ["order_viewing", "archive_viewing", "settings", "billing"],
         "capabilities": capabilities,
@@ -1029,6 +1045,7 @@ def _default_web_settings() -> dict[str, Any]:
         "show_completed_tab": True,
         "show_inventory_tab": False,
         "show_thank_you_shortcut": True,
+        "show_email_icon": True,
         "archive_default_status": "archived",
         "created_at": now,
         "updated_at": now,
@@ -1048,6 +1065,7 @@ def _coerce_web_settings(row: tuple | None) -> dict[str, Any]:
         show_completed_tab,
         show_inventory_tab,
         show_thank_you_shortcut,
+        show_email_icon,
         archive_default_status,
         created_at,
         updated_at,
@@ -1061,6 +1079,7 @@ def _coerce_web_settings(row: tuple | None) -> dict[str, Any]:
         "show_completed_tab": bool(show_completed_tab) if show_completed_tab is not None else True,
         "show_inventory_tab": bool(show_inventory_tab) if show_inventory_tab is not None else False,
         "show_thank_you_shortcut": bool(show_thank_you_shortcut) if show_thank_you_shortcut is not None else True,
+        "show_email_icon": bool(show_email_icon) if show_email_icon is not None else True,
         "archive_default_status": archive_default_status or settings["archive_default_status"],
         "created_at": created_at or settings["created_at"],
         "updated_at": updated_at or settings["updated_at"],
@@ -1076,7 +1095,7 @@ def _load_web_settings() -> dict[str, Any]:
             """
             SELECT account_id, default_order_scope, default_order_sort, order_density,
                    show_attachment_previews, show_completed_tab, show_inventory_tab, show_thank_you_shortcut,
-                   archive_default_status, created_at, updated_at
+                   show_email_icon, archive_default_status, created_at, updated_at
             FROM web_settings
             WHERE account_id = ?
             """,
@@ -1091,7 +1110,7 @@ def _save_web_settings(patch: WebSettingsUpdate) -> dict[str, Any]:
     current = _load_web_settings()
     updates = patch.model_dump(exclude_unset=True)
     text_fields = {"default_order_scope", "default_order_sort", "order_density", "archive_default_status"}
-    bool_fields = {"show_attachment_previews", "show_completed_tab", "show_inventory_tab", "show_thank_you_shortcut"}
+    bool_fields = {"show_attachment_previews", "show_completed_tab", "show_inventory_tab", "show_thank_you_shortcut", "show_email_icon"}
     for key, value in updates.items():
         if key in text_fields:
             current[key] = str(value or "").strip() or current[key]
@@ -1107,8 +1126,8 @@ def _save_web_settings(patch: WebSettingsUpdate) -> dict[str, Any]:
             INSERT INTO web_settings (
                 account_id, default_order_scope, default_order_sort, order_density,
                 show_attachment_previews, show_completed_tab, show_inventory_tab, show_thank_you_shortcut,
-                archive_default_status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                show_email_icon, archive_default_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 default_order_scope = excluded.default_order_scope,
                 default_order_sort = excluded.default_order_sort,
@@ -1117,6 +1136,7 @@ def _save_web_settings(patch: WebSettingsUpdate) -> dict[str, Any]:
                 show_completed_tab = excluded.show_completed_tab,
                 show_inventory_tab = excluded.show_inventory_tab,
                 show_thank_you_shortcut = excluded.show_thank_you_shortcut,
+                show_email_icon = excluded.show_email_icon,
                 archive_default_status = excluded.archive_default_status,
                 updated_at = excluded.updated_at
             """,
@@ -1129,6 +1149,7 @@ def _save_web_settings(patch: WebSettingsUpdate) -> dict[str, Any]:
                 1 if current["show_completed_tab"] else 0,
                 1 if current["show_inventory_tab"] else 0,
                 1 if current["show_thank_you_shortcut"] else 0,
+                1 if current["show_email_icon"] else 0,
                 current["archive_default_status"],
                 current["created_at"],
                 current["updated_at"],
@@ -1675,25 +1696,57 @@ def get_entitlements():
 
 
 @router.post("/subscription/trial/start")
-def start_trial():
+def start_trial(payload: TrialStartRequest | None = None):
     profile = _load_profile()
     entitlements = _subscription_view(profile)
     if entitlements["subscription_state"] in {"trial", "active"} and not entitlements["trial_expired"]:
         return {"profile": profile, "entitlements": entitlements}
+    install_id = payload.install_id if payload else None
+    trial_history = _trial_history_for_install(install_id)
+    if trial_history:
+        trial_end = trial_history.get("trial_ends_at") or ""
+        next_profile = _save_commercial_profile_fields({
+            "plan_code": "spaila_one",
+            "subscription_state": "trial",
+            "auth_mode": profile.get("auth_mode") or "local_first",
+            "trial_started_at": trial_history.get("trial_started_at") or "",
+            "trial_ends_at": trial_end,
+            "trial_device_id": trial_history.get("install_hash", ""),
+            "trial_claimed_at": trial_history.get("created_at", ""),
+            "billing_status": "trialing",
+        })
+        return {
+            "profile": next_profile,
+            "entitlements": _subscription_view(next_profile),
+            "trial_reused": True,
+        }
+    if profile.get("trial_started_at") or profile.get("trial_ends_at"):
+        return {
+            "profile": profile,
+            "entitlements": entitlements,
+            "trial_reused": True,
+            "message": "This install has already claimed a trial. Contact support if this is a legitimate recovery.",
+        }
     now = datetime.now(timezone.utc)
+    trial_ends_at = now + timedelta(days=TRIAL_DAYS)
     next_profile = _save_commercial_profile_fields({
         "plan_code": "spaila_one",
         "subscription_state": "trial",
         "auth_mode": profile.get("auth_mode") or "local_first",
         "trial_started_at": now.isoformat(),
-        "trial_ends_at": (now + timedelta(days=TRIAL_DAYS)).isoformat(),
+        "trial_ends_at": trial_ends_at.isoformat(),
+        "trial_device_id": _install_hash(install_id),
+        "trial_claimed_at": now.isoformat(),
         "billing_status": "trialing",
     })
+    _record_trial_install(install_id, profile.get("account_email") or "", now.isoformat(), trial_ends_at.isoformat())
     return {"profile": next_profile, "entitlements": _subscription_view(next_profile)}
 
 
 @router.patch("/subscription")
 def update_subscription_for_dev(payload: DevSubscriptionUpdate):
+    if os.environ.get("SPAILA_ALLOW_DEV_SUBSCRIPTION_PATCH", "").strip() != "1":
+        raise HTTPException(status_code=403, detail="Subscription mutation is disabled outside explicit local dev mode.")
     allowed_states = {"local_only", "trial", "active", "past_due", "canceled"}
     fields: dict[str, Any] = {}
     if payload.subscription_state:
@@ -1767,6 +1820,8 @@ def create_billing_portal_session(payload: PortalRequest | None = None):
 async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None)):
     raw = await request.body()
     secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not secret and os.environ.get("SPAILA_ALLOW_UNSIGNED_STRIPE_WEBHOOK", "").strip() != "1":
+        raise HTTPException(status_code=500, detail="Stripe webhook secret is not configured.")
     if secret:
         if not stripe_signature:
             raise HTTPException(status_code=400, detail="Missing Stripe webhook signature.")

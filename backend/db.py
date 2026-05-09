@@ -27,7 +27,11 @@ def init_db():
         order_number TEXT,
         order_date TEXT,
         buyer_name TEXT,
+        billing_name TEXT,
         buyer_email TEXT,
+        billing_email TEXT,
+        billing_address TEXT,
+        recipient_name TEXT,
         shipping_address TEXT,
         ship_by TEXT,
         status TEXT,
@@ -77,7 +81,11 @@ def init_db():
         original_order_id TEXT,
         order_number TEXT,
         buyer_name TEXT,
+        billing_name TEXT,
         buyer_email TEXT,
+        billing_email TEXT,
+        billing_address TEXT,
+        recipient_name TEXT,
         shipping_address TEXT,
         pet_name TEXT,
         order_date TEXT,
@@ -215,6 +223,10 @@ def init_db():
 
     # Migrate existing databases that predate these columns
     _ensure_columns(cur, "orders", [
+        ("billing_name",     "TEXT"),
+        ("billing_email",    "TEXT"),
+        ("billing_address",  "TEXT"),
+        ("recipient_name",   "TEXT"),
         ("order_folder_path", "TEXT"),
         ("source_eml_path",   "TEXT"),
         ("eml_path",          "TEXT"),
@@ -239,7 +251,11 @@ def init_db():
         ("original_order_id", "TEXT"),
         ("order_number", "TEXT"),
         ("buyer_name", "TEXT"),
+        ("billing_name", "TEXT"),
         ("buyer_email", "TEXT"),
+        ("billing_email", "TEXT"),
+        ("billing_address", "TEXT"),
+        ("recipient_name", "TEXT"),
         ("shipping_address", "TEXT"),
         ("pet_name", "TEXT"),
         ("order_date", "TEXT"),
@@ -255,6 +271,15 @@ def init_db():
         ("search_blob", "TEXT"),
         ("updated_at", "TEXT"),
     ])
+    cur.execute("UPDATE orders SET billing_name = buyer_name WHERE (billing_name IS NULL OR TRIM(billing_name) = '') AND buyer_name IS NOT NULL")
+    cur.execute("UPDATE orders SET billing_email = buyer_email WHERE (billing_email IS NULL OR TRIM(billing_email) = '') AND buyer_email IS NOT NULL")
+    cur.execute("UPDATE orders SET recipient_name = shipping_name WHERE (recipient_name IS NULL OR TRIM(recipient_name) = '') AND shipping_name IS NOT NULL")
+    # Etsy/single-recipient backfill: if recipient_name is still empty but billing_name is set,
+    # copy billing_name → recipient_name so existing orders retain their customer name.
+    cur.execute("UPDATE orders SET recipient_name = billing_name WHERE (recipient_name IS NULL OR TRIM(recipient_name) = '') AND billing_name IS NOT NULL AND TRIM(billing_name) != ''")
+    cur.execute("UPDATE archive_orders SET billing_name = buyer_name WHERE (billing_name IS NULL OR TRIM(billing_name) = '') AND buyer_name IS NOT NULL")
+    cur.execute("UPDATE archive_orders SET billing_email = buyer_email WHERE (billing_email IS NULL OR TRIM(billing_email) = '') AND buyer_email IS NOT NULL")
+    cur.execute("UPDATE archive_orders SET recipient_name = billing_name WHERE (recipient_name IS NULL OR TRIM(recipient_name) = '') AND billing_name IS NOT NULL AND TRIM(billing_name) != ''")
     _ensure_columns(cur, "account_profiles", [
         ("shop_id", "TEXT"),
         ("shop_name", "TEXT"),
@@ -330,6 +355,7 @@ def init_db():
         ("show_completed_tab", "INTEGER DEFAULT 1"),
         ("show_inventory_tab", "INTEGER DEFAULT 0"),
         ("show_thank_you_shortcut", "INTEGER DEFAULT 1"),
+        ("show_email_icon", "INTEGER DEFAULT 1"),
         ("show_attachment_previews", "INTEGER DEFAULT 1"),
         ("archive_default_status", "TEXT DEFAULT 'archived'"),
         ("created_at", "TEXT"),

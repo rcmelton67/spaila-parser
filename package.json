@@ -10,7 +10,7 @@
     "recover:inbox": "node scripts/recover-inbox-visibility.mjs --execute --stop-helper",
     "diagnose:inbox": "node scripts/recover-inbox-visibility.mjs",
     "start": "npm run build:renderer && electron .",
-    "dev:backend": "py -m uvicorn backend.main:app --host 127.0.0.1 --port 8055 --reload",
+    "dev:backend": "py -m uvicorn backend.main:app --host 127.0.0.1 --port 8055 --reload --reload-dir backend --reload-dir parser",
     "dev": "npm run build:renderer && concurrently --kill-others --kill-others-on-fail -n RENDERER,ELECTRON,BACKEND -c cyan,blue,green \"npm run watch:renderer\" \"electron .\" \"npm run dev:backend\""
   },
   "dependencies": {

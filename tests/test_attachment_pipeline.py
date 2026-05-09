@@ -77,7 +77,9 @@ def test_attachment_only_email_can_link_to_order(tmp_path, monkeypatch):
             id TEXT,
             order_number TEXT,
             buyer_name TEXT,
+            billing_name TEXT,
             buyer_email TEXT,
+            billing_email TEXT,
             messages TEXT,
             source_eml_path TEXT,
             eml_path TEXT,
@@ -104,11 +106,13 @@ def test_attachment_only_email_can_link_to_order(tmp_path, monkeypatch):
         """
     )
     conn.execute(
-        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "order-1",
             "12345",
             "Customer",
+            "Customer",
+            "customer@example.com",
             "customer@example.com",
             "[]",
             "",
@@ -152,7 +156,9 @@ def test_new_order_email_with_different_order_number_does_not_attach_to_recent_o
             id TEXT,
             order_number TEXT,
             buyer_name TEXT,
+            billing_name TEXT,
             buyer_email TEXT,
+            billing_email TEXT,
             messages TEXT,
             source_eml_path TEXT,
             eml_path TEXT,
@@ -180,11 +186,13 @@ def test_new_order_email_with_different_order_number_does_not_attach_to_recent_o
     )
     existing_subject = "You made a sale on Etsy - Ship by May 8 - [$67.84, Order #4038405186]"
     conn.execute(
-        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "order-1",
             "4038405186",
             "Logan Kistler",
+            "Logan Kistler",
+            "",
             "",
             json.dumps([{"subject": existing_subject, "message_id": "old@example.com"}]),
             "",
@@ -225,7 +233,9 @@ def test_new_order_email_with_reused_order_number_does_not_attach_to_existing_co
             id TEXT,
             order_number TEXT,
             buyer_name TEXT,
+            billing_name TEXT,
             buyer_email TEXT,
+            billing_email TEXT,
             messages TEXT,
             source_eml_path TEXT,
             eml_path TEXT,
@@ -252,11 +262,13 @@ def test_new_order_email_with_reused_order_number_does_not_attach_to_existing_co
         """
     )
     conn.execute(
-        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "order-2380-a",
             "2380",
             "Kelly Leetch",
+            "Kelly Leetch",
+            "sunyogi74@gmail.com",
             "sunyogi74@gmail.com",
             json.dumps([{
                 "type": "outbound",

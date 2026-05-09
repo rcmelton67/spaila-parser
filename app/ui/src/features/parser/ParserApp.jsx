@@ -17,19 +17,26 @@ function buildParserVisibilityMap(config) {
 
 // Metadata for order-level fields (multiline flag lives here only).
 const _ORDER_FIELD_META = {
-  buyer_name:       {},
-  shipping_address: { multiline: true },
   order_number:     {},
-  quantity:         {},
+  billing_name:      {},
+  billing_address:   { multiline: true },
+  billing_email:     {},
+  phone_number:      {},
   order_date:       {},
   ship_by:          {},
-  buyer_email:      {},
+  recipient_name:    {},
+  shipping_address: { multiline: true },
+  quantity:         {},
 };
 const _ORDER_FIELD_KEYS = Object.keys(_ORDER_FIELD_META).map((key) => ({
   key,
   ...(_ORDER_FIELD_META[key]),
 }));
-const REQUIRED_ORDER_FIELD_KEYS = new Set(["order_number", "buyer_name", "ship_by"]);
+const PARSER_ORDER_CORE_KEYS = ["order_number", "order_date", "ship_by"];
+const PARSER_BILLING_KEYS = ["billing_name", "billing_address"];
+const PARSER_SHIPPING_KEYS = ["recipient_name", "shipping_address", "billing_email", "phone_number"];
+const PARSER_REMAINING_ORDER_KEYS = ["quantity"];
+const REQUIRED_ORDER_FIELD_KEYS = new Set(["order_number", "ship_by", "recipient_name"]);
 function getBusinessTimezone() {
   try {
     return String(loadShopConfig()?.businessTimezone || "").trim();
@@ -401,14 +408,35 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
 function isAddressBreakLine(line) {
   const lower = String(line || "").trim().toLowerCase();
   return (
-    !lower
+    (lower.includes("usps") && lower.includes("confirm"))
+    || lower.includes("could not confirm this address")
     || lower.includes("purchase shipping label")
     || lower.includes("shipping internationally")
-    || lower.includes("learn")
-    || lower.includes("sell")
+    || lower.startsWith("learn ")
+    || lower.startsWith("learn more")
+    || lower.startsWith("sell with confidence")
   );
 }
 const ADDRESS_SECTION_KEY = "shipping";
+const ADDRESS_NAME_LINE_RE = /^[A-Za-z][A-Za-z.'-]+(?:\s+[A-Za-z][A-Za-z.'-]+){1,4}$/;
+const ADDRESS_STREET_LINE_RE = /^\d{1,8}\s+.+/;
+const ADDRESS_CITY_STATE_LINE_RE = /^[A-Za-z .'-]+,?\s+[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?$/;
+const ADDRESS_ZIP_LINE_RE = /^\d{5}(?:-\d{4})?$/;
+const ADDRESS_COUNTRY_LINE_RE = /^(?:United States|USA|Canada|Australia)$/i;
+const ADDRESS_UNIT_LINE_RE = /^(?:apt|apartment|suite|ste|unit|#|po box|p\.o\. box)\b/i;
+
+function isLikelyShippingAddressLine(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  return ADDRESS_STREET_LINE_RE.test(trimmed)
+    || ADDRESS_CITY_STATE_LINE_RE.test(trimmed)
+    || ADDRESS_ZIP_LINE_RE.test(trimmed)
+    || ADDRESS_COUNTRY_LINE_RE.test(trimmed)
+    || ADDRESS_UNIT_LINE_RE.test(trimmed)
+    || ADDRESS_NAME_LINE_RE.test(trimmed);
+}
 
 function getSectionMeta(sectionKey) {
   switch (sectionKey) {
@@ -534,6 +562,8 @@ function buildStructuredEmailSections(text) {
   let currentSection = null;
   let currentSectionKey = null;
   let addressBlockClosed = false;
+  let addressLineCount = 0;
+  let addressBlankGapCount = 0;
   const rawLines = String(text || "").split("\n");
 
   function ensureSection(sectionKey) {
@@ -556,18 +586,48 @@ function buildStructuredEmailSections(text) {
     let nextSectionKey = currentSectionKey;
 
     if (currentSectionKey === ADDRESS_SECTION_KEY) {
-      if (isAddressBreakLine(line)) {
+      if (isBlank) {
+        addressBlankGapCount += 1;
+        if (addressBlankGapCount <= 3) {
+          nextSectionKey = ADDRESS_SECTION_KEY;
+          type = "default";
+        } else {
+          addressBlockClosed = true;
+          nextSectionKey = "noise";
+          type = "default";
+        }
+      } else if (isAddressBreakLine(line)) {
         addressBlockClosed = true;
+        addressBlankGapCount = 0;
         nextSectionKey = "noise";
-        type = isBlank ? "default" : "noise";
-      } else {
+        type = "noise";
+      } else if (shouldStartPricingSection(line)) {
+        addressBlockClosed = true;
+        addressBlankGapCount = 0;
+        nextSectionKey = "pricing";
+        type = "pricing";
+      } else if (shouldStartItemSection(line)) {
+        addressBlockClosed = true;
+        addressBlankGapCount = 0;
+        nextSectionKey = "item";
+        type = "item";
+      } else if (isLikelyShippingAddressLine(line) || addressLineCount < 6) {
+        addressBlankGapCount = 0;
         nextSectionKey = ADDRESS_SECTION_KEY;
         type = "address";
+        addressLineCount += 1;
+      } else {
+        addressBlockClosed = true;
+        addressBlankGapCount = 0;
+        nextSectionKey = "noise";
+        type = "noise";
       }
     } else if (shouldStartAddressSection(line)) {
       nextSectionKey = ADDRESS_SECTION_KEY;
       type = "section_header";
       addressBlockClosed = false;
+      addressLineCount = 0;
+      addressBlankGapCount = 0;
     } else if (shouldStartOrderSection(line)) {
       nextSectionKey = "order";
       type = "order_info";
@@ -615,11 +675,12 @@ function renderStructuredEmail(
 ) {
   const sections = buildStructuredEmailSections(text);
   function renderLine(line) {
+    const lineRanges = sliceRangesForLine(ranges, line.start, line.end);
+    const hasDecisionRange = lineRanges.some((range) => range.kind !== "attention");
     const hiddenByUser = lineMatchesHiddenPattern(line.text, hiddenPatterns, hiddenExactLines);
-    if (hiddenByUser && !showHiddenContent) {
+    if (hiddenByUser && !showHiddenContent && !hasDecisionRange) {
       return null;
     }
-    const lineRanges = sliceRangesForLine(ranges, line.start, line.end);
     const emphasize = /order number|\$/i.test(line.text);
     const renderTextPart = (partText, partStart = 0) => {
       const partRanges = lineRanges
@@ -712,11 +773,35 @@ function renderStructuredEmail(
   });
 }
 
-function buildHighlights(decisions, suppressedFields) {
+// Legacy field names that should never produce highlights even if stale
+// decisions include them (e.g., replayed from an old store).
+const HIDDEN_LEGACY_PARSER_FIELDS = new Set(["buyer_name", "buyer_email", "shipping_name"]);
+
+function buildHighlights(decisions, suppressedFields, cleanText = "") {
   return [
     ...decisions
     .filter((decision) => !suppressedFields.includes(decision.field))
+    .filter((decision) => !HIDDEN_LEGACY_PARSER_FIELDS.has(decision.field))
     .filter((decision) => typeof decision.start === "number" && typeof decision.end === "number" && decision.end > decision.start)
+    .filter((decision) => {
+      if (!cleanText || typeof decision.value !== "string") {
+        return true;
+      }
+      const sourceText = cleanText.slice(decision.start, decision.end);
+      const matches = sourceText === decision.value;
+      if (!matches && decision.field === "shipping_address") {
+        console.warn("[SHIPPING_ADDRESS_HIGHLIGHT_REJECTED]", {
+          field: decision.field,
+          value: decision.value,
+          decision_source: decision.decision_source,
+          start: decision.start,
+          end: decision.end,
+          source_text: sourceText,
+          provenance: decision.provenance,
+        });
+      }
+      return matches;
+    })
     .map((decision) => ({
       start: decision.start,
       end: decision.end,
@@ -752,9 +837,9 @@ function manualGiftMessageHighlight(giftMessage) {
   }];
 }
 
-function buildUnifiedHighlights(decisions, suppressedFields, items, giftMessage) {
+function buildUnifiedHighlights(decisions, suppressedFields, items, giftMessage, cleanText = "") {
   return [
-    ...buildHighlights(decisions, suppressedFields),
+    ...buildHighlights(decisions, suppressedFields, cleanText),
     ...manualItemHighlights(items),
     ...manualGiftMessageHighlight(giftMessage),
   ];
@@ -1148,7 +1233,7 @@ function FieldRow({
   required,
 }) {
   const value = normalizeFieldValue(decision?.value ?? "");
-  const isAddressField = fieldKey === "shipping_address";
+  const isAddressField = fieldKey === "billing_address" || fieldKey === "shipping_address";
   const isManualOverride = manualValue !== undefined;
   const effectiveValue = isManualOverride ? manualValue : value;
   const displayValue = isAddressField ? formatAddressForDisplay(effectiveValue) : effectiveValue;
@@ -1434,17 +1519,54 @@ export default function App({
   const _orderKeyMeta = Object.fromEntries(_ORDER_FIELD_KEYS.map((f) => [f.key, f]));
   const _itemKeyMeta  = Object.fromEntries(_ITEM_FIELD_KEYS.map((f)  => [f.key, f]));
 
-  // Apply user-preferred order, falling back to default array order for any key not in parserFieldOrder.
-  const orderedFields = parserFieldOrder
-    .filter((key) => key in _orderKeyMeta && (_parserVisible[key] !== false || REQUIRED_ORDER_FIELD_KEYS.has(key)))
-    .map((key) => {
-      const { multiline } = _orderKeyMeta[key];
-      return [_labels[key] ?? key, key, !!multiline];
-    });
+  const visibleOrderFieldByKey = Object.fromEntries(
+    parserFieldOrder
+      .filter((key) => key in _orderKeyMeta && (_parserVisible[key] !== false || REQUIRED_ORDER_FIELD_KEYS.has(key)))
+      .map((key) => {
+        const { multiline } = _orderKeyMeta[key];
+        return [key, [_labels[key] ?? key, key, !!multiline]];
+      }),
+  );
+  const orderFieldsForKeys = (keys) => keys
+    .map((key) => visibleOrderFieldByKey[key])
+    .filter(Boolean);
+  const orderCoreFields = orderFieldsForKeys(PARSER_ORDER_CORE_KEYS);
+  const billingFields = orderFieldsForKeys(PARSER_BILLING_KEYS);
+  const shippingFields = orderFieldsForKeys(PARSER_SHIPPING_KEYS);
+  const remainingOrderFields = orderFieldsForKeys(PARSER_REMAINING_ORDER_KEYS);
+  const orderedFields = [
+    ...orderCoreFields,
+    ...billingFields,
+    ...shippingFields,
+    ...remainingOrderFields,
+  ];
+  const renderOrderFieldRow = ([label, key, multiline]) => (
+    <FieldRow
+      key={key}
+      label={label}
+      fieldKey={key}
+      decision={decisionMap[key]}
+      hasSelection={hasSelection}
+      loading={state.loading}
+      selected={selectedField === key}
+      onSelect={handleFieldClick}
+      onTeach={teach}
+      manualValue={key === "ship_by" && manualShipByTouched ? manualOrderFields.ship_by : undefined}
+      onManualChange={key === "ship_by" ? handleManualOrderFieldChange : undefined}
+      multiline={!!multiline}
+      priceCandidateCount={priceCandidateCount}
+      isKeyActive={activeKeyField === key}
+      navKey={key}
+      required={requiredFields.includes(key)}
+    />
+  );
 
   const itemFieldOrder = parserFieldOrder
     .filter((key) => key in _itemKeyMeta && _parserVisible[key] !== false)
-    .map((key) => [_labels[key] ?? key, key]);
+    .map((key) => {
+      const { multiline } = _itemKeyMeta[key];
+      return [_labels[key] ?? key, key, !!multiline];
+    });
 
   const [state, setState] = React.useState({
     text: "",
@@ -1486,6 +1608,8 @@ export default function App({
   const [hiddenExactLines, setHiddenExactLines] = React.useState(() => new Set());
   const [lineContextMenu, setLineContextMenu] = React.useState(null);
   const [pulseGiftAttention, setPulseGiftAttention] = React.useState(false);
+  const [userBillingOpen, setUserBillingOpen] = React.useState(null);
+  const [userGiftOpen, setUserGiftOpen] = React.useState(null);
   React.useEffect(() => {
     try {
       localStorage.setItem(HIDDEN_EMAIL_PATTERNS_KEY, JSON.stringify(userHiddenPatterns));
@@ -1493,6 +1617,11 @@ export default function App({
       // UI-only preference; ignore storage failures.
     }
   }, [userHiddenPatterns]);
+  // Reset manual accordion overrides each time a new file is parsed.
+  React.useEffect(() => {
+    setUserBillingOpen(null);
+    setUserGiftOpen(null);
+  }, [state.filePath]);
   React.useEffect(() => {
     if (!lineContextMenu) {
       return undefined;
@@ -1537,9 +1666,15 @@ export default function App({
   const decisionMap = Object.fromEntries(
     visibleDecisions.map((decision) => [decision.field, decision]),
   );
-  const highlights = buildUnifiedHighlights(state.decisions, suppressedFields, state.items, giftMessage);
+  const highlights = buildUnifiedHighlights(state.decisions, suppressedFields, state.items, giftMessage, state.text || "");
   const attentionHighlights = buildGiftAttentionHighlights(meta);
   const currentOrderNumber = decisionMap.order_number?.value || "";
+
+  // ── Smart accordion open state ────────────────────────────────────────────
+  const autoBillingOpen = !!(decisionMap.billing_name?.value || decisionMap.billing_address?.value);
+  const autoGiftOpen = !!(flags.gift || flags.gift_wrap || flags.gift_message || giftOptions.is_gift || giftOptions.gift_wrap || giftMessage);
+  const billingOpen = userBillingOpen !== null ? userBillingOpen : autoBillingOpen;
+  const giftOpen    = userGiftOpen    !== null ? userGiftOpen    : autoGiftOpen;
 
   // Only blue (user-confirmed) values — used by Create Order
   const assignedFields = Object.fromEntries(
@@ -1601,10 +1736,13 @@ export default function App({
 
   // Flat ordered list of every navigable field key.
   const navFields = React.useMemo(() => [
-    ...orderedFields.map(([, key]) => key),
+    ...orderCoreFields.map(([, key]) => key),
+    ...billingFields.map(([, key]) => key),
+    ...shippingFields.map(([, key]) => key),
     "gift_message",
+    ...remainingOrderFields.map(([, key]) => key),
     ...itemFieldOrder.map(([, key]) => `item:${activeItemIndex}:${key}`),
-  ], [activeItemIndex]);
+  ], [activeItemIndex, billingFields, itemFieldOrder, orderCoreFields, remainingOrderFields, shippingFields]);
 
   // Keep refs in sync every render so the single keydown closure always
   // reads the latest state without being re-registered.
@@ -1726,8 +1864,8 @@ export default function App({
   const requiredFields = Array.from(REQUIRED_ORDER_FIELD_KEYS);
   const requiredFieldLabels = {
     order_number: "Order number",
-    buyer_name: "Buyer name",
     ship_by: "Ship by date",
+    recipient_name: "Shipping name",
   };
   const missingRequiredFields = requiredFields.filter((f) => {
     const val = effectiveAssignedFields[f];
@@ -1756,8 +1894,13 @@ export default function App({
       order: {
         order_number: normalizeFieldValue(effectiveAssignedFields.order_number || ""),
         order_date: normalizeFieldValue(effectiveAssignedFields.order_date || ""),
-        buyer_name: normalizeFieldValue(effectiveAssignedFields.buyer_name || ""),
-        buyer_email: normalizeFieldValue(effectiveAssignedFields.buyer_email || ""),
+        billing_name: normalizeFieldValue(effectiveAssignedFields.billing_name || effectiveAssignedFields.buyer_name || ""),
+        billing_email: normalizeFieldValue(effectiveAssignedFields.billing_email || effectiveAssignedFields.buyer_email || ""),
+        billing_address: normalizeFieldValue(effectiveAssignedFields.billing_address || ""),
+        phone_number: normalizeFieldValue(effectiveAssignedFields.phone_number || ""),
+        recipient_name: normalizeFieldValue(effectiveAssignedFields.recipient_name || ""),
+        buyer_name: normalizeFieldValue(effectiveAssignedFields.buyer_name || effectiveAssignedFields.billing_name || ""),
+        buyer_email: normalizeFieldValue(effectiveAssignedFields.buyer_email || effectiveAssignedFields.billing_email || ""),
         shipping_address: normalizeFieldValue(effectiveAssignedFields.shipping_address || ""),
         ship_by: normalizeFieldValue(effectiveAssignedFields.ship_by || ""),
         gift_message: normalizeFieldValue(giftMessage?.value || ""),
@@ -1932,12 +2075,12 @@ export default function App({
     });
     setSelectedField((current) => {
       if (!current) {
-        // On initial import prefer buyer_name as a logical starting point.
-        // Fall back to null (clean state) if buyer_name is not in this result.
-        const hasBuyerName = result.decisions?.some(
-          (d) => d.field === "buyer_name" && !suppressedFields.includes(d.field),
+        // On initial import prefer the required shipping-name field.
+        // Fall back to null (clean state) if it is not in this result.
+        const hasShippingName = result.decisions?.some(
+          (d) => d.field === "recipient_name" && !suppressedFields.includes(d.field),
         );
-        return hasBuyerName ? "buyer_name" : null;
+        return hasShippingName ? "recipient_name" : null;
       }
       // Keep the current selection across re-parses (accept / reject flows).
       return current;
@@ -2076,10 +2219,10 @@ export default function App({
     if (!exactValue) {
       return;
     }
-    const counterpart = field === "buyer_name"
+    const counterpart = field === "billing_name"
       ? decisionMap.shipping_address
       : field === "shipping_address"
-        ? decisionMap.buyer_name
+        ? (decisionMap.billing_name || decisionMap.recipient_name)
         : null;
     if (
       counterpart
@@ -2087,7 +2230,7 @@ export default function App({
     ) {
       setState((current) => ({
         ...current,
-        error: `${field === "buyer_name" ? "Buyer name" : "Shipping address"} selection overlaps ${field === "buyer_name" ? "shipping address" : "buyer name"}. Select only the exact text for this field.`,
+        error: `${field === "billing_name" ? "Billing Name" : "Shipping Address"} selection overlaps ${field === "billing_name" ? "shipping address" : "billing name"}. Select only the exact text for this field.`,
       }));
       return;
     }
@@ -2099,7 +2242,26 @@ export default function App({
     }
 
     actionLockRef.current = actionKey;
-    setState((current) => ({ ...current, loading: true, error: "" }));
+    // Optimistic update: show the value as "assigned" immediately so the UI
+    // feels instant while the background re-parse runs.
+    setState((current) => {
+      const optimisticDecision = {
+        field,
+        value: exactValue,
+        decision: "assigned",
+        decision_source: "optimistic",
+        start: sel.start,
+        end: sel.end,
+        confidence: 1.0,
+        segment_id: sel.segment_id || "",
+        provenance: {},
+      };
+      const nextDecisions = [
+        ...current.decisions.filter((d) => d.field !== field),
+        optimisticDecision,
+      ];
+      return { ...current, loading: true, error: "", decisions: nextDecisions };
+    });
     try {
       const parserPath = await resolveCurrentParserPath();
       const nextSuppressed = suppressedFields.filter((value) => value !== field);
@@ -2118,7 +2280,7 @@ export default function App({
         },
       });
       const assignedDecision = result.decisions?.find((decision) => decision.field === field) || null;
-      const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage);
+      const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage, result.clean_text || state.text || "");
       console.log("DECISIONS_AFTER_ASSIGN:", result.decisions);
       console.log("HIGHLIGHTS:", nextHighlights);
       console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", assignedDecision
@@ -2148,7 +2310,7 @@ export default function App({
         error: error.message || "Failed to save assignment",
       }));
     }
-  }, [applyResult, clearSelection, currentOrderNumber, decisionMap.buyer_name, decisionMap.shipping_address, resolveCurrentParserPath, selection, suppressedFields]);
+  }, [applyResult, clearSelection, currentOrderNumber, decisionMap.billing_name, decisionMap.recipient_name, decisionMap.shipping_address, resolveCurrentParserPath, selection, suppressedFields]);
 
   // Fields whose manual assignment must also teach the backend parser so that
   // future emails of the same template auto-parse them correctly.
@@ -2382,7 +2544,25 @@ export default function App({
 
     debounceRef.current = setTimeout(async () => {
       actionLockRef.current = actionKey;
-      setState((current) => ({ ...current, loading: true, error: "" }));
+      // Optimistic update for accept: flip to "assigned" immediately so the
+      // field turns blue without waiting for the full re-parse round-trip.
+      if (action === "save_assignment") {
+        setState((current) => {
+          const optimisticDecision = {
+            ...decision,
+            value: normalizedDecisionValue,
+            decision: "assigned",
+            decision_source: "optimistic",
+          };
+          const nextDecisions = [
+            ...current.decisions.filter((d) => d.field !== decision.field),
+            optimisticDecision,
+          ];
+          return { ...current, loading: true, error: "", decisions: nextDecisions };
+        });
+      } else {
+        setState((current) => ({ ...current, loading: true, error: "" }));
+      }
       try {
         const parserPath = await resolveCurrentParserPath();
         const nextSuppressed = action === "save_rejection"
@@ -2403,7 +2583,7 @@ export default function App({
           : await window.parserApp.saveRejection(payload);
         if (action === "save_assignment") {
           const assignedDecision = result.decisions?.find((row) => row.field === decision.field) || null;
-          const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage);
+          const nextHighlights = buildUnifiedHighlights(result.decisions || [], nextSuppressed, state.items, giftMessage, result.clean_text || state.text || "");
           console.log("DECISIONS_AFTER_ASSIGN:", result.decisions);
           console.log("HIGHLIGHTS:", nextHighlights);
           console.log("ASSIGNED_FIELD_AFTER_ASSIGN:", assignedDecision
@@ -2661,94 +2841,116 @@ export default function App({
               </div>
             ) : null}
 
-            {orderedFields.slice(0, 2).map(([label, key, multiline]) => (
-              <FieldRow
-                key={key}
-                label={label}
-                fieldKey={key}
-                decision={decisionMap[key]}
-                hasSelection={hasSelection}
-                loading={state.loading}
-                selected={selectedField === key}
-                onSelect={handleFieldClick}
-                onTeach={teach}
-                manualValue={key === "ship_by" && manualShipByTouched ? manualOrderFields.ship_by : undefined}
-                onManualChange={key === "ship_by" ? handleManualOrderFieldChange : undefined}
-                multiline={!!multiline}
-                priceCandidateCount={priceCandidateCount}
-                isKeyActive={activeKeyField === key}
-                navKey={key}
-                required={requiredFields.includes(key)}
-              />
-            ))}
+            {orderCoreFields.map(renderOrderFieldRow)}
 
-            <div className="divider" />
+            <div className="operational-field-divider" aria-hidden="true" />
 
-            {orderedFields.slice(2).map(([label, key, multiline]) => (
-              <FieldRow
-                key={key}
-                label={label}
-                fieldKey={key}
-                decision={decisionMap[key]}
-                hasSelection={hasSelection}
-                loading={state.loading}
-                selected={selectedField === key}
-                onSelect={handleFieldClick}
-                onTeach={teach}
-                manualValue={key === "ship_by" && manualShipByTouched ? manualOrderFields.ship_by : undefined}
-                onManualChange={key === "ship_by" ? handleManualOrderFieldChange : undefined}
-                multiline={!!multiline}
-                priceCandidateCount={priceCandidateCount}
-                isKeyActive={activeKeyField === key}
-                navKey={key}
-                required={requiredFields.includes(key)}
-              />
-            ))}
-
-            <div className="gift-option-row" data-nav-key="gift_options">
-              <label className="gift-option-toggle">
-                <input
-                  type="checkbox"
-                  checked={!!giftOptions.is_gift}
-                  onChange={(event) => {
-                    setGiftOptions((current) => ({ ...current, is_gift: event.target.checked }));
-                  }}
-                />
-                <span>Mark as gift</span>
-              </label>
-              <label className="gift-option-toggle">
-                <input
-                  type="checkbox"
-                  checked={!!giftOptions.gift_wrap}
-                  onChange={(event) => {
-                    setGiftOptions((current) => ({ ...current, gift_wrap: event.target.checked }));
-                  }}
-                />
-                <span>Gift wrap</span>
-              </label>
+            {/* ── Billing accordion ── */}
+            <div className="parser-accordion">
+              <div
+                className="parser-accordion-header"
+                role="button"
+                tabIndex={0}
+                aria-expanded={billingOpen}
+                onClick={() => setUserBillingOpen(!billingOpen)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setUserBillingOpen(!billingOpen); } }}
+              >
+                <span className="parser-accordion-label">
+                  Billing Details
+                  <span className="parser-accordion-label-sub"> (optional)</span>
+                </span>
+                <span className="parser-accordion-summary">
+                  {!billingOpen && decisionMap.billing_name?.value ? (
+                    <span className="parser-accordion-name-preview">{decisionMap.billing_name.value}</span>
+                  ) : null}
+                  <span className={`parser-accordion-chevron${billingOpen ? " open" : ""}`}>▶</span>
+                </span>
+              </div>
+              {billingOpen ? (
+                <div className="parser-accordion-body">
+                  {billingFields.map(renderOrderFieldRow)}
+                </div>
+              ) : null}
             </div>
 
-            <ItemFieldRow
-              label="Gift Message"
-              fieldKey="gift_message"
-              value={giftMessage}
-              meta={giftMessageMeta}
-              hasSelection={hasSelection}
-              loading={state.loading}
-              selected={selectedField === "gift_message"}
-              onSelect={() => {
-                setSelectedField("gift_message");
-                scrollToDecisionRange("gift_message", giftMessage || giftMessageMeta);
-                if (selection?.selected_text) assignGiftMessage();
-              }}
-              onAccept={assignGiftMessage}
-              onReject={rejectGiftMessage}
-              isKeyActive={activeKeyField === "gift_message"}
-              navKey="gift_message"
-            />
+            <div className="operational-field-divider" aria-hidden="true" />
 
-            <div className="section-divider" />
-            <div className="section-header">Items</div>
+            {shippingFields.map(renderOrderFieldRow)}
+
+            <div className="operational-field-divider" aria-hidden="true" />
+
+            {/* ── Gift accordion ── */}
+            <div className="parser-accordion" data-nav-key="gift_options">
+              <div
+                className="parser-accordion-header"
+                role="button"
+                tabIndex={0}
+                aria-expanded={giftOpen}
+                onClick={() => setUserGiftOpen(!giftOpen)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setUserGiftOpen(!giftOpen); } }}
+              >
+                <span className="parser-accordion-label">Gift</span>
+                <span className="parser-accordion-summary">
+                  {!giftOpen ? (
+                    <>
+                      {(flags.gift || giftOptions.is_gift) ? <span className="parser-accordion-badge parser-accordion-badge--gift">Gift</span> : null}
+                      {(flags.gift_wrap || giftOptions.gift_wrap) ? <span className="parser-accordion-badge parser-accordion-badge--wrap">Wrapped</span> : null}
+                      {(flags.gift_message || giftMessage) ? <span className="parser-accordion-badge parser-accordion-badge--msg">Message</span> : null}
+                    </>
+                  ) : null}
+                  <span className={`parser-accordion-chevron${giftOpen ? " open" : ""}`}>▶</span>
+                </span>
+              </div>
+              {giftOpen ? (
+                <div className="parser-accordion-body">
+                  <div className="gift-option-row">
+                    <label className="gift-option-toggle">
+                      <input
+                        type="checkbox"
+                        checked={!!giftOptions.is_gift}
+                        onChange={(event) => {
+                          setGiftOptions((current) => ({ ...current, is_gift: event.target.checked }));
+                        }}
+                      />
+                      <span>Gift</span>
+                    </label>
+                    <label className="gift-option-toggle">
+                      <input
+                        type="checkbox"
+                        checked={!!giftOptions.gift_wrap}
+                        onChange={(event) => {
+                          setGiftOptions((current) => ({ ...current, gift_wrap: event.target.checked }));
+                        }}
+                      />
+                      <span>Gift wrap</span>
+                    </label>
+                  </div>
+                  <ItemFieldRow
+                    label="Gift Message"
+                    fieldKey="gift_message"
+                    value={giftMessage}
+                    meta={giftMessageMeta}
+                    hasSelection={hasSelection}
+                    loading={state.loading}
+                    selected={selectedField === "gift_message"}
+                    onSelect={() => {
+                      setSelectedField("gift_message");
+                      scrollToDecisionRange("gift_message", giftMessage || giftMessageMeta);
+                      if (selection?.selected_text) assignGiftMessage();
+                    }}
+                    onAccept={assignGiftMessage}
+                    onReject={rejectGiftMessage}
+                    isKeyActive={activeKeyField === "gift_message"}
+                    navKey="gift_message"
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            <div className="operational-field-divider" aria-hidden="true" />
+            <div className="section-header">Remaining Details</div>
+
+            {remainingOrderFields.map(renderOrderFieldRow)}
 
             {state.quantity > 1 ? (
               <>

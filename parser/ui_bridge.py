@@ -45,6 +45,7 @@ def _serialize_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "snippet": decision.provenance.get("snippet", ""),
             "start": decision.start,
             "end": decision.end,
+            "provenance": decision.provenance,
             "streak_count": decision.provenance.get("streak_count", 0),
         }
         for decision in result["decisions"]
@@ -92,7 +93,7 @@ def _find_context(
 
     def _buyer_name_value() -> str:
         for decision in result.get("decisions", []):
-            if getattr(decision, "field", "") == "buyer_name":
+            if getattr(decision, "field", "") in {"recipient_name", "buyer_name", "billing_name"}:
                 return getattr(decision, "value", "") or ""
         return ""
 
@@ -120,7 +121,7 @@ def _find_context(
             context["role"] = classify_role(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
             context["structural_signature"] = structural_signature(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
             return context
-        if field == "shipping_address":
+        if field in {"shipping_address", "billing_address"}:
             segments = result.get("segments", [])
             sig = build_shipping_address_confidence_signature(
                 candidate,
@@ -159,7 +160,7 @@ def _find_context(
             context["role"] = classify_role(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
             context["structural_signature"] = structural_signature(field, {**context, "value": candidate.value, "raw_text": candidate.raw_text})
             return context
-        if field == "buyer_name" and segment_map:
+        if field in {"buyer_name", "billing_name", "recipient_name"} and segment_map:
             sig = build_buyer_name_confidence_signature(
                 candidate,
                 segment_map,
@@ -214,11 +215,15 @@ def _find_context(
                 file=sys.stderr,
                 flush=True,
             )
-            if field in {"price", "shipping_address"}:
+            if field in {"price", "shipping_address", "billing_address"}:
                 matched_candidate = next(
                     (
                         c for c in result["candidates"]
-                        if (c.field_type == field or (field == "price" and c.extractor == "number_regex"))
+                        if (
+                            c.field_type == field
+                            or (field == "billing_address" and c.field_type == "shipping_address")
+                            or (field == "price" and c.extractor == "number_regex")
+                        )
                         and (
                             (candidate_id and c.id == candidate_id)
                             or (
@@ -432,7 +437,7 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any], business
     # correct block type is being reinforced.
     if action_name == "save_assignment" and is_manual_assignment:
         block_source = context.get("source", "")
-        if field in {"shipping_address", "buyer_name"} and block_source:
+        if field in {"shipping_address", "billing_address", "buyer_name", "billing_name", "recipient_name"} and block_source:
             print(
                 "[ROLE_RULE_WRITTEN] "
                 + json.dumps({
@@ -447,15 +452,19 @@ def apply_learning(action_name: str, path: str, action: Dict[str, Any], business
             )
 
     assignment_lock = None
-    if action_name == "save_assignment" and is_manual_assignment:
-        assignment_lock = {
-            field: {
-                "value": value,
-                "start": context.get("start"),
-                "end": context.get("end"),
-                "source": "manual",
+    if action_name == "save_assignment":
+        # Always lock name/address fields on accept so the immediate re-parse
+        # reflects the accepted state (shows "assigned" not "suggested").
+        # For other fields, only lock on manual text-selection assignments.
+        if is_manual_assignment or field in {"recipient_name", "billing_name", "billing_address", "phone_number"}:
+            assignment_lock = {
+                field: {
+                    "value": value,
+                    "start": context.get("start"),
+                    "end": context.get("end"),
+                    "source": "manual" if is_manual_assignment else "accepted",
+                }
             }
-        }
     refreshed = parse_eml(path, update_confidence=False, assignment_lock=assignment_lock, business_timezone=business_timezone)
     return _apply_suppression(
         _serialize_result(refreshed),

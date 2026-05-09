@@ -86,7 +86,10 @@ OVERRIDE_THRESHOLDS = {
 
 _ALL_FIELDS = (
     "quantity", "price", "order_number", "order_date",
-    "buyer_email", "ship_by", "buyer_name", "shipping_address",
+    "buyer_email", "billing_email", "ship_by",
+    "buyer_name", "billing_name", "recipient_name",
+    "billing_address", "shipping_address",
+    "phone_number",
 )
 _STRICT_ASSIGNED_FIELDS = {"quantity"}
 
@@ -681,7 +684,7 @@ def _is_structurally_valid(candidate, field: str) -> bool:
         if not is_safe_order_number_candidate(candidate, signature):
             return False
 
-    elif field == "buyer_name":
+    elif field in {"buyer_name", "billing_name", "recipient_name"}:
         if " " not in value and "&" not in value:
             return False
         if len(value) < 4:
@@ -1107,7 +1110,7 @@ def _shipping_address_line_policy(
         if selected_span and isinstance(line.get("start"), int) and isinstance(line.get("end"), int):
             include = line["start"] < selected_end and selected_start < line["end"]
         elif not selected_span:
-            include = line_type in {"street", "city_state_zip"} or (
+            include = line_type in {"street", "city_state_zip", "country"} or (
                 line_type == "unknown"
                 and selected_lines
                 and selected_lines[-1]["type"] == "street"
@@ -1163,8 +1166,6 @@ def shipping_address_safety_reasons(
         reasons.append("footer_or_action_text")
     if policy["selected_contains_company"] and not explicit_policy:
         reasons.append("company_selected_without_explicit_policy")
-    if policy["selected_contains_country"] and not explicit_policy:
-        reasons.append("country_selected_without_explicit_policy")
     if policy["line_count"] > 0 and not policy["selected_lines"]:
         reasons.append("empty_line_policy")
     if policy["line_count"] >= 7 and not explicit_policy:
@@ -1632,12 +1633,14 @@ def _log_canon_compare(path: str, ingested: Dict[str, Any], clean_text: str, seg
         print(f"[IMAP_NORMALIZED] {json.dumps(normalized_payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
 
 
-def _log_decision_rows_diff(path: str, decision_rows: List[DecisionRow]) -> None:
+def _log_decision_rows_diff(path: str, decision_rows: List[DecisionRow], clean_text: str = "") -> None:
     interesting_fields = {
         "order_number",
-        "buyer_name",
-        "buyer_email",
+        "billing_name",
+        "recipient_name",
+        "billing_email",
         "shipping_address",
+        "billing_address",
         "quantity",
         "price",
         "ship_by",
@@ -1655,6 +1658,15 @@ def _log_decision_rows_diff(path: str, decision_rows: List[DecisionRow]) -> None
                 "end": row.end,
                 "source": row.decision_source,
                 "snippet": row.provenance.get("snippet", ""),
+                "source_text": clean_text[row.start:row.end]
+                if isinstance(row.start, int) and isinstance(row.end, int)
+                else None,
+                "span_match": (
+                    clean_text[row.start:row.end] == row.value
+                    if isinstance(row.start, int) and isinstance(row.end, int)
+                    else None
+                ),
+                "provenance": row.provenance,
             }
             for row in decision_rows
             if row.field in interesting_fields
@@ -1704,10 +1716,14 @@ _TRUST_REPORT_FIELDS = (
     "order_number",
     "item_price",
     "shipping_address",
+    "billing_address",
     "buyer_name",
+    "billing_name",
+    "recipient_name",
     "quantity",
     "ship_by",
     "buyer_email",
+    "billing_email",
     "order_date",
 )
 _TRUST_REPORT_FIELD_MAP = {
@@ -1717,10 +1733,14 @@ _TRUST_REPORT_CANDIDATE_TYPES = {
     "order_number": {"number", "order_number"},
     "item_price": {"price"},
     "shipping_address": {"shipping_address"},
+    "billing_address": {"shipping_address"},
     "buyer_name": {"buyer_name"},
+    "billing_name": {"buyer_name"},
+    "recipient_name": {"buyer_name"},
     "quantity": {"number", "quantity"},
     "ship_by": {"ship_by"},
     "buyer_email": {"email", "buyer_email"},
+    "billing_email": {"email", "buyer_email"},
     "order_date": {"date"},
 }
 
@@ -3665,6 +3685,10 @@ def _apply_structural_trust(
     template_id: str,
 ) -> List:
     """Replay adaptive structural trust ranking for a field."""
+    # Normalize legacy field names so trust records stored under canonical keys
+    # are found even when the caller supplies a legacy alias.
+    _LEGACY_ALIAS = {"buyer_name": "billing_name", "buyer_email": "billing_email", "shipping_name": "recipient_name"}
+    field = _LEGACY_ALIAS.get(field, field)
     trust_records = load_structural_trust(field=field)
     if not trust_records:
         return candidates
@@ -5497,6 +5521,12 @@ def _select_shipping_address_line_type_candidate(
                         if line["type"] in learned_set
                         or (first_idx < i < last_idx and line["type"] == "unknown")
                     ]
+                if "city_state_zip" in present_types:
+                    selected_indices = {i for i, line in enumerate(lines) if line in selected_lines}
+                    for i in range(last_idx + 1, min(len(lines), last_idx + 3)):
+                        if i not in selected_indices and lines[i]["type"] == "country":
+                            selected_lines.append(lines[i])
+                            break
             score = len(selected_lines) * 10.0 + len(present_types) + (candidate.score or 0.0) / 100.0
             if best is None or score > best["score"]:
                 best = {
@@ -5511,26 +5541,32 @@ def _select_shipping_address_line_type_candidate(
         return None
 
     final_output = "\n".join(line["text"] for line in best["lines"]).strip()
+    # Derive absolute character positions from the selected lines so the
+    # decision row carries a valid span and the email text gets highlighted.
+    _line_starts = [line["start"] for line in best["lines"] if isinstance(line.get("start"), int)]
+    _line_ends   = [line["end"]   for line in best["lines"] if isinstance(line.get("end"),   int)]
+    _span_start  = _line_starts[0] if _line_starts else None
+    _span_end    = _line_ends[-1]  if _line_ends   else None
     print(
         "[ADDRESS_LEARNING_APPLIED] "
         + json.dumps({
             "learned_line_types": best["learned_line_types"],
             "selected_lines": [line["text"] for line in best["lines"]],
             "final_output": final_output,
+            "span_start": _span_start,
+            "span_end": _span_end,
         }, ensure_ascii=False),
         file=sys.stderr,
         flush=True,
     )
     candidate = best["candidate"]
-    first_line = best["lines"][0]
-    last_line = best["lines"][-1]
     return Candidate(
         id="learned_shipping_address_0001",
         field_type="shipping_address",
         value=final_output,
         raw_text=final_output,
-        start=first_line.get("start"),
-        end=last_line.get("end"),
+        start=_span_start,
+        end=_span_end,
         segment_id=candidate.segment_id,
         extractor=candidate.extractor,
         signals=["assigned_line_types(authoritative)"],
@@ -6065,6 +6101,15 @@ def _select_buyer_name_structural_replay_candidate(
         return None
 
     _rank, candidate, trust, confidence_sig, structural_sig = best
+    # Preserve semantic routing: derive source from the original candidate's block_role so
+    # that _decision_from_source / _decision_excluding_sources correctly route the replay
+    # candidate to recipient_name (shipping context) vs billing_name (billing context).
+    _replay_block_role = _buyer_name_block_role(candidate, candidates)
+    _replay_source = (
+        "shipping" if _replay_block_role in {"shipping_recipient_name", "recipient_name"}
+        else "billing" if _replay_block_role in {"billing_contact_name"}
+        else getattr(candidate, "source", "") or "buyer_name_structural_trust_replay"
+    )
     replay = Candidate(
         id="structural_replay_buyer_name_0001",
         field_type="buyer_name",
@@ -6078,6 +6123,7 @@ def _select_buyer_name_structural_replay_candidate(
             "buyer_name_structural_replay_used",
             f"trust_signature={structural_sig}",
             f"confidence_signature={confidence_sig}",
+            f"replay_source={_replay_source}",
             "why_assigned=trusted_buyer_name_recipient_line_replay",
         ],
         penalties=[],
@@ -6085,7 +6131,7 @@ def _select_buyer_name_structural_replay_candidate(
         segment_text=candidate.segment_text,
         left_context=candidate.left_context,
         right_context=candidate.right_context,
-        source="buyer_name_structural_trust_replay",
+        source=_replay_source,
     )
     replay.provenance_extra = {
         "structural_replay_used": True,
@@ -6107,7 +6153,13 @@ def _select_buyer_name_structural_replay_candidate(
             "candidate_id": candidate.id,
             "confidence_signature": confidence_sig,
             "trust_signature": structural_sig,
-            "recipient_role": _buyer_name_block_role(candidate, candidates),
+            "recipient_role": _replay_block_role,
+            "replay_source": _replay_source,
+            "routed_canonical_field": (
+                "recipient_name" if _replay_source == "shipping"
+                else "billing_name" if _replay_source == "billing"
+                else "billing_name_via_fallback"
+            ),
             "decision_source": "buyer_name_structural_trust_replay",
         }, ensure_ascii=False),
         file=sys.stderr,
@@ -6116,7 +6168,11 @@ def _select_buyer_name_structural_replay_candidate(
     return replay
 
 
-def _trim_address_duplicate_buyer_name(address_decision: _Opt[DecisionRow], buyer_decision: _Opt[DecisionRow]) -> _Opt[DecisionRow]:
+def _trim_address_duplicate_buyer_name(
+    address_decision: _Opt[DecisionRow],
+    buyer_decision: _Opt[DecisionRow],
+    clean_text: str = "",
+) -> _Opt[DecisionRow]:
     if address_decision is None or buyer_decision is None:
         return address_decision
     if any(signal.startswith("assigned_line_types(") for signal in address_decision.provenance.get("signals", [])):
@@ -6135,18 +6191,30 @@ def _trim_address_duplicate_buyer_name(address_decision: _Opt[DecisionRow], buye
         return address_decision
 
     start = address_decision.start
+    end = address_decision.end
     if isinstance(start, int):
-        start += len(lines[0])
-        original_value = address_decision.value or ""
-        if original_value.startswith(lines[0] + "\r\n"):
-            start += 2
-        elif original_value.startswith(lines[0] + "\n"):
-            start += 1
+        first_remaining_line = next((line.strip() for line in lines[1:] if line.strip()), "")
+        last_remaining_line = next((line.strip() for line in reversed(lines[1:]) if line.strip()), "")
+        if clean_text and first_remaining_line:
+            found_start = clean_text.find(first_remaining_line, start, end if isinstance(end, int) else len(clean_text))
+            if found_start >= 0:
+                start = found_start
+                if last_remaining_line:
+                    found_end = clean_text.find(last_remaining_line, start)
+                    if found_end >= 0:
+                        end = found_end + len(last_remaining_line)
+        else:
+            start += len(lines[0])
+            original_value = address_decision.value or ""
+            if original_value.startswith(lines[0] + "\r\n"):
+                start += 2
+            elif original_value.startswith(lines[0] + "\n"):
+                start += 1
 
     address_decision.value = trimmed_value
     address_decision.start = start
     if isinstance(start, int):
-        address_decision.end = start + len(trimmed_value)
+        address_decision.end = end if isinstance(end, int) and end >= start else start + len(trimmed_value)
     address_decision.provenance.setdefault("signals", []).append("buyer_name_trimmed_from_address")
     address_decision.provenance["snippet"] = trimmed_value
     return address_decision
@@ -6794,6 +6862,73 @@ def _apply_assignment_locks(
     return next_rows
 
 
+def _clone_decision_field(row: DecisionRow | None, field: str, source_note: str = "") -> DecisionRow | None:
+    if row is None:
+        return None
+    provenance = dict(row.provenance or {})
+    signals = list(provenance.get("signals") or [])
+    if source_note:
+        signals.append(source_note)
+    provenance["signals"] = signals
+    return DecisionRow(
+        field=field,
+        value=row.value,
+        decision=row.decision,
+        decision_source=row.decision_source,
+        candidate_id=row.candidate_id,
+        start=row.start,
+        end=row.end,
+        confidence=row.confidence,
+        provenance=provenance,
+    )
+
+
+def _candidate_source(candidate) -> str:
+    return str(getattr(candidate, "source", "") or "").strip().lower()
+
+
+def _decision_from_source(field: str, candidates: List[Any], sources: set[str], decide_func, fallback: DecisionRow | None = None) -> DecisionRow | None:
+    scoped = [candidate for candidate in candidates if _candidate_source(candidate) in sources]
+    row = decide_func(scoped) if scoped else None
+    if row is None:
+        row = fallback
+    return _clone_decision_field(row, field, f"derived_{field}_from_source")
+
+
+def _decision_excluding_sources(field: str, candidates: List[Any], excluded_sources: set[str], decide_func) -> DecisionRow | None:
+    scoped = [candidate for candidate in candidates if _candidate_source(candidate) not in excluded_sources]
+    return decide_func(scoped) if scoped else None
+
+
+def _address_source_fallback(field: str, candidates: List[Any], source: str) -> DecisionRow | None:
+    scoped = [
+        candidate for candidate in candidates
+        if _candidate_source(candidate) == source and "\n" in str(getattr(candidate, "value", "") or "")
+    ]
+    if not scoped:
+        return None
+    best = sorted(scoped, key=lambda candidate: (
+        not str(getattr(candidate, "extractor", "") or "").endswith("_with_recipient"),
+        -(getattr(candidate, "score", 0) or 0),
+        -len([line for line in str(candidate.value or "").splitlines() if line.strip()]),
+    ))[0]
+    return DecisionRow(
+        field=field,
+        value=best.value,
+        decision="suggested",
+        decision_source=f"{source}_address_source_fallback",
+        candidate_id=best.id,
+        start=best.start,
+        end=best.end,
+        confidence=0.65,
+        provenance={
+            "segment_id": best.segment_id,
+            "snippet": best.raw_text,
+            "signals": list(getattr(best, "signals", []) or []) + ["address_source_fallback"],
+        },
+    )
+
+
 def _apply_assignment_policy(
     template_id: str,
     field: str,
@@ -7092,6 +7227,11 @@ def parse_eml(
     email_decision = None if (
         not assignment_locked["buyer_email"] and _field_is_rejected(template_family_id, "buyer_email")
     ) else decide_buyer_email(email_candidates)
+    billing_email_decision = _clone_decision_field(
+        email_decision,
+        "billing_email",
+        "billing_email_legacy_maps_from_buyer_email",
+    )
 
     # --- SHIP BY ---
     # Subject candidates have start=None/end=None; body candidates are validated
@@ -7146,7 +7286,19 @@ def parse_eml(
             assignment_locked["buyer_name"] = True
     name_decision = None if (
         not assignment_locked["buyer_name"] and _field_is_rejected(template_family_id, "buyer_name")
-    ) else decide_buyer_name(name_candidates)
+    ) else _decision_excluding_sources("buyer_name", name_candidates, {"shipping", "recipient"}, decide_buyer_name)
+    billing_name_decision = _decision_from_source(
+        "billing_name",
+        name_candidates,
+        {"billing"},
+        decide_buyer_name,
+    )
+    recipient_name_decision = _decision_from_source(
+        "recipient_name",
+        name_candidates,
+        {"shipping", "recipient"},
+        decide_buyer_name,
+    )
 
     # --- SHIPPING ADDRESS ---
     addr_candidates = validate_candidates(extract_shipping_address(segments), clean_text)
@@ -7157,7 +7309,7 @@ def parse_eml(
         addr_candidates,
         segments,
         clean_text,
-        buyer_name=name_decision.value if name_decision else "",
+        buyer_name=(recipient_name_decision.value if recipient_name_decision else (name_decision.value if name_decision else "")),
     )
     if not assignment_locked["shipping_address"]:
         addr_candidates = apply_anchor_scoring(template_family_id, "shipping_address", addr_candidates)
@@ -7168,13 +7320,23 @@ def parse_eml(
             addr_candidates,
             segments,
             segment_map,
-            buyer_name=name_decision.value if name_decision else "",
+            buyer_name=(recipient_name_decision.value if recipient_name_decision else (name_decision.value if name_decision else "")),
         )
         if _address_structural_replay_candidate is not None:
             addr_candidates = [_address_structural_replay_candidate]
             assignment_locked["shipping_address"] = True
     addr_decision = decide_shipping_address(addr_candidates)
-    addr_decision = _trim_address_duplicate_buyer_name(addr_decision, name_decision)
+    addr_decision = _trim_address_duplicate_buyer_name(addr_decision, recipient_name_decision or name_decision, clean_text)
+    billing_address_decision = _decision_from_source(
+        "billing_address",
+        addr_candidates,
+        {"billing"},
+        decide_shipping_address,
+    )
+    if addr_decision is None:
+        addr_decision = _address_source_fallback("shipping_address", addr_candidates, "shipping")
+    if billing_address_decision is None:
+        billing_address_decision = _address_source_fallback("billing_address", addr_candidates, "billing")
 
     # Phase 1 — Conflict diagnostics: compare sale-header count with summed
     # item-line quantities.  A mismatch usually indicates a multi-item order
@@ -7200,8 +7362,12 @@ def parse_eml(
     _log_field_decision_proof(path, "order_number", order_candidates, order_decision, 10.0)
     _log_field_decision_proof(path, "order_date", date_candidates, date_decision, 10.0)
     _log_field_decision_proof(path, "buyer_email", email_candidates, email_decision, 6.5)
+    _log_field_decision_proof(path, "billing_email", email_candidates, billing_email_decision, 6.5)
     _log_field_decision_proof(path, "ship_by", ship_by_candidates, ship_by_decision, 8.0)
     _log_field_decision_proof(path, "buyer_name", name_candidates, name_decision, 8.0)
+    _log_field_decision_proof(path, "billing_name", name_candidates, billing_name_decision, 8.0)
+    _log_field_decision_proof(path, "recipient_name", name_candidates, recipient_name_decision, 8.0)
+    _log_field_decision_proof(path, "billing_address", addr_candidates, billing_address_decision, 7.0)
     _log_field_decision_proof(path, "shipping_address", addr_candidates, addr_decision, 7.0)
 
     # Deduplicated candidate list (last scorer wins on id collision)
@@ -7226,17 +7392,147 @@ def parse_eml(
     if date_decision:
         decision_rows.append(date_decision)
 
-    if email_decision:
-        decision_rows.append(email_decision)
+    # email_decision (field="buyer_email") is fully covered by billing_email_decision.
+    # Never emit "buyer_email" in decision_rows — billing_email is the canonical key.
+
+    if billing_email_decision:
+        decision_rows.append(billing_email_decision)
 
     if ship_by_decision:
         decision_rows.append(ship_by_decision)
 
-    if name_decision:
-        decision_rows.append(name_decision)
+    # Canonical name field resolution:
+    # name_decision covers ambiguous-context names (excluded from shipping and billing
+    # source filters).  Route to recipient_name when the email has a shipping address
+    # but no explicit billing section — this prevents single-recipient platforms (Etsy,
+    # etc.) from producing a false billing identity.  Only route to billing_name when
+    # an explicit billing section is present (billing_address_decision is set) or when
+    # there is no shipping context at all.
+    if billing_name_decision is None and name_decision is not None:
+        # "Explicit billing" is true when EITHER:
+        #   (a) the current parse found a billing_address candidate, OR
+        #   (b) the assignment_lock contains billing_address/billing_name (from a
+        #       previous accept that fires after this logic), OR
+        #   (c) the learning store has a stored billing_address/billing_name
+        #       assignment — meaning the user has confirmed this is a billing
+        #       platform in a prior session.
+        _has_explicit_billing = (
+            billing_address_decision is not None
+            or (assignment_lock and (
+                "billing_address" in assignment_lock
+                or "billing_name" in assignment_lock
+            ))
+            or af.get("billing_address")
+            or af.get("billing_name")
+        )
+        _has_shipping_context = addr_decision is not None
+        if _has_shipping_context and not _has_explicit_billing and recipient_name_decision is None:
+            # Shipping-only context: ambiguous name → recipient_name
+            recipient_name_decision = _clone_decision_field(
+                name_decision, "recipient_name", "promoted_from_name_to_recipient_shipping_context"
+            )
+        else:
+            # Explicit billing present, or no shipping context → billing_name
+            billing_name_decision = _clone_decision_field(
+                name_decision, "billing_name", "promoted_from_buyer_name_to_billing_name"
+            )
+
+    # Restore stored recipient_name assignment when the fallback above routed the
+    # single name_decision to billing_name (because _has_explicit_billing was True).
+    # Without this, a user who manually assigned both recipient_name and
+    # billing_address would see recipient_name disappear on the next parse because
+    # the billing_address signal switches the fallback to billing_name.
+    if recipient_name_decision is None and af.get("recipient_name"):
+        _rn_records = load_assignments(template_family_id, "recipient_name", source=None)
+        _rn_records = [r for r in _rn_records if _assignment_record_can_lock("recipient_name", r)]
+        if _rn_records:
+            _rn_rec = _rn_records[0]
+            _rn_value = _rn_rec.get("value", "") or ""
+            if _rn_value:
+                _rn_start = _rn_rec.get("start") or None
+                _rn_end   = _rn_rec.get("end")   or None
+                # Validate the stored span still resolves in this email.
+                if _rn_start is not None and _rn_end is not None:
+                    if clean_text[_rn_start:_rn_end] != _rn_value:
+                        _idx = clean_text.find(_rn_value)
+                        if _idx >= 0:
+                            _rn_start, _rn_end = _idx, _idx + len(_rn_value)
+                        else:
+                            _rn_start, _rn_end = None, None
+                recipient_name_decision = DecisionRow(
+                    field="recipient_name",
+                    value=_rn_value,
+                    decision="assigned",
+                    decision_source="stored_assignment_replay",
+                    candidate_id="learned_recipient_name_0001",
+                    start=_rn_start,
+                    end=_rn_end,
+                    confidence=1.0,
+                    provenance={"signals": ["stored_assignment(authoritative)"]},
+                )
+                print(
+                    "[RECIPIENT_NAME_STORED_REPLAY] "
+                    + json.dumps({"value": _rn_value, "start": _rn_start, "end": _rn_end}, ensure_ascii=False),
+                    file=sys.stderr, flush=True,
+                )
+
+    # Never append name_decision (field="buyer_name") to decision_rows.
+
+    if billing_name_decision:
+        decision_rows.append(billing_name_decision)
+
+    if recipient_name_decision:
+        decision_rows.append(recipient_name_decision)
+
+    if billing_address_decision:
+        decision_rows.append(billing_address_decision)
 
     if addr_decision:
         decision_rows.append(addr_decision)
+
+    # --- PHONE NUMBER ---
+    # phone_number has no auto-extractor; it only appears when the user has
+    # manually selected text and accepted it at least once.  Replay that stored
+    # assignment so the field shows as "assigned" on subsequent fresh opens.
+    if af.get("phone_number"):
+        phone_records = load_assignments(template_family_id, "phone_number", source=None)
+        phone_records = [r for r in phone_records if _assignment_record_can_lock("phone_number", r)]
+        if phone_records:
+            best_phone = phone_records[0]
+            _ph_value = best_phone.get("value", "") or ""
+            _ph_start = best_phone.get("start") or None
+            _ph_end = best_phone.get("end") or None
+            # Validate span still resolves in this email.
+            if _ph_start is not None and _ph_end is not None:
+                if clean_text[_ph_start:_ph_end] != _ph_value:
+                    # Span stale — try to find by value search.
+                    idx = clean_text.find(_ph_value)
+                    if idx >= 0:
+                        _ph_start, _ph_end = idx, idx + len(_ph_value)
+                    else:
+                        _ph_start, _ph_end = None, None
+            elif _ph_value:
+                # No span stored — try to locate value in current text.
+                idx = clean_text.find(_ph_value)
+                if idx >= 0:
+                    _ph_start, _ph_end = idx, idx + len(_ph_value)
+            # Only assign if the value is actually present in this email.
+            if _ph_value and _ph_start is not None and _ph_end is not None:
+                phone_number_decision = DecisionRow(
+                    field="phone_number",
+                    value=_ph_value,
+                    decision="assigned",
+                    decision_source="stored_assignment_replay",
+                    candidate_id="learned_phone_number_0001",
+                    start=_ph_start,
+                    end=_ph_end,
+                    confidence=1.0,
+                    provenance={"signals": ["stored_assignment(authoritative)"]},
+                )
+                decision_rows.append(phone_number_decision)
+
+    # email_decision (field="buyer_email") is fully covered by billing_email_decision
+    # (a clone with field="billing_email").  Never emit "buyer_email" in decision_rows.
 
     decision_rows = _apply_assignment_locks(decision_rows, assignment_lock, clean_text)
 
@@ -7360,6 +7656,8 @@ def parse_eml(
             if c.field_type == "date"
             else build_buyer_email_confidence_signature(c, segment_map, segments, email_candidates)
             if c.field_type in {"email", "buyer_email"}
+            else build_buyer_name_confidence_signature(c, segment_map, segments, all_candidates)
+            if c.field_type == "buyer_name"
             else build_extraction_signature(c, segment_map)
         )
         for c in all_candidates
@@ -7550,6 +7848,57 @@ def parse_eml(
                         flush=True,
                     )
                     continue
+                if _row.field == "billing_name":
+                    _cand_trace = next(
+                        (c for c in all_candidates if c.id == _row.candidate_id), None
+                    )
+                    payload = {
+                        "field": _row.field,
+                        "value": _row.value,
+                        "reason": "read_only_parse_does_not_mutate_structural_trust",
+                    }
+                    if _cand_trace is not None:
+                        payload.update(_buyer_name_confidence_signature_trace(
+                            _cand_trace,
+                            name_candidates,
+                            segment_map,
+                            segments,
+                        ))
+                    print(
+                        "[BILLING_NAME_CONFIDENCE_MATURITY_PENDING] "
+                        + json.dumps(payload, ensure_ascii=False),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    # billing_name falls through to the structural-validity
+                    # re-apply below (same as recipient_name — once the
+                    # confidence streak is earned it should be re-applied on
+                    # every read-only parse, not silently skipped).
+                if _row.field == "recipient_name":
+                    _cand_trace = next(
+                        (c for c in all_candidates if c.id == _row.candidate_id), None
+                    )
+                    payload = {
+                        "field": _row.field,
+                        "value": _row.value,
+                        "reason": "read_only_parse_does_not_mutate_structural_trust",
+                    }
+                    if _cand_trace is not None:
+                        payload.update(_buyer_name_confidence_signature_trace(
+                            _cand_trace,
+                            name_candidates,
+                            segment_map,
+                            segments,
+                        ))
+                    print(
+                        "[RECIPIENT_NAME_CONFIDENCE_MATURITY_PENDING] "
+                        + json.dumps(payload, ensure_ascii=False),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    # recipient_name falls through to the structural-validity
+                    # re-apply below (unlike billing_name / buyer_name which are
+                    # blocked from read-only promotion for legacy-safety reasons).
                 # Re-check structural validity before re-applying promotion.
                 _cand_recheck = next(
                     (c for c in all_candidates if c.id == _row.candidate_id), None
@@ -7677,7 +8026,7 @@ def parse_eml(
                     )
                     continue
                 _sig = _trace["new_signature"]
-            elif _row.field == "buyer_name":
+            elif _row.field in {"buyer_name", "billing_name", "recipient_name"}:
                 _name_cand = next((c for c in all_candidates if c.id == _row.candidate_id), None)
                 if _name_cand is None:
                     continue
@@ -7689,7 +8038,7 @@ def parse_eml(
                 )
                 print(
                     "[BUYER_NAME_CONFIDENCE_SIGNATURE] "
-                    + json.dumps(_trace, ensure_ascii=False),
+                    + json.dumps({**_trace, "canonical_field": _row.field}, ensure_ascii=False),
                     file=sys.stderr,
                     flush=True,
                 )
@@ -7699,7 +8048,7 @@ def parse_eml(
                     print(
                         "[BUYER_NAME_CONFIDENCE_BLOCKED] "
                         + json.dumps({
-                            "field": "buyer_name",
+                            "field": _row.field,
                             "value": _row.value,
                             "candidate_id": _name_cand.id,
                             "block_reason": _row.provenance["why_not_promoted"],
@@ -7782,7 +8131,7 @@ def parse_eml(
                     )
                     continue
                 _sig = _trace["new_signature"]
-            elif _row.field == "buyer_email":
+            elif _row.field in {"buyer_email", "billing_email"}:
                 _email_cand = next((c for c in all_candidates if c.id == _row.candidate_id), None)
                 if _email_cand is None:
                     continue
@@ -7794,7 +8143,7 @@ def parse_eml(
                 )
                 print(
                     "[BUYER_EMAIL_CONFIDENCE_SIGNATURE] "
-                    + json.dumps(_trace, ensure_ascii=False),
+                    + json.dumps({**_trace, "canonical_field": _row.field}, ensure_ascii=False),
                     file=sys.stderr,
                     flush=True,
                 )
@@ -7804,7 +8153,7 @@ def parse_eml(
                     print(
                         "[BUYER_EMAIL_CONFIDENCE_BLOCKED] "
                         + json.dumps({
-                            "field": "buyer_email",
+                            "field": _row.field,
                             "value": _row.value,
                             "candidate_id": _email_cand.id,
                             "block_reason": _row.provenance["why_not_promoted"],
@@ -7869,7 +8218,7 @@ def parse_eml(
                         _sig,
                     )
                     continue
-                if _row.field == "buyer_email":
+                if _row.field in {"buyer_email", "billing_email"}:
                     _row.provenance["streak_count"] = _streak
                     _email_cand = next(
                         (c for c in all_candidates if c.id == _row.candidate_id), None
@@ -7976,7 +8325,7 @@ def parse_eml(
                         _sig,
                     )
                     continue
-                if _row.field == "buyer_name":
+                if _row.field in {"buyer_name", "billing_name", "recipient_name"}:
                     _row.provenance["streak_count"] = _streak
                     _name_cand = next(
                         (c for c in all_candidates if c.id == _row.candidate_id), None
@@ -8028,8 +8377,23 @@ def parse_eml(
             validated_decisions.append(row)
         elif clean_text[row.start:row.end] == row.value:
             validated_decisions.append(row)
+        elif row.field == "shipping_address":
+            print(
+                "[SHIPPING_ADDRESS_DECISION_REJECTED] "
+                + json.dumps({
+                    "field": row.field,
+                    "value": row.value,
+                    "decision_source": row.decision_source,
+                    "start": row.start,
+                    "end": row.end,
+                    "source_text": clean_text[row.start:row.end],
+                    "provenance": row.provenance,
+                }, ensure_ascii=False),
+                file=sys.stderr,
+                flush=True,
+            )
 
-    _log_decision_rows_diff(path, validated_decisions)
+    _log_decision_rows_diff(path, validated_decisions, clean_text)
     trust_report = build_parser_trust_report_safe(
         path=path,
         clean_text=clean_text,
